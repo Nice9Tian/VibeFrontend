@@ -18,11 +18,16 @@ export async function projectRoot(): Promise<string> {
   return (await devFetch("root")).text();
 }
 
-/** 文件不存在时返回 null。 */
+/** 文件不存在时返回 null。Windows 换行符统一成 LF，这样行号和文本框里的内容保持一致。 */
 export async function readText(path: string): Promise<string | null> {
-  if (inTauri) return invoke<string | null>("read_text", { path });
-  const res = await devFetch("read", path);
-  return res.status === 404 ? null : res.text();
+  let text: string | null;
+  if (inTauri) {
+    text = await invoke<string | null>("read_text", { path });
+  } else {
+    const res = await devFetch("read", path);
+    text = res.status === 404 ? null : await res.text();
+  }
+  return text === null ? null : text.replace(/\r\n/g, "\n");
 }
 
 export async function writeText(path: string, content: string): Promise<void> {

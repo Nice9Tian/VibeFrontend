@@ -32,22 +32,58 @@ project/
 | `app.logic.yaml` | 可以改，按第 5 节的写法 |
 | `docs/*.md` | 可以改小节的正文；不要删除或改动 `<!-- ui-section: ... -->` 标记 |
 
-## 3. 把容器做成控件
+## 3. 引用，以及把容器做成控件
 
-用户通常会贴来这样一段文字：
+### 3.1 用户贴来的引用
+
+用户在工具里复制“引用”，贴给你，后面再写上要求。引用是一行英文，格式固定：
 
 ```text
-[VibeFrontend] 请按项目规则处理这个控件：
-项目：C:\...\project
-规则：C:\...\project\README.md
-控件：panelWindow / hintBox（ID: hintBox，当前类型：Container，尚未转换）
-说明：docs/panel.md#hint-box
-逻辑：logic/app.logic.yaml → objects.hintBox
+User referenced "键=值; 键=值; ..."
 ```
 
-步骤：
+读法：
 
-1. **读说明和逻辑。** “说明”一行指向页面文档中的小节（`#` 后面是小节标记名），“逻辑”一行指向 YAML 中的条目。先弄清用户想要什么。
+- 路径都相对于 `root`（设计项目文件夹的绝对路径）。
+- `#` 后面是行号，从 1 开始，首尾都包含：`ui/scene.json#89-96` 是第 89 到 96 行，`docs/panel.md#9` 是第 9 行；没有 `#` 表示整个文件。
+- `rules=README.md` 指的就是本文件。
+
+引用一个控件，给出它在三处各自的位置：
+
+```text
+User referenced "control=hintBox; type=Container (unconverted); path=panelWindow/hintBox; scene=ui/scene.json#89-96; logic=logic/app.logic.yaml#111-114; doc=docs/panel.md#19-24; root=C:/.../project; rules=README.md"
+```
+
+| 键 | 含义 |
+| --- | --- |
+| `control` | 控件 ID |
+| `type` | 当前类型；`Container (unconverted)` 表示还是没有转换的容器 |
+| `path` | 从窗口到这个控件的层级 |
+| `scene` | 它在画布文件中的节点 |
+| `logic` | 它在 YAML 中的条目；`none (...)` 表示还没有条目，括号里写明应该加在哪里 |
+| `doc` | 它的说明小节；`none` 表示还没有说明 |
+
+其他几种引用：
+
+| 开头的键 | 引用的是 | 其他键 |
+| --- | --- | --- |
+| `lines` | 文档或 YAML 中的几行 | `entry`（所在的 YAML 条目，如 `objects.lampA`）或 `section`（所在的说明小节） |
+| `file` | 整个文件 | |
+| `component` | 一种控件类型 | `decl`、`impl`、`style`：声明、实现和样式文件 |
+| `problem` | 工具问题栏里的一条问题，值是 `error` 或 `hint` 加问题原文 | 有相关控件时，带上该控件的 `control`、`scene`、`logic`、`doc` |
+| `project` | 整个设计项目 | `scene`、`logic`、`doc`：三个主要文件 |
+
+读到引用时：
+
+- 行号是复制那一刻的。动手前先打开文件核对，尤其是你自己刚改过那个文件之后。
+- 引用只说明“指的是哪里”，要做什么以引用后面用户写的话为准。
+- 用户只引用了某几行，就只处理那几行涉及的内容，不要顺带改别的地方。
+
+### 3.2 把容器做成控件
+
+用户引用一个“尚未转换”的容器，并要求把它做成某种控件时，按下面的步骤做：
+
+1. **读说明和逻辑。** 引用中的 `doc` 指向页面文档中的小节，`logic` 指向 YAML 中的条目。先弄清用户想要什么。
 2. **找或写控件。** 先看 `components/` 里有没有合适的控件可以直接用。没有就新建 `components/<类型名>/`，按第 4 节写 `component.json`、`index.js` 和 `style.css`。
 3. **改画布。** 把 `ui/scene.json` 中这个节点的 `type` 从 `Container` 改成控件的类型名，按控件声明写入 `props`。控件不能包含子节点时，删掉节点上的 `children`。
 4. **需要时改逻辑。** 在 `logic/app.logic.yaml` 的 `objects.<ID>` 下补充 `props`、`events`、`bind`。只能使用控件声明过的属性和事件（鼠标事件除外，见第 5.5 节）。

@@ -13,10 +13,24 @@ import {
   replaceSection,
   SCENE_PATH,
   sectionNameFor,
+  sectionOffsets,
   type ComponentInstance,
   type Project,
   type SceneNode,
 } from "./project";
+import {
+  componentReference,
+  controlReference,
+  docSectionRange,
+  fileReference,
+  lineAt,
+  linesReference,
+  logicEntryRange,
+  logicPathAt,
+  problemReference,
+  projectReference,
+  selectionRange,
+} from "./refs";
 import { Runtime, type LogEntry } from "./runtime";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -563,19 +577,8 @@ async function addCondition(id: string): Promise<void> {
   }
 }
 
-async function copyAsText(id: string): Promise<void> {
-  const n = node(id)!;
-  const chain: string[] = [];
-  for (let cursor: string | null = id; cursor; cursor = parentOf(cursor)) chain.unshift(cursor);
-  const object = project.logic.objects?.[id];
-  const text = [
-    "[VibeFrontend] 请按项目规则处理这个控件：",
-    `项目：${project.root}`,
-    `规则：${project.root}\\README.md`,
-    `控件：${chain.join(" / ")}（ID: ${id}，当前类型：${n.type}${n.type === "Container" ? "，尚未转换" : ""}）`,
-    `说明：${object?.doc ?? "尚未创建"}`,
-    `逻辑：${LOGIC_PATH} → objects.${id}${object ? "" : "（尚未创建）"}`,
-  ].join("\n");
+/** 把一段引用放进剪贴板。 */
+async function copyReference(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -586,7 +589,7 @@ async function copyAsText(id: string): Promise<void> {
     document.execCommand("copy");
     helper.remove();
   }
-  toast("已复制，可以贴给 Agent");
+  toast("已复制引用，可以贴给 Agent");
 }
 
 // ---------- 右键菜单 ----------
@@ -595,33 +598,50 @@ function hideMenu(): void {
   $("menu").hidden = true;
 }
 
-function showMenu(x: number, y: number, id: string): void {
+type MenuItem = { label: string; action: () => void } | "separator";
+
+function openMenu(x: number, y: number, items: MenuItem[]): void {
   const menu = $("menu");
   menu.innerHTML = "";
-  const item = (label: string, action: () => void) => {
+  for (const item of items) {
+    if (item === "separator") {
+      menu.append(document.createElement("hr"));
+      continue;
+    }
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = label;
+    button.textContent = item.label;
     button.addEventListener("click", () => {
       hideMenu();
-      action();
+      item.action();
     });
     menu.append(button);
-  };
-  item("复制为文本", () => void copyAsText(id));
-  menu.append(document.createElement("hr"));
-  item("打开说明", () => showRightTab("doc"));
-  item("编辑逻辑", () => showRightTab("yaml"));
-  item("添加条件", () => void addCondition(id));
-  menu.append(document.createElement("hr"));
-  if (node(id)?.type !== "Container") item("还原为容器", () => void revertToContainer(id));
-  item("置于顶层", () => void reorder(id, true));
-  item("置于底层", () => void reorder(id, false));
-  item("删除", () => void deleteNode(id));
+  }
   menu.hidden = false;
   const rect = menu.getBoundingClientRect();
   menu.style.left = `${Math.min(x, window.innerWidth - rect.width - 8)}px`;
   menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
+}
+
+/** 控件的右键菜单，画布和图层共用。 */
+function showMenu(x: number, y: number, id: string): void {
+  const items: MenuItem[] = [{ label: "复制引用", action: () => void copyReference(controlReference(project, id)) }];
+  if (id !== project.scene.root) {
+    items.push(
+      "separator",
+      { label: "打开说明", action: () => showRightTab("doc") },
+      { label: "编辑逻辑", action: () => showRightTab("yaml") },
+      { label: "添加条件", action: () => void addCondition(id) },
+      "separator",
+    );
+    if (node(id)?.type !== "Container") items.push({ label: "还原为容器", action: () => void revertToContainer(id) });
+    items.push(
+      { label: "置于顶层", action: () => void reorder(id, true) },
+      { label: "置于底层", action: () => void reorder(id, false) },
+      { label: "删除", action: () => void deleteNode(id) },
+    );
+  }
+  openMenu(x, y, items);
 }
 
 document.addEventListener("pointerdown", (e) => {
@@ -637,6 +657,14 @@ function renderPalette(): void {
     el.textContent = label;
     el.title = title;
     el.addEventListener("pointerdown", (e) => startPaletteDrag(e, type));
+    if (type !== "Container") {
+      el.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        openMenu(e.clientX, e.clientY, [
+          { label: "复制引用", action: () => void copyReference(componentReference(project, type)) },
+        ]);
+      });
+    }
     return el;
   };
   $("palette-basic").replaceChildren(make("Container", "□ 容器", "拖进设计窗口，再交给 Agent 做成具体控件"));
@@ -694,6 +722,11 @@ function renderLayers(): void {
     type.textContent = n.type;
     row.append(name, type);
     row.addEventListener("click", () => select(id));
+    row.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      select(id);
+      showMenu(e.clientX, e.clientY, id);
+    });
     rows.push(row);
     // 列表里越靠上的在画面里越靠前
     for (const child of [...(n.children ?? [])].reverse()) visit(child, depth + 1);
@@ -847,6 +880,52 @@ yamlText.addEventListener("keydown", (e) => {
   yamlText.dispatchEvent(new Event("input"));
 });
 
+// “引用”：选中的控件；没有选中控件时引用整个项目
+$("selection-quote").addEventListener("click", () => {
+  void copyReference(selectedId ? controlReference(project, selectedId) : projectReference(project));
+});
+
+// 文档页签的“引用所选”：选中了文字就引用那几行，否则引用当前显示的整个小节或整份文档
+$("doc-quote").addEventListener("click", async () => {
+  if (!docTarget) return toast("这个控件还没有说明，先点“创建说明”");
+  await saveDoc();
+  const { path, section } = docTarget;
+  const file = project.docs.get(path) ?? "";
+  const offsets = section ? sectionOffsets(file, section) : null;
+  const context: [string, string] | undefined = section ? ["section", section] : undefined;
+  if (docText.selectionStart !== docText.selectionEnd) {
+    const firstLine = offsets ? lineAt(file, offsets.contentStart) : 1;
+    const range = selectionRange(docText.value, docText.selectionStart, docText.selectionEnd, firstLine);
+    void copyReference(linesReference(project, path, range, context));
+  } else if (section) {
+    const range = docSectionRange(file, section);
+    void copyReference(range ? linesReference(project, path, range, context) : fileReference(project, path));
+  } else {
+    void copyReference(fileReference(project, path));
+  }
+});
+
+// YAML 页签的“引用所选”：选中了文字就引用那几行；否则引用当前控件的条目，再否则引用光标所在的条目
+$("yaml-quote").addEventListener("click", async () => {
+  await saveYaml();
+  const text = project.logicText;
+  const { selectionStart, selectionEnd } = yamlText;
+  if (selectionStart !== selectionEnd) {
+    const range = selectionRange(yamlText.value, selectionStart, selectionEnd);
+    const path = logicPathAt(text, range.start);
+    return void copyReference(linesReference(project, LOGIC_PATH, range, path ? ["entry", path.join(".")] : undefined));
+  }
+  const selectedPath = selectedId ? ["objects", selectedId] : null;
+  const path =
+    selectedPath && logicEntryRange(text, selectedPath)
+      ? selectedPath
+      : logicPathAt(text, selectionRange(yamlText.value, selectionStart, selectionStart).start);
+  const range = path ? logicEntryRange(text, path) : null;
+  void copyReference(
+    range ? linesReference(project, LOGIC_PATH, range, ["entry", path!.join(".")]) : fileReference(project, LOGIC_PATH),
+  );
+});
+
 $("tab-doc").addEventListener("click", () => showRightTab("doc"));
 $("tab-yaml").addEventListener("click", () => showRightTab("yaml"));
 
@@ -883,6 +962,15 @@ function renderProblems(): void {
     row.textContent = `${problem.level === "error" ? "错误" : "提示"}　${problem.message}`;
     const id = problem.nodeId;
     if (id) row.addEventListener("click", () => node(id) && select(id));
+    row.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openMenu(e.clientX, e.clientY, [
+        {
+          label: "复制引用",
+          action: () => void copyReference(problemReference(project, problem.level, problem.message, problem.nodeId)),
+        },
+      ]);
+    });
     return row;
   });
   if (rows.length === 0) {

@@ -99,6 +99,8 @@ export interface Project {
   /** 当前窗口的页面文档路径 */
   pageDoc: string;
   scene: Scene;
+  /** scene.json 的原文，用来算出某个节点在文件中的行号 */
+  sceneText: string;
   logic: Logic;
   logicText: string;
   /** 路径 → Markdown 原文 */
@@ -164,6 +166,13 @@ export function parseDocRef(ref: string): { path: string; section: string | null
 function sectionPattern(name: string): RegExp {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(<!--\\s*ui-section:\\s*${escaped}\\s*-->\\r?\\n?)([\\s\\S]*?)(\\r?\\n?<!--\\s*/ui-section\\s*-->)`);
+}
+
+/** 小节在文档中的位置（字符偏移）：start 到 end 是含标记的整个小节，contentStart 是正文开始处。 */
+export function sectionOffsets(docText: string, name: string): { start: number; contentStart: number; end: number } | null {
+  const match = sectionPattern(name).exec(docText);
+  if (!match) return null;
+  return { start: match.index, contentStart: match.index + match[1].length, end: match.index + match[0].length };
 }
 
 export function getSection(docText: string, name: string): string | null {
@@ -306,7 +315,9 @@ export async function loadProject(previous: Project | null): Promise<Project> {
   }
 
   const signature = JSON.stringify([sceneText, logicText, [...docs], [...componentTexts], css, name, pageDoc]);
-  const project: Project = { root, name, pageDoc, scene, logic, logicText, docs, components, problems, signature };
+  const project: Project = {
+    root, name, pageDoc, scene, sceneText: sceneText ?? "", logic, logicText, docs, components, problems, signature,
+  };
   problems.push(...check(project));
   return project;
 }

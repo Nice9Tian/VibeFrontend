@@ -53,17 +53,24 @@
       <div id="selection-head">
         <input id="selection-id" spellcheck="false" aria-label="控件 ID" />
         <span id="selection-type" class="muted"></span>
+        <button id="selection-quote" type="button" class="quote" title="复制一段指向当前控件的引用，贴给 Agent">引用</button>
       </div>
       <div class="tabs" role="tablist">
         <button id="tab-doc" type="button" role="tab" aria-selected="true">文档</button>
         <button id="tab-yaml" type="button" role="tab" aria-selected="false">YAML</button>
       </div>
       <div id="pane-doc" class="pane">
-        <div id="doc-note" class="note"></div>
+        <div class="note-row">
+          <div id="doc-note" class="note"></div>
+          <button id="doc-quote" type="button" class="quote" title="复制选中那几行的引用；没有选中文字时引用当前显示的整段">引用所选</button>
+        </div>
         <textarea id="doc-text" spellcheck="false"></textarea>
       </div>
       <div id="pane-yaml" class="pane" hidden>
-        <div id="yaml-note" class="note"></div>
+        <div class="note-row">
+          <div id="yaml-note" class="note"></div>
+          <button id="yaml-quote" type="button" class="quote" title="复制选中那几行的引用；没有选中文字时引用当前控件的条目">引用所选</button>
+        </div>
         <textarea id="yaml-text" spellcheck="false" wrap="off"></textarea>
       </div>
     </aside>
