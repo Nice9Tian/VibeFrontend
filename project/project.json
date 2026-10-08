@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": "0b6f3d52-7c1e-4a9b-9f0e-5d2a8c41e7b3",
+  "name": "灯光面板",
+  "windows": [
+    { "id": "panelWindow", "doc": "docs/panel.md" }
+  ]
+}

@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "root": "panelWindow",
+  "nodes": {
+    "panelWindow": {
+      "type": "Window",
+      "title": "灯光面板",
+      "width": 560,
+      "height": 372,
+      "children": [
+        "titleLabel",
+        "lampA",
+        "lampB",
+        "lampC",
+        "allOnButton",
+        "allOffButton",
+        "hintBox",
+        "statusLabel",
+        "noteInput",
+        "noteLabel",
+        "touchedHint",
+        "textInput1",
+        "box1"
+      ]
+    },
+    "titleLabel": {
+      "type": "Label",
+      "x": 24,
+      "y": 16,
+      "width": 512,
+      "height": 28,
+      "props": {
+        "text": "灯光面板（双击这里把灯全部打开）",
+        "tone": "title"
+      }
+    },
+    "lampA": {
+      "type": "Lamp",
+      "x": 40,
+      "y": 60,
+      "width": 120,
+      "height": 124,
+      "props": {
+        "label": "客厅"
+      }
+    },
+    "lampB": {
+      "type": "Lamp",
+      "x": 208,
+      "y": 58,
+      "width": 120,
+      "height": 124,
+      "props": {
+        "label": "卧室"
+      }
+    },
+    "lampC": {
+      "type": "Lamp",
+      "x": 401,
+      "y": 61,
+      "width": 120,
+      "height": 124,
+      "props": {
+        "label": "书房"
+      }
+    },
+    "allOnButton": {
+      "type": "Button",
+      "x": 41,
+      "y": 205,
+      "width": 110,
+      "height": 36,
+      "props": {
+        "text": "全部打开",
+        "variant": "primary"
+      }
+    },
+    "allOffButton": {
+      "type": "Button",
+      "x": 162,
+      "y": 205,
+      "width": 110,
+      "height": 36,
+      "props": {
+        "text": "全部关闭",
+        "variant": "secondary"
+      }
+    },
+    "hintBox": {
+      "type": "Container",
+      "x": 300,
+      "y": 200,
+      "width": 236,
+      "height": 44,
+      "children": []
+    },
+    "statusLabel": {
+      "type": "Label",
+      "x": 31,
+      "y": 254,
+      "width": 512,
+      "height": 24
+    },
+    "noteInput": {
+      "type": "TextInput",
+      "x": 24,
+      "y": 292,
+      "width": 250,
+      "height": 32,
+      "props": {
+        "placeholder": "在这里输入备注"
+      }
+    },
+    "noteLabel": {
+      "type": "Label",
+      "x": 290,
+      "y": 292,
+      "width": 246,
+      "height": 32,
+      "props": {
+        "tone": "muted"
+      }
+    },
+    "touchedHint": {
+      "type": "Label",
+      "x": 24,
+      "y": 336,
+      "width": 512,
+      "height": 22,
+      "props": {
+        "text": "窗口已经被点击过（来自全局事件 window.click）",
+        "tone": "muted"
+      }
+    },
+    "textInput1": {
+      "type": "TextInput",
+      "x": 291,
+      "y": 292,
+      "width": 220,
+      "height": 32
+    },
+    "box1": {
+      "type": "Container",
+      "x": 339,
+      "y": 19,
+      "width": 102,
+      "height": 43,
+      "children": []
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "type": "Label",
+  "label": "文字标签",
+  "description": "一行或多行文字，tone 可选 normal、title、muted、error",
+  "defaultSize": { "width": 160, "height": 24 },
+  "entry": "index.js",
+  "style": "style.css",
+  "props": {
+    "text": { "type": "string", "default": "", "logic": true },
+    "tone": { "type": "string", "default": "normal" }
+  },
+  "children": false
+}

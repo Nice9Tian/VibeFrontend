@@ -1,0 +1,572 @@
+:root {
+  --bg: #f3f4f6;
+  --panel: #ffffff;
+  --line: #d9dce1;
+  --text: #1f2430;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-soft: #dbe7ff;
+  --preview: #d9480f;
+  --error: #c62828;
+  --hint: #8a6d1a;
+  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) 360px;
+  grid-template-rows: 36px minmax(0, 1fr) 150px;
+  grid-template-areas:
+    "top top top"
+    "left center right"
+    "bottom bottom bottom";
+  background: var(--bg);
+  overflow: hidden;
+  user-select: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* ---------- 顶部 ---------- */
+
+#topbar {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+#project-name {
+  font-weight: 600;
+}
+
+#project-root {
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+/* ---------- 左侧 ---------- */
+
+#left {
+  grid-area: left;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+
+#left section {
+  padding: 8px 10px;
+}
+
+#layers-section {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+
+h2 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+h3 {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.palette {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.palette-item {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fafafa;
+  cursor: grab;
+  touch-action: none;
+}
+
+.palette-item:hover {
+  border-color: var(--accent);
+}
+
+.palette-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.layer {
+  display: flex;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.layer:hover {
+  background: #f0f2f5;
+}
+
+.layer.selected {
+  background: var(--accent-soft);
+}
+
+.layer .type {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ---------- 中间 ---------- */
+
+#center {
+  grid-area: center;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+#center-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  min-height: 44px;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.segmented button {
+  padding: 5px 14px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+
+#mode-preview[aria-pressed="true"] {
+  background: var(--preview);
+}
+
+#preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+#preview-bar[hidden] {
+  display: none;
+}
+
+#restart,
+.note button {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+#conditions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.condition {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.condition.on {
+  border-color: var(--preview);
+  background: #fff1e8;
+}
+
+button.condition {
+  cursor: pointer;
+}
+
+#stage-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+}
+
+#stage-frame {
+  width: max-content;
+  margin: 0 auto;
+  border: 1px solid #b9bec7;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.12);
+}
+
+body.preview #stage-frame {
+  border: 2px solid var(--preview);
+}
+
+#stage-title {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  background: #f7f7f8;
+  border-radius: 6px 6px 0 0;
+  font-size: 12px;
+}
+
+#stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0 0 6px 6px;
+  user-select: none;
+}
+
+body.preview #stage {
+  user-select: auto;
+}
+
+.vf-node {
+  position: absolute;
+}
+
+.vf-body {
+  position: absolute;
+  inset: 0;
+}
+
+/* 未转换的容器：占位用的虚线框 */
+.vf-node[data-vf-type="Container"] > .vf-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed #9aa1ad;
+  color: #8a909b;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+body.preview .vf-node[data-vf-type="Container"] > .vf-body {
+  border-color: #dfe2e7;
+  color: #c3c7ce;
+}
+
+/* 编辑模式下，初始不可见的控件半透明显示，仍然可以选中 */
+.vf-node.vf-ghost {
+  opacity: 0.35;
+  outline: 1px dashed #9aa1ad;
+}
+
+.vf-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--error);
+  background: #fdecec;
+  color: var(--error);
+  font-size: 12px;
+  overflow: hidden;
+  text-align: center;
+}
+
+/* 编辑层：盖在所有控件上面，接住全部鼠标事件 */
+#overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1000;
+  touch-action: none;
+}
+
+#selection {
+  position: absolute;
+  border: 1.5px solid var(--accent);
+  pointer-events: none;
+}
+
+#selection .tag {
+  position: absolute;
+  left: -1.5px;
+  top: -18px;
+  padding: 0 5px;
+  height: 16px;
+  line-height: 16px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border: 1.5px solid var(--accent);
+  background: #fff;
+  pointer-events: auto;
+}
+
+#drag-ghost {
+  position: fixed;
+  z-index: 3000;
+  border: 1.5px dashed var(--accent);
+  background: rgba(37, 99, 235, 0.08);
+  pointer-events: none;
+}
+
+/* ---------- 右侧 ---------- */
+
+#right {
+  grid-area: right;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+
+#selection-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 4px;
+}
+
+#selection-id {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-weight: 600;
+  background: transparent;
+}
+
+#selection-id:not(:disabled):hover,
+#selection-id:focus {
+  border-color: var(--line);
+  background: #fff;
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tabs button {
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tabs button[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
+.pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pane[hidden] {
+  display: none;
+}
+
+.note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  min-height: 34px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pane textarea {
+  flex: 1;
+  min-height: 0;
+  margin: 0 8px 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  resize: none;
+  outline: none;
+  font-family: Consolas, "Cascadia Mono", "Microsoft YaHei UI", monospace;
+  font-size: 12.5px;
+  line-height: 18px;
+  tab-size: 2;
+  user-select: text;
+}
+
+.pane textarea:focus {
+  border-color: var(--accent);
+}
+
+/* ---------- 底部 ---------- */
+
+#bottom {
+  grid-area: bottom;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+
+.bottom-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 10px;
+  user-select: text;
+}
+
+.bottom-pane[hidden] {
+  display: none;
+}
+
+.problem {
+  padding: 2px 0;
+  cursor: default;
+}
+
+.problem.error {
+  color: var(--error);
+}
+
+.problem.hint {
+  color: var(--hint);
+}
+
+.problem.clickable {
+  cursor: pointer;
+}
+
+.log-entry {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 2px 12px;
+  padding: 2px 0;
+  font-family: Consolas, "Cascadia Mono", "Microsoft YaHei UI", monospace;
+  font-size: 12px;
+}
+
+.log-entry .title {
+  color: var(--accent);
+}
+
+.log-entry .lines {
+  white-space: pre-wrap;
+}
+
+/* ---------- 菜单与提示 ---------- */
+
+#menu {
+  position: fixed;
+  z-index: 4000;
+  min-width: 150px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
+}
+
+#menu button {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+#menu button:hover {
+  background: var(--accent-soft);
+}
+
+#menu hr {
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 170px;
+  transform: translateX(-50%);
+  z-index: 5000;
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: rgba(31, 36, 48, 0.92);
+  color: #fff;
+}

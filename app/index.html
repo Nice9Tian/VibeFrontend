@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VibeFrontend 原型</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <header id="topbar">
+      <span id="project-name">加载中…</span>
+      <span id="window-size" class="muted"></span>
+      <span class="spacer"></span>
+      <span id="project-root" class="muted" title="设计项目所在的文件夹"></span>
+    </header>
+
+    <aside id="left">
+      <section>
+        <h2>素材栏</h2>
+        <h3>基础素材</h3>
+        <div id="palette-basic" class="palette"></div>
+        <h3>项目素材</h3>
+        <div id="palette-project" class="palette"></div>
+      </section>
+      <section id="layers-section">
+        <h2>图层</h2>
+        <div id="layers"></div>
+      </section>
+    </aside>
+
+    <main id="center">
+      <div id="center-bar">
+        <div class="segmented" role="group" aria-label="设计窗口的模式">
+          <button id="mode-edit" type="button" aria-pressed="true">编辑模式</button>
+          <button id="mode-preview" type="button" aria-pressed="false">预览模式</button>
+        </div>
+        <div id="preview-bar" hidden>
+          <button id="restart" type="button">重新开始</button>
+          <div id="conditions"></div>
+        </div>
+      </div>
+      <div id="stage-scroll">
+        <div id="stage-frame">
+          <div id="stage-title"></div>
+          <div id="stage"></div>
+        </div>
+      </div>
+    </main>
+
+    <aside id="right">
+      <div id="selection-head">
+        <input id="selection-id" spellcheck="false" aria-label="控件 ID" />
+        <span id="selection-type" class="muted"></span>
+      </div>
+      <div class="tabs" role="tablist">
+        <button id="tab-doc" type="button" role="tab" aria-selected="true">文档</button>
+        <button id="tab-yaml" type="button" role="tab" aria-selected="false">YAML</button>
+      </div>
+      <div id="pane-doc" class="pane">
+        <div id="doc-note" class="note"></div>
+        <textarea id="doc-text" spellcheck="false"></textarea>
+      </div>
+      <div id="pane-yaml" class="pane" hidden>
+        <div id="yaml-note" class="note"></div>
+        <textarea id="yaml-text" spellcheck="false" wrap="off"></textarea>
+      </div>
+    </aside>
+
+    <footer id="bottom">
+      <div class="tabs" role="tablist">
+        <button id="tab-problems" type="button" role="tab" aria-selected="true">问题</button>
+        <button id="tab-log" type="button" role="tab" aria-selected="false">事件记录</button>
+      </div>
+      <div id="problems" class="bottom-pane"></div>
+      <div id="log" class="bottom-pane" hidden></div>
+    </footer>
+
+    <div id="menu" hidden></div>
+    <div id="toast" hidden></div>
+  </body>
+</html>

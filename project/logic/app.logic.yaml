@@ -1,0 +1,131 @@
+version: 1
+
+state:
+  panel:
+    message: { type: string, initial: "" }
+    hovering: { type: enum, values: [ none, a, b, c ], initial: none }
+    note: { type: string, initial: "" }
+    touched: { type: boolean, initial: false }
+  lamps:
+    a: { type: boolean, initial: false }
+    b: { type: boolean, initial: false }
+    c: { type: boolean, initial: false }
+
+conditions:
+  # 全局条件
+  run:
+    type: text
+    text: 程序正在启动
+    preview: false # 预览开始时的值，可在预览工具条上切换
+  anyOn:
+    type: symbol
+    text: 至少有一盏灯亮着
+    expr: lamps.a or lamps.b or lamps.c
+
+events:
+  # 全局事件
+  app.start:
+    # 预览开始时自动触发
+    - set: panel.message = '点击灯可以开关；把鼠标移到灯上看提示'
+  window.click:
+    # 设计窗口里的任何点击之后自动触发
+    - set: panel.touched = true
+  allOn:
+    # 自定义全局事件，由 emit 触发
+    - set: lamps.a = true
+    - set: lamps.b = true
+    - set: lamps.c = true
+    - set: panel.message = '已全部打开'
+  allOff:
+    - set: lamps.a = false
+    - set: lamps.b = false
+    - set: lamps.c = false
+    - set: panel.message = '已全部关闭'
+
+objects:
+  titleLabel:
+    events:
+      dblclick:
+        - emit: allOn
+
+  lampA:
+    doc: docs/panel.md#lamp
+    props:
+      on: lamps.a
+      enabled: not run
+    events:
+      click:
+        - set: lamps.a = not lamps.a
+      mouseenter:
+        - set: panel.hovering = 'a'
+      mouseleave:
+        - set: panel.hovering = 'none'
+
+  lampB:
+    doc: docs/panel.md#lamp
+    props:
+      on: lamps.b
+      enabled: not run
+    events:
+      click:
+        - set: lamps.b = not lamps.b
+      mouseenter:
+        - set: panel.hovering = 'b'
+      mouseleave:
+        - set: panel.hovering = 'none'
+
+  lampC:
+    doc: docs/panel.md#lamp
+    props:
+      on: lamps.c
+      enabled: not run
+    events:
+      click:
+        - set: lamps.c = not lamps.c
+      mouseenter:
+        - set: panel.hovering = 'c'
+      mouseleave:
+        - set: panel.hovering = 'none'
+
+  allOnButton:
+    props:
+      enabled: not run
+    events:
+      click:
+        - emit: allOn
+
+  allOffButton:
+    doc: docs/panel.md#all-off-button
+    conditions:
+      canTurnOff:
+        # 完整代号为 allOffButton.canTurnOff
+        type: symbol
+        text: 有灯亮着，并且程序不在启动中
+        expr: anyOn and not run
+    props:
+      enabled: allOffButton.canTurnOff
+    events:
+      click:
+        - emit: allOff
+
+  hintBox:
+    doc: docs/panel.md#hint-box
+    props:
+      visible: panel.hovering != 'none'
+
+  statusLabel:
+    props:
+      text: panel.message
+
+  noteInput:
+    bind: panel.note
+
+  noteLabel:
+    props:
+      text: panel.note
+
+  touchedHint:
+    props:
+      visible: panel.touched
+  box1:
+    doc: docs/panel.md#box1

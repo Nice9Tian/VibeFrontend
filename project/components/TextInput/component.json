@@ -1,0 +1,15 @@
+{
+  "type": "TextInput",
+  "label": "输入框",
+  "description": "单行输入框，可以用 bind 绑定到一个字符串状态",
+  "defaultSize": { "width": 220, "height": 32 },
+  "entry": "index.js",
+  "style": "style.css",
+  "props": {
+    "placeholder": { "type": "string",  "default": "" },
+    "enabled":     { "type": "boolean", "default": true, "logic": true }
+  },
+  "bind": "string",
+  "events": ["change"],
+  "children": false
+}

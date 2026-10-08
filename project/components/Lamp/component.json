@@ -1,0 +1,14 @@
+{
+  "type": "Lamp",
+  "label": "灯",
+  "description": "圆形指示灯，下面有名字；on 为真时发光",
+  "defaultSize": { "width": 120, "height": 124 },
+  "entry": "index.js",
+  "style": "style.css",
+  "props": {
+    "label":   { "type": "string",  "default": "灯" },
+    "on":      { "type": "boolean", "default": false, "logic": true },
+    "enabled": { "type": "boolean", "default": true,  "logic": true }
+  },
+  "children": false
+}
