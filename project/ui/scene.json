@@ -20,7 +20,8 @@
         "noteLabel",
         "touchedHint",
         "textInput1",
-        "box1"
+        "box1",
+        "button1"
       ]
     },
     "titleLabel": {
@@ -36,8 +37,8 @@
     },
     "lampA": {
       "type": "Lamp",
-      "x": 40,
-      "y": 60,
+      "x": 58,
+      "y": 69,
       "width": 120,
       "height": 124,
       "props": {
@@ -46,8 +47,8 @@
     },
     "lampB": {
       "type": "Lamp",
-      "x": 208,
-      "y": 58,
+      "x": 191,
+      "y": 68,
       "width": 120,
       "height": 124,
       "props": {
@@ -56,8 +57,8 @@
     },
     "lampC": {
       "type": "Lamp",
-      "x": 401,
-      "y": 61,
+      "x": 319,
+      "y": 67,
       "width": 120,
       "height": 124,
       "props": {
@@ -141,11 +142,18 @@
     },
     "box1": {
       "type": "Container",
-      "x": 339,
-      "y": 19,
+      "x": 396,
+      "y": 13,
       "width": 102,
       "height": 43,
       "children": []
+    },
+    "button1": {
+      "type": "Button",
+      "x": 435,
+      "y": 141,
+      "width": 110,
+      "height": 36
     }
   }
 }
