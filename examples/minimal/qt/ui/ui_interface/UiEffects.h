@@ -9,9 +9,9 @@
 // 它的基类不再是有效的类，编译失败，必须重新翻译。
 #pragma once
 
-#include <functional>
 #include <memory>
 
+class QAbstractAnimation;
 class QWidget;
 
 namespace vf {
@@ -39,11 +39,16 @@ class PanelExpandEffect<0x77a08c49>
 public:
     virtual ~PanelExpandEffect() = default;
 
-    // target：要显示或隐藏的控件。showing：true 为显示，false 为隐藏。
-    // 调用时控件是显示着的：显示时界面已经先把它显示出来；隐藏时界面等过渡放完才把它藏起来。
-    // 过渡放完后必须调用一次 finished()，并且在那之前把控件的大小、位置和透明度恢复原样。
-    // 上一次过渡还没放完又被调用时，先停掉上一次（那一次的 finished 可以不再调用）。
-    virtual void play(QWidget *target, bool showing, std::function<void()> finished) = 0;
+    // 创建这次过渡的动画并返回它。target：要显示或隐藏的控件。showing：true 为显示，false 为隐藏。
+    // 调用时控件是显示着的，位置和大小是画布上定下的样子。没有动画可做时返回空指针。
+    //
+    // 实现里只做两件事：把控件摆成动画开始时的样子，创建动画并设好起止值。不要自己启动动画。
+    // 其余的事由界面绑定层负责，不用写，写漏了也不会出错：
+    //   - 启动动画，监听它的结束；动画超时没有结束时也照样收尾；
+    //   - 动画结束，或者被下一次过渡打断时，停掉并删除动画，把控件的位置和大小恢复成画布上的样子，
+    //     清掉控件上的图形效果（QGraphicsEffect，例如为了淡入淡出加的透明度效果）；
+    //   - 把控件定到最终的显示或隐藏状态。
+    virtual QAbstractAnimation *createTransition(QWidget *target, bool showing) = 0;
 };
 
 // 界面绑定层通过它拿到各个效果的实现。某个效果没有人提供时返回空，界面就直接切到结束状态。

@@ -11,5 +11,5 @@
 class PanelExpandAnimation : public vf::PanelExpandEffect<0x77a08c49>
 {
 public:
-    void play(QWidget *target, bool showing, std::function<void()> finished) override;
+    QAbstractAnimation *createTransition(QWidget *target, bool showing) override;
 };

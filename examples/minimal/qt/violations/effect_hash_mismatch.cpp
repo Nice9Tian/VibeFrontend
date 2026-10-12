@@ -5,5 +5,5 @@
 class StalePanelExpand : public vf::PanelExpandEffect<0x00000000>
 {
 public:
-    void play(QWidget *, bool, std::function<void()>) {}
+    QAbstractAnimation *createTransition(QWidget *, bool) { return nullptr; }
 };

@@ -5,6 +5,7 @@
 //   其余是固定的：把逻辑脚本放进 Qt 自带的 JS 引擎运行，把鼠标事件交给它，再把算出的结果写到控件上。
 #include "Ui.h"
 
+#include <QAbstractAnimation>
 #include <QEvent>
 #include <QFile>
 #include <QFrame>
@@ -19,15 +20,17 @@
 #include <QMetaMethod>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QVariant>
 //@VF:includes@
 
-#include <functional>
-
 namespace vf {
 
 namespace {
+
+// 过渡动画超过它自己的时长这么多毫秒还没有结束，就不再等它
+const int kTransitionGraceMs = 300;
 
 // 设计项目里的一个控件
 struct Control
@@ -41,6 +44,11 @@ struct Control
     bool shown = true;
     // 每次显示或隐藏加一，用来丢弃被打断的过渡
     int generation = 0;
+    // 画布上定下的位置和大小，过渡结束后恢复成它
+    QRect designRect;
+    // 正在过渡中，以及这次过渡的动画
+    bool transitioning = false;
+    QPointer<QAbstractAnimation> transition;
     // 下面三项只有外部容器用
     QVBoxLayout *hostLayout = nullptr;
     QLabel *placeholder = nullptr;
@@ -106,13 +114,15 @@ struct Ui::Private
     void drain(const QJSValue &pending);
     void applyView();
     void setShown(int index, bool shown);
+    void clearTransition(int index);
+    void finishTransition(int index, int generation);
     void setBusinessState(const QString &path, const QJSValue &value);
     void setExternal(const QString &id, QWidget *widget);
 
     // 生成的部分，见文件末尾
     void build();
     bool raiseBusinessEvent(const QString &name);
-    bool playVisibility(int effect, QWidget *target, bool showing, std::function<void()> finished);
+    QAbstractAnimation *createVisibility(int effect, QWidget *target, bool showing);
 };
 
 Ui::Ui(QObject *parent)
@@ -259,6 +269,7 @@ int Ui::Private::add(const QString &id, QWidget *widget, QList<QPair<QString, QB
     control.widget = widget;
     control.props = std::move(props);
     control.effect = effect;
+    control.designRect = widget->geometry();
     // 对象名就是设计项目里的控件 ID，测试和调试都靠它找控件
     widget->setObjectName(id);
     widget->installEventFilter(q);
@@ -336,8 +347,11 @@ void Ui::Private::applyView()
     }
 }
 
-// 显示或隐藏一个控件。指定了效果、并且有人提供了实现时播放它：
-// 显示是先显示再播放，隐藏是播放完再隐藏；中途又变了，旧的那次作废。
+// 显示或隐藏一个控件。指定了效果、并且有人提供了实现时，带着过渡动画做：
+// 显示是先显示再跑动画，隐藏是动画跑完再隐藏；中途又变了，旧的那次作废。
+//
+// 效果的实现只负责创建动画。启动、收尾、把控件定到最终状态，都在这里做，
+// 所以效果的实现写漏了什么，控件也一定会到达最终的显示或隐藏状态。
 void Ui::Private::setShown(int index, bool shown)
 {
     Control &control = controls[index];
@@ -345,19 +359,66 @@ void Ui::Private::setShown(int index, bool shown)
         return;
     control.shown = shown;
     const int generation = ++control.generation;
+    // 上一次过渡还没跑完：停掉它，控件恢复原样，再开始这一次
+    clearTransition(index);
     QWidget *widget = control.widget;
     if (!started || control.effect < 0) {
         widget->setVisible(shown);
         return;
     }
-    if (shown)
-        widget->setVisible(true);
-    auto finished = [this, alive = alive, index, generation, shown] {
-        if (*alive && controls.at(index).generation == generation)
-            controls.at(index).widget->setVisible(shown);
+
+    widget->setVisible(true);
+    control.transitioning = true;
+    QAbstractAnimation *animation = createVisibility(control.effect, widget, shown);
+    if (!animation) {
+        // 没有人提供实现，或者实现说没有动画可做：直接到最终状态
+        finishTransition(index, generation);
+        return;
+    }
+    control.transition = animation;
+    auto finish = [this, alive = alive, index, generation] {
+        if (*alive)
+            finishTransition(index, generation);
     };
-    if (!playVisibility(control.effect, widget, shown, finished))
-        widget->setVisible(shown);
+    QObject::connect(animation, &QAbstractAnimation::finished, q, finish);
+
+    // 兜底：动画没有按时结束（比如被暂停了、被别处删掉了），到点也照样收尾
+    const int duration = animation->totalDuration();
+    if (duration < 0) {
+        qWarning("控件 %s 的过渡动画没有结束时间（循环个不停），已跳过过渡", qPrintable(control.id));
+        finishTransition(index, generation);
+        return;
+    }
+    QTimer::singleShot(duration + kTransitionGraceMs, q, finish);
+    if (animation->state() == QAbstractAnimation::Stopped)
+        animation->start();
+}
+
+// 停掉并删除还在跑的过渡动画，把控件的位置、大小恢复原样，清掉动画加在控件上的图形效果。
+void Ui::Private::clearTransition(int index)
+{
+    Control &control = controls[index];
+    if (!control.transitioning)
+        return;
+    control.transitioning = false;
+    if (QAbstractAnimation *animation = control.transition) {
+        control.transition = nullptr;
+        animation->stop();
+        animation->deleteLater();
+    }
+    control.widget->setGeometry(control.designRect);
+    control.widget->setGraphicsEffect(nullptr);
+}
+
+// 一次过渡结束：动画跑完、没有动画、超时，都走这里。已经被后来的一次取代的，不做任何事。
+void Ui::Private::finishTransition(int index, int generation)
+{
+    Control &control = controls[index];
+    if (control.generation != generation || !control.transitioning)
+        return;
+    // 先定到最终的显示或隐藏状态，再恢复大小，免得收起之后完整的面板闪一下
+    control.widget->setVisible(control.shown);
+    clearTransition(index);
 }
 
 void Ui::Private::setBusinessState(const QString &path, const QJSValue &value)

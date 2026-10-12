@@ -39,11 +39,17 @@
 设计项目里标为“需要翻译”的效果，在 `ui_interface/UiEffects.h` 里各有一个带哈希的抽象类，注释里写着它在设计项目里的实现在哪个文件。
 
 1. 读设计项目里那个文件，弄清它做了什么：变化的是什么、时长、缓动。
-2. 在 `ui_effects/` 里新建一个类，继承带哈希的抽象类，用 Qt 的动画把它重写一遍：
+2. 在 `ui_effects/` 里新建一个类，继承带哈希的抽象类，实现它的 `createTransition`，用 Qt 的动画把过渡重写一遍：
 
    ```cpp
    class PanelExpandAnimation : public vf::PanelExpandEffect<0x1a2b3c4d>
+   {
+   public:
+       QAbstractAnimation *createTransition(QWidget *target, bool showing) override;
+   };
    ```
+
+   这个函数只做两件事：把控件摆成动画开始时的样子，创建动画并设好起止值，然后把动画返回。**不要自己启动动画，也不用写收尾。** 启动动画、等它结束、把控件的位置和大小恢复原样、清掉加在控件上的图形效果、把控件定到最终的显示或隐藏状态，都由界面绑定层负责。动画超时没有结束，界面绑定层也会照样收尾。
 
 3. 在 `ui_effects/EffectsSetup.cpp` 的 `registerEffects` 里把它交出去。
 
