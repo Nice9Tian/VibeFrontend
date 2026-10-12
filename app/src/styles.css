@@ -156,6 +156,14 @@ h3 {
   font-size: 12px;
 }
 
+.layer .badge {
+  padding: 0 4px;
+  border: 1px solid #d9a441;
+  border-radius: 3px;
+  color: #9a6a00;
+  font-size: 11px;
+}
+
 /* ---------- 中间 ---------- */
 
 #center {
@@ -306,6 +314,20 @@ body.preview #stage {
 body.preview .vf-node[data-vf-type="Container"] > .vf-body {
   border-color: #dfe2e7;
   color: #c3c7ce;
+}
+
+/* 外部容器：占位用的斜纹框 */
+.vf-node[data-vf-type="External"] > .vf-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #9aa1ad;
+  background: repeating-linear-gradient(45deg, #f4f5f7 0 10px, #eceef1 10px 20px);
+  color: #6b7280;
+  font-size: 12px;
+  text-align: center;
+  white-space: pre-line;
+  overflow: hidden;
 }
 
 /* 编辑模式下，初始不可见的控件半透明显示，仍然可以选中 */

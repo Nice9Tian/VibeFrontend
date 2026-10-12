@@ -14,6 +14,12 @@ type Token =
   | { type: "path"; path: string }
   | { type: "op"; op: "==" | "!=" | "and" | "or" | "not" | "(" | ")" };
 
+// 名字可以用英文字母、下划线和非 ASCII 字符（例如中文）开头。
+// 不用 \p{L} 这样的写法，因为 Qt 自带的 JS 引擎不一定支持，而这份代码也要在那里运行。
+const NAME_START = /[^\x00-\x40\x5B-\x5E\x60\x7B-\x7F]/;
+const NAME_PATH = /^[^\x00-\x40\x5B-\x5E\x60\x7B-\x7F][^\x00-\x2F\x3A-\x40\x5B-\x5E\x60\x7B-\x7F]*(\.[^\x00-\x40\x5B-\x5E\x60\x7B-\x7F][^\x00-\x2F\x3A-\x40\x5B-\x5E\x60\x7B-\x7F]*)*/;
+const ASSIGNMENT = /^\s*([^\x00-\x40\x5B-\x5E\x60\x7B-\x7F][^\x00-\x2D\x2F\x3A-\x40\x5B-\x5E\x60\x7B-\x7F]*)\s*=(?!=)([\s\S]+)$/;
+
 function tokenize(source: string): Token[] {
   const tokens: Token[] = [];
   let i = 0;
@@ -36,8 +42,8 @@ function tokenize(source: string): Token[] {
       const match = /^-?[0-9]+(\.[0-9]+)?/.exec(source.slice(i))!;
       tokens.push({ type: "literal", value: Number(match[0]) });
       i += match[0].length;
-    } else if (/[\p{L}_]/u.test(ch)) {
-      const match = /^[\p{L}_][\p{L}\p{N}_]*(\.[\p{L}_][\p{L}\p{N}_]*)*/u.exec(source.slice(i))!;
+    } else if (NAME_START.test(ch)) {
+      const match = NAME_PATH.exec(source.slice(i))!;
       const word = match[0];
       if (word === "and" || word === "or" || word === "not") tokens.push({ type: "op", op: word });
       else if (word === "true" || word === "false") tokens.push({ type: "literal", value: word === "true" });
@@ -142,7 +148,7 @@ export function pathsIn(expr: Expr): string[] {
 
 /** 解析 `状态路径 = 表达式` 形式的赋值语句。 */
 export function parseAssignment(source: string): { target: string; value: Expr } {
-  const match = /^\s*([\p{L}_][\p{L}\p{N}_.]*)\s*=(?!=)([\s\S]+)$/u.exec(String(source));
+  const match = ASSIGNMENT.exec(String(source));
   if (!match) throw new Error(`set 的写法应为“状态路径 = 表达式”：${source}`);
   return { target: match[1], value: parseExpr(match[2]) };
 }

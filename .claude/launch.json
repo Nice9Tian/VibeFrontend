@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "app"],
       "port": 1420
+    },
+    {
+      "name": "vibefrontend-web-minimal",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set VF_PROJECT=../examples/minimal/design&& npm run dev --prefix app"],
+      "port": 1420
     }
   ]
 }

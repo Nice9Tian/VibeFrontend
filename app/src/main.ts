@@ -3,8 +3,10 @@ import { isMap, parseDocument, type Document } from "yaml";
 import { watchProject, writeText } from "./fs";
 import {
   appendSection,
+  BUILTIN_TYPES,
   CONTAINER_DECL,
   declFor,
+  EXTERNAL_DECL,
   getSection,
   loadProject,
   LOGIC_PATH,
@@ -47,6 +49,10 @@ interface Mounted {
   wrapper: HTMLElement;
   body: HTMLElement;
   instance?: ComponentInstance;
+  /** 预览模式下当前是不是显示着；undefined 表示还没有摆过 */
+  shown?: boolean;
+  /** 每次显示或隐藏加一，用来丢弃被打断的过渡 */
+  generation: number;
 }
 const mounted = new Map<string, Mounted>();
 const log: LogEntry[] = [];
@@ -189,12 +195,15 @@ function buildNode(id: string, parentEl: HTMLElement): void {
   body.className = "vf-body";
   wrapper.append(body);
   parentEl.append(wrapper);
-  const entry: Mounted = { wrapper, body };
+  const entry: Mounted = { wrapper, body, generation: 0 };
   mounted.set(id, entry);
 
   if (n.type === "Container") {
     // 未转换的容器：没有子节点时显示自己的 ID，作为占位
     if (!n.children?.length) body.textContent = id;
+  } else if (n.type === "External") {
+    // 外部容器：工具里只是占位，导出后由业务把自己的控件放进来
+    body.textContent = `外部容器 ${id}\n导出后由业务放入控件`;
   } else {
     const component = project.components.get(n.type);
     if (!component?.create) {
@@ -236,13 +245,40 @@ function buildNode(id: string, parentEl: HTMLElement): void {
   for (const child of n.children ?? []) buildNode(child, wrapper);
 }
 
+/**
+ * 预览模式下显示或隐藏一个节点。节点的 visible 指定了效果时播放它：
+ * 显示是先显示再播放，隐藏是播放完再隐藏；中途又变了，旧的那次作废。
+ */
+function setShown(id: string, entry: Mounted, shown: boolean): void {
+  if (entry.shown === shown) return;
+  const first = entry.shown === undefined;
+  entry.shown = shown;
+  const generation = ++entry.generation;
+  const effectName = project.logic.objects?.[id]?.effects?.visible;
+  const play = effectName ? project.effects.get(effectName)?.play : undefined;
+  const finish = () => {
+    if (entry.generation === generation) entry.wrapper.style.display = shown ? "" : "none";
+  };
+  // 刚摆出来时直接到位，不播放
+  if (first || !play) return finish();
+  entry.wrapper.style.display = "";
+  try {
+    const result = play(entry.wrapper, { showing: shown });
+    const done = result && "finished" in result ? result.finished : result;
+    Promise.resolve(done).then(finish, finish);
+  } catch (e) {
+    toast(`效果 ${effectName} 运行出错：${(e as Error).message}`);
+    finish();
+  }
+}
+
 /** 按当前运行层的计算结果更新每个节点的可见性和属性。 */
 function applyViews(): void {
   const runtime = activeRuntime();
   for (const [id, entry] of mounted) {
     const view = runtime.view(id);
     if (mode === "preview") {
-      entry.wrapper.style.display = view.visible ? "" : "none";
+      setShown(id, entry, view.visible);
       entry.wrapper.classList.remove("vf-ghost");
     } else {
       entry.wrapper.style.display = "";
@@ -449,7 +485,7 @@ $("stage").addEventListener("click", (e) => {
 // ---------- 对节点的操作 ----------
 
 function newId(type: string): string {
-  const base = type === "Container" ? "box" : type.charAt(0).toLowerCase() + type.slice(1);
+  const base = type === "Container" ? "box" : type === "External" ? "host" : type.charAt(0).toLowerCase() + type.slice(1);
   const taken = new Set([
     ...Object.keys(project.scene.nodes),
     ...Object.keys(project.logic.state ?? {}),
@@ -657,7 +693,7 @@ function renderPalette(): void {
     el.textContent = label;
     el.title = title;
     el.addEventListener("pointerdown", (e) => startPaletteDrag(e, type));
-    if (type !== "Container") {
+    if (!BUILTIN_TYPES.includes(type)) {
       el.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         openMenu(e.clientX, e.clientY, [
@@ -667,7 +703,10 @@ function renderPalette(): void {
     }
     return el;
   };
-  $("palette-basic").replaceChildren(make("Container", "□ 容器", "拖进设计窗口，再交给 Agent 做成具体控件"));
+  $("palette-basic").replaceChildren(
+    make("Container", "□ 容器", "拖进设计窗口，再交给 Agent 做成具体控件"),
+    make("External", "⧉ 外部容器", EXTERNAL_DECL.description ?? ""),
+  );
   const items = [...project.components.values()]
     .filter((component) => !component.error)
     .map((component) => make(component.decl.type, component.decl.label ?? component.decl.type, component.decl.description ?? ""));
@@ -721,6 +760,14 @@ function renderLayers(): void {
     type.className = "type";
     type.textContent = n.type;
     row.append(name, type);
+    const effectName = project.logic.objects?.[id]?.effects?.visible;
+    if (effectName) {
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      badge.textContent = "需翻译";
+      badge.title = `显示和隐藏时播放效果 ${effectName}；导出成 Qt 后要在界面效果层为它提供实现`;
+      row.append(badge);
+    }
     row.addEventListener("click", () => select(id));
     row.addEventListener("contextmenu", (e) => {
       e.preventDefault();
