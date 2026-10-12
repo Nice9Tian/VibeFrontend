@@ -11,5 +11,10 @@
   },
   "bind": "string",
   "events": ["change"],
-  "children": false
+  "children": false,
+  "qt": {
+    "widget": "QLineEdit",
+    "props": { "placeholder": "placeholderText", "value": "text" },
+    "events": { "change": { "signal": "textEdited", "type": "string" } }
+  }
 }

@@ -17,6 +17,9 @@ project/
     component.json
     index.js
     style.css
+  effects/<效果名>/          # 需要翻译的效果（第 9.4 节），没有可以不建
+    effect.json
+    index.js
 ```
 
 同一个控件在三处用同一个 **ID** 对应：`scene.json` 的 `nodes.<ID>`、`app.logic.yaml` 的 `objects.<ID>`，以及它在页面文档中的说明小节。
@@ -31,6 +34,7 @@ project/
 | `components/` | 可以新增和修改控件 |
 | `app.logic.yaml` | 可以改，按第 5 节的写法 |
 | `docs/*.md` | 可以改小节的正文；不要删除或改动 `<!-- ui-section: ... -->` 标记 |
+| `effects/` | 可以新增和修改效果，按第 9.4 节的写法 |
 
 ## 3. 引用，以及把容器做成控件
 
@@ -91,6 +95,8 @@ User referenced "control=hintBox; type=Container (unconverted); path=panelWindow
 
 没有转换的容器（`type` 为 `Container`）也能参与逻辑：它支持 `visible` 属性和全部鼠标事件。
 
+另有一种工具自带的类型 `External`（外部容器），用法见第 9.3 节。
+
 ## 4. 控件的写法
 
 ### 4.1 声明 `component.json`
@@ -121,6 +127,7 @@ User referenced "control=hintBox; type=Container (unconverted); path=panelWindow
 | `bind` | 可以双向绑定的值的类型，目前只支持 `"string"`；不能绑定的控件不写这一项 |
 | `events` | 控件自己会发出的事件名，例如输入框的 `["change"]`。**鼠标事件不用写**，运行层会自动提供 |
 | `children` | 是否可以包含子节点 |
+| `qt` | 这个控件导出成 Qt 时对应什么，见第 9.5 节。不导出可以不写 |
 
 两个有固定含义的属性名：
 
@@ -213,6 +220,8 @@ objects:              # 每个控件的行为，键是控件 ID
 
 引用时用点号连接，例如 `lamps.a`、`panel.message`。
 
+每一项还可以写 `owner`，标明这个状态归谁管，见第 9.1 节。不写就是界面自己管。
+
 ### 5.3 表达式
 
 `props` 的值、`if` 的条件、条件的 `expr`，以及 `set` 等号右边，**一律是表达式**：
@@ -269,6 +278,8 @@ conditions:
 | `window.click` | 设计窗口里发生任何点击之后（先处理被点控件的 `click`，再处理它） |
 | 自定义名字，如 `allOff` | 被某个步骤用 `emit` 触发时 |
 
+全局事件里还有一种交给业务处理的“业务事件”，写法不同，见第 9.2 节。
+
 ### 5.6 步骤
 
 事件的内容是一个步骤列表，按顺序执行。有三种步骤：
@@ -294,6 +305,7 @@ conditions:
 | `bind` | 与一个状态路径双向绑定，控件声明中必须有 `bind` |
 | `conditions` | 属于这个控件的条件 |
 | `events` | 事件及其步骤 |
+| `effects` | 给属性的变化指定效果，目前只支持 `visible`，见第 9.4 节 |
 
 `scene.json` 中 `props` 的值是固定的默认值；YAML `props` 中同名属性的计算结果会覆盖它。
 
@@ -325,6 +337,8 @@ conditions:
 - [ ] 没有改动控件的 ID、位置和尺寸，没有删改说明小节的标记。
 - [ ] `index.js` 是单个文件，没有 `import`，默认导出创建函数，返回 `update` 和 `destroy`。
 - [ ] `style.css` 的选择器里没有写类型名，文字放不下的情况有处理。
+- [ ] 业务管的状态只在业务事件的 `simulate` 里修改；`simulate` 里没有修改界面自己管的状态。
+- [ ] `effects` 里写的效果在 `effects/` 中有对应的文件夹；改了效果的实现之后，告诉用户它的哈希变了，Qt 那边的翻译要重做。
 
 ## 8. 原型还不支持的内容
 
@@ -333,3 +347,153 @@ conditions:
 - 调用动作（`call` 步骤和 `actions`）
 - 锁定、版本的恢复与重做、收藏的素材
 - 列表、对话框、多窗口
+
+## 9. 导出成 Qt 用到的写法
+
+设计项目可以导出成 Qt 工程（在工具的 `app/` 文件夹里运行 `npm run export:qt -- <设计项目文件夹>`）。导出后界面和业务代码分开：界面是生成的，业务通过接口接进来。下面几种写法决定接口里有什么。只在工具里预览、不导出的项目，可以完全不用它们。
+
+### 9.1 状态归谁管
+
+每个状态可以写 `owner`：
+
+```yaml
+state:
+  layer:
+    visible: { type: boolean, initial: true, owner: business }   # 业务管
+  panel:
+    expanded: { type: boolean, initial: false }                  # 界面自己管（不写 owner，或写 owner: ui）
+```
+
+| `owner` | 含义 | 谁能改 |
+| --- | --- | --- |
+| 不写，或 `ui` | 界面自己管，例如哪个面板展开着 | 任何事件的步骤 |
+| `business` | 业务管，例如图层是否可见 | 只有业务事件的 `simulate`（第 9.2 节）。导出后由业务写入 |
+
+怎样判断归谁：这个值如果要保存进文件、要参与计算、或者别的地方也会改它，就归业务；只影响界面当前怎么显示的，归界面。
+
+业务管的状态可以照常用在表达式里（`props`、`if`、条件）。不能用 `bind` 绑定到业务管的状态。
+
+导出后，每个业务管的状态在业务接口里有一对读写函数，例如 `layer.visible` 对应 `setLayerVisible(bool)` 和 `layerVisible()`。所以这类状态的路径只能用英文字母、数字和下划线。
+
+### 9.2 业务事件
+
+用户的操作需要业务来处理时，不要直接改状态，而是发一个业务事件。业务事件写在顶层 `events` 下，是一个对象，不是步骤列表：
+
+```yaml
+events:
+  layerToggleVisible:
+    owner: business
+    text: 用户点了“切换图层可见”          # 给人看的说明，可省略
+    simulate:                            # 业务没有接上时用来顶替的步骤
+      - set: layer.visible = not layer.visible
+
+objects:
+  toggleButton:
+    events:
+      click:
+        - emit: layerToggleVisible
+```
+
+- 在工具里预览时，以及导出后业务还没有接这个事件时，执行 `simulate` 里的步骤，界面照样能用。
+- 导出后业务接了这个事件（连接了它的信号），`simulate` 不再执行：界面把事件交给业务，业务处理完，把结果写回它管的状态。
+- 业务可以只接一部分事件，没接的继续走 `simulate`。
+
+规则：
+
+- `simulate` 里的 `set` 只能改业务管的状态。原因是业务接上以后 `simulate` 不执行，写在里面的界面状态修改会丢。界面自己的变化写在发出事件的那个步骤列表里。
+- `simulate` 里可以 `emit` 别的业务事件，不能 `emit` 普通全局事件。
+- 业务事件不在当前这批步骤里执行，而是等这批步骤生效之后再处理。所以同一批里排在 `emit` 后面的步骤，读到的还是业务状态原来的值。
+- 事件名只能用英文字母、数字和下划线。导出后它在业务接口里是一个信号，例如 `layerToggleVisibleRequested()`。
+
+### 9.3 外部容器
+
+有些区域的内容不由界面画，而是由业务提供，例如绘图区。在画布里放一个类型为 `External` 的节点（素材栏“基础素材”里的“外部容器”）：
+
+```json
+"canvasHost": { "type": "External", "x": 12, "y": 12, "width": 496, "height": 244 }
+```
+
+- 在工具里它只是一个占位框。导出后业务接口里有一个放入控件的函数，例如 `setCanvasHostWidget(QWidget *)`，业务把自己的控件交进来。
+- 它不能有子节点，也不能写 `events`：里面的控件是业务的，界面收不到它上面的鼠标事件。可以用 `props.visible` 控制显示和隐藏。
+- ID 只能用英文字母、数字和下划线。
+
+### 9.4 效果（需要翻译）
+
+控件显示和隐藏时的过渡动画写成“效果”，放在 `effects/<效果名>/`：
+
+```json
+{
+  "name": "PanelExpand",
+  "label": "面板展开",
+  "description": "显示时高度从 0 变到原本的高度，同时淡入；隐藏时反过来。时长 180 毫秒",
+  "kind": "visibility",
+  "entry": "index.js"
+}
+```
+
+`kind` 目前只有 `visibility`（显示和隐藏的过渡）一种。`index.js` 默认导出一个播放函数：
+
+```js
+export default function play(el, { showing }) {
+  // el 是控件最外层的元素；showing 为 true 表示正在显示，false 表示正在隐藏
+  for (const running of el.getAnimations()) running.cancel();   // 上一次还没放完，先停掉
+  const animation = el.animate(
+    showing ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }],
+    { duration: 180 },
+  );
+  return animation.finished;   // 返回动画，或者一个在放完时结束的 Promise
+}
+```
+
+- 调用时元素是显示着的：显示时运行层先把它显示出来再调用；隐藏时等返回的 Promise 结束才把它藏起来。
+- 放完后元素要回到原样。用 `el.animate()` 写的动画放完会自动还原；如果改了 `el.style`，要自己改回去。
+- 和控件一样，`index.js` 必须是单个文件，不能 `import`。
+
+在 YAML 里把效果指给某个控件的 `visible`：
+
+```yaml
+objects:
+  detailPanel:
+    props:
+      visible: panel.expanded
+    effects:
+      visible: PanelExpand
+```
+
+导出成 Qt 时，效果不会自动转换，要由 Agent 在导出工程的界面效果层用 Qt 的动画重写一遍，这就是“需要翻译”。没有翻译时不影响行为，控件直接显示或隐藏，只是没有过渡。
+
+每个效果有一个**哈希**，由效果的名字、种类和文件夹里全部文件的内容算出来（`label` 和 `description` 不算）。Qt 那边的翻译是照着某个哈希写的。**改了效果的实现，哈希就变了，Qt 那边旧的翻译会编译不过，必须重新翻译。** 所以改 `effects/` 里的文件之后，要在回复里告诉用户。当前的哈希显示在工具的问题栏里。
+
+### 9.5 控件在 Qt 里对应什么
+
+控件声明 `component.json` 里的 `qt` 写明它导出成哪个 Qt 控件：
+
+```json
+"qt": {
+  "widget": "QLineEdit",
+  "props":  { "placeholder": "placeholderText", "value": "text" },
+  "set":    { "clearButtonEnabled": true },
+  "events": { "change": { "signal": "textEdited", "type": "string" } }
+}
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `widget` | Qt 的控件类名，例如 `QPushButton`、`QLabel`、`QLineEdit` |
+| `props` | 控件属性名 → Qt 属性名。逻辑算出的属性值会写到对应的 Qt 属性上。用了 `bind` 的控件，要写明 `value` 对应哪个 Qt 属性 |
+| `set` | 固定写死的 Qt 属性，可省略 |
+| `events` | 控件自己声明的事件 → Qt 的信号。`type` 是信号带的值的类型（`string`、`number`、`boolean`），不带值就不写 |
+
+- `visible`、`enabled` 和鼠标事件不用写，导出时自动处理。
+- 没有写 `qt` 的控件，导出后是一个占位框，上面写着类型名和 ID。它的事件、状态和逻辑照常工作，只是长相没有过来。
+- 用到了、但没有写在 `qt.props` 里的属性（例如只影响网页样式的 `variant`），导出后不起作用，导出时会提示。
+
+### 9.6 导出之后
+
+在 `project.json` 里可以写默认导出到哪里（相对于设计项目文件夹）：
+
+```json
+"export": { "qt": "../qt/ui" }
+```
+
+导出的文件夹里有一份 `AGENTS.md`，写明哪些文件是生成的、不能改，以及怎样接业务、怎样翻译效果；`INTERFACE.md` 列出全部接口和相对上一次导出的变化。可以参考仓库里的 `examples/minimal/`。

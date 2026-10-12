@@ -10,5 +10,9 @@
     "variant": { "type": "string",  "default": "secondary" },
     "enabled": { "type": "boolean", "default": true, "logic": true }
   },
-  "children": false
+  "children": false,
+  "qt": {
+    "widget": "QPushButton",
+    "props": { "text": "text" }
+  }
 }

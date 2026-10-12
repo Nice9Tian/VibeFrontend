@@ -9,5 +9,10 @@
     "text": { "type": "string", "default": "", "logic": true },
     "tone": { "type": "string", "default": "normal" }
   },
-  "children": false
+  "children": false,
+  "qt": {
+    "widget": "QLabel",
+    "props": { "text": "text" },
+    "set": { "wordWrap": true }
+  }
 }
