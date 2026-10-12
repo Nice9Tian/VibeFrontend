@@ -1,0 +1,61 @@
+{
+  "generator": "VibeFrontend",
+  "formatVersion": 1,
+  "project": "导出样板",
+  "generated": [
+    "AGENTS.md",
+    "CMakeLists.txt",
+    "INTERFACE.md",
+    "business_interface/BusinessInterface.h",
+    "business_interface/CMakeLists.txt",
+    "cmake/LayerRules.cmake",
+    "preview/CMakeLists.txt",
+    "preview/main.cpp",
+    "ui_binding/CMakeLists.txt",
+    "ui_binding/Ui.cpp",
+    "ui_binding/Ui.h",
+    "ui_binding/UiDriver.cpp",
+    "ui_binding/UiDriver.h",
+    "ui_binding/logic/project.json",
+    "ui_binding/logic/runtime.js",
+    "ui_interface/CMakeLists.txt",
+    "ui_interface/UiEffects.h",
+    "vf-export.json"
+  ],
+  "interface": {
+    "states": [
+      {
+        "path": "layer.visible",
+        "type": "boolean",
+        "setter": "setLayerVisible",
+        "getter": "layerVisible"
+      }
+    ],
+    "events": [
+      {
+        "name": "layerToggleVisible",
+        "text": "用户点了“切换图层可见”",
+        "signal": "layerToggleVisibleRequested"
+      }
+    ],
+    "externals": [
+      {
+        "id": "canvasHost",
+        "setter": "setCanvasHostWidget"
+      }
+    ],
+    "effects": [
+      {
+        "name": "PanelExpand",
+        "label": "面板展开",
+        "kind": "visibility",
+        "hash": "77a08c49",
+        "source": "effects/PanelExpand/index.js",
+        "className": "PanelExpandEffect",
+        "setter": "setPanelExpand",
+        "getter": "panelExpand"
+      }
+    ]
+  },
+  "lastChanges": []
+}

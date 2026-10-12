@@ -1,0 +1,18 @@
+{
+  "type": "Button",
+  "label": "按钮",
+  "description": "普通按钮，有主要和次要两种样式",
+  "defaultSize": { "width": 110, "height": 36 },
+  "entry": "index.js",
+  "style": "style.css",
+  "props": {
+    "text":    { "type": "string",  "default": "按钮", "logic": true },
+    "variant": { "type": "string",  "default": "secondary" },
+    "enabled": { "type": "boolean", "default": true, "logic": true }
+  },
+  "children": false,
+  "qt": {
+    "widget": "QPushButton",
+    "props": { "text": "text" }
+  }
+}

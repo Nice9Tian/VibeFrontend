@@ -1,0 +1,248 @@
+{
+  "scene": {
+    "version": 1,
+    "root": "sampleWindow",
+    "nodes": {
+      "sampleWindow": {
+        "type": "Window",
+        "title": "导出样板",
+        "width": 520,
+        "height": 420,
+        "children": [
+          "canvasHost",
+          "toggleButton",
+          "layerShownLabel",
+          "layerHiddenLabel",
+          "expandButton",
+          "detailPanel"
+        ]
+      },
+      "canvasHost": {
+        "type": "External",
+        "x": 12,
+        "y": 12,
+        "width": 496,
+        "height": 244
+      },
+      "toggleButton": {
+        "type": "Button",
+        "x": 12,
+        "y": 268,
+        "width": 120,
+        "height": 32,
+        "props": {
+          "text": "切换图层可见",
+          "variant": "primary"
+        }
+      },
+      "layerShownLabel": {
+        "type": "Label",
+        "x": 144,
+        "y": 268,
+        "width": 220,
+        "height": 32,
+        "props": {
+          "text": "图层：可见"
+        }
+      },
+      "layerHiddenLabel": {
+        "type": "Label",
+        "x": 144,
+        "y": 268,
+        "width": 220,
+        "height": 32,
+        "props": {
+          "text": "图层：隐藏",
+          "tone": "muted"
+        }
+      },
+      "expandButton": {
+        "type": "Button",
+        "x": 398,
+        "y": 268,
+        "width": 110,
+        "height": 32
+      },
+      "detailPanel": {
+        "type": "Container",
+        "x": 12,
+        "y": 312,
+        "width": 496,
+        "height": 96,
+        "children": [
+          "detailLabel"
+        ]
+      },
+      "detailLabel": {
+        "type": "Label",
+        "x": 12,
+        "y": 8,
+        "width": 472,
+        "height": 80,
+        "props": {
+          "text": "详情面板。它的展开和收起是界面自己管的状态，过渡动画是一个需要翻译的效果。"
+        }
+      }
+    }
+  },
+  "logic": {
+    "version": 1,
+    "state": {
+      "layer": {
+        "visible": {
+          "type": "boolean",
+          "initial": true,
+          "owner": "business"
+        }
+      },
+      "panel": {
+        "expanded": {
+          "type": "boolean",
+          "initial": false
+        },
+        "expandText": {
+          "type": "string",
+          "initial": "展开详情"
+        }
+      }
+    },
+    "events": {
+      "layerToggleVisible": {
+        "owner": "business",
+        "text": "用户点了“切换图层可见”",
+        "simulate": [
+          {
+            "set": "layer.visible = not layer.visible"
+          }
+        ]
+      }
+    },
+    "objects": {
+      "canvasHost": {
+        "doc": "docs/window.md#canvas-host"
+      },
+      "toggleButton": {
+        "doc": "docs/window.md#toggle-button",
+        "events": {
+          "click": [
+            {
+              "emit": "layerToggleVisible"
+            }
+          ]
+        }
+      },
+      "layerShownLabel": {
+        "props": {
+          "visible": "layer.visible"
+        }
+      },
+      "layerHiddenLabel": {
+        "props": {
+          "visible": "not layer.visible"
+        }
+      },
+      "expandButton": {
+        "props": {
+          "text": "panel.expandText"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "panel.expanded = not panel.expanded"
+            },
+            {
+              "if": "panel.expanded",
+              "then": [
+                {
+                  "set": "panel.expandText = '收起详情'"
+                }
+              ],
+              "else": [
+                {
+                  "set": "panel.expandText = '展开详情'"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "detailPanel": {
+        "doc": "docs/window.md#detail-panel",
+        "props": {
+          "visible": "panel.expanded"
+        },
+        "effects": {
+          "visible": "PanelExpand"
+        }
+      }
+    }
+  },
+  "components": {
+    "Button": {
+      "type": "Button",
+      "label": "按钮",
+      "description": "普通按钮，有主要和次要两种样式",
+      "defaultSize": {
+        "width": 110,
+        "height": 36
+      },
+      "entry": "index.js",
+      "style": "style.css",
+      "props": {
+        "text": {
+          "type": "string",
+          "default": "按钮",
+          "logic": true
+        },
+        "variant": {
+          "type": "string",
+          "default": "secondary"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "logic": true
+        }
+      },
+      "children": false,
+      "qt": {
+        "widget": "QPushButton",
+        "props": {
+          "text": "text"
+        }
+      }
+    },
+    "Label": {
+      "type": "Label",
+      "label": "文字标签",
+      "description": "一行或多行文字，tone 可选 normal、title、muted、error",
+      "defaultSize": {
+        "width": 160,
+        "height": 24
+      },
+      "entry": "index.js",
+      "style": "style.css",
+      "props": {
+        "text": {
+          "type": "string",
+          "default": "",
+          "logic": true
+        },
+        "tone": {
+          "type": "string",
+          "default": "normal"
+        }
+      },
+      "children": false,
+      "qt": {
+        "widget": "QLabel",
+        "props": {
+          "text": "text"
+        },
+        "set": {
+          "wordWrap": true
+        }
+      }
+    }
+  }
+}

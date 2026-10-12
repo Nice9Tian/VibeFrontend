@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "root": "sampleWindow",
+  "nodes": {
+    "sampleWindow": {
+      "type": "Window",
+      "title": "导出样板",
+      "width": 520,
+      "height": 420,
+      "children": [
+        "canvasHost",
+        "toggleButton",
+        "layerShownLabel",
+        "layerHiddenLabel",
+        "expandButton",
+        "detailPanel"
+      ]
+    },
+    "canvasHost": {
+      "type": "External",
+      "x": 12,
+      "y": 12,
+      "width": 496,
+      "height": 244
+    },
+    "toggleButton": {
+      "type": "Button",
+      "x": 12,
+      "y": 268,
+      "width": 120,
+      "height": 32,
+      "props": {
+        "text": "切换图层可见",
+        "variant": "primary"
+      }
+    },
+    "layerShownLabel": {
+      "type": "Label",
+      "x": 144,
+      "y": 268,
+      "width": 220,
+      "height": 32,
+      "props": {
+        "text": "图层：可见"
+      }
+    },
+    "layerHiddenLabel": {
+      "type": "Label",
+      "x": 144,
+      "y": 268,
+      "width": 220,
+      "height": 32,
+      "props": {
+        "text": "图层：隐藏",
+        "tone": "muted"
+      }
+    },
+    "expandButton": {
+      "type": "Button",
+      "x": 398,
+      "y": 268,
+      "width": 110,
+      "height": 32
+    },
+    "detailPanel": {
+      "type": "Container",
+      "x": 12,
+      "y": 312,
+      "width": 496,
+      "height": 96,
+      "children": [
+        "detailLabel"
+      ]
+    },
+    "detailLabel": {
+      "type": "Label",
+      "x": 12,
+      "y": 8,
+      "width": 472,
+      "height": 80,
+      "props": {
+        "text": "详情面板。它的展开和收起是界面自己管的状态，过渡动画是一个需要翻译的效果。"
+      }
+    }
+  }
+}

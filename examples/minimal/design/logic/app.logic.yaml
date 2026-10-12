@@ -1,0 +1,56 @@
+version: 1
+
+state:
+  layer:
+    # 业务管：图层是否可见。界面只显示它，不直接修改
+    visible: { type: boolean, initial: true, owner: business }
+  panel:
+    # 界面自己管：详情面板是否展开，以及按钮上的字
+    expanded: { type: boolean, initial: false }
+    expandText: { type: string, initial: 展开详情 }
+
+events:
+  # 业务事件：交给业务处理。业务没有接上时（包括在工具里预览时），执行 simulate 里的步骤
+  layerToggleVisible:
+    owner: business
+    text: 用户点了“切换图层可见”
+    simulate:
+      - set: layer.visible = not layer.visible
+
+objects:
+  canvasHost:
+    doc: docs/window.md#canvas-host
+
+  toggleButton:
+    doc: docs/window.md#toggle-button
+    events:
+      click:
+        - emit: layerToggleVisible
+
+  layerShownLabel:
+    props:
+      visible: layer.visible
+
+  layerHiddenLabel:
+    props:
+      visible: not layer.visible
+
+  expandButton:
+    props:
+      text: panel.expandText
+    events:
+      click:
+        - set: panel.expanded = not panel.expanded
+        - if: panel.expanded
+          then:
+            - set: panel.expandText = '收起详情'
+          else:
+            - set: panel.expandText = '展开详情'
+
+  detailPanel:
+    doc: docs/window.md#detail-panel
+    props:
+      visible: panel.expanded
+    effects:
+      # 显示和隐藏时播放 effects/PanelExpand
+      visible: PanelExpand
