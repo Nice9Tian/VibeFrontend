@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120">
+  <!-- 阴影：左边用 feDropShadow，右边用“模糊、偏移、合并”的老写法 -->
+  <defs>
+    <filter id="drop" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+    <filter id="classic" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="blur"/>
+      <feOffset in="blur" dx="0" dy="4" result="offset"/>
+      <feComponentTransfer in="offset" result="faded"><feFuncA type="linear" slope="0.35"/></feComponentTransfer>
+      <feMerge><feMergeNode in="faded"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="20" y="30" width="80" height="50" rx="10" fill="#ffffff" stroke="#d9dce1" filter="url(#drop)"/>
+  <rect x="140" y="30" width="80" height="50" rx="10" fill="#ffffff" stroke="#d9dce1" filter="url(#classic)"/>
+</svg>

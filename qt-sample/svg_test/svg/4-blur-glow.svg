@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120">
+  <!-- 发光：一个模糊的黄色圆垫在清晰的圆下面；右边是整体模糊 -->
+  <defs>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+  </defs>
+  <circle cx="70" cy="60" r="34" fill="#ffc828" filter="url(#glow)"/>
+  <circle cx="70" cy="60" r="26" fill="#ffd84d" stroke="#f0a800" stroke-width="2"/>
+  <rect x="140" y="30" width="80" height="60" rx="10" fill="#2563eb" filter="url(#soft)"/>
+</svg>
