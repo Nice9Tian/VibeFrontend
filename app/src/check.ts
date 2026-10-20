@@ -93,6 +93,20 @@ export function check(project: Project): Problem[] {
       if (node.children?.length) error(`外部容器 ${id} 不能包含子节点，里面的控件由业务提供`, id);
       continue;
     }
+    if (node.type === "Shape" || node.type === "Line") {
+      const decl = declFor(project, node.type)!;
+      for (const key of Object.keys(node.props ?? {})) {
+        if (!decl.props?.[key]) error(`${node.type === "Shape" ? "形状" : "线条"} ${id}：scene.json 中的属性“${key}”不在声明里`, id);
+      }
+      if (node.children?.length) error(`${id}：形状和线条不能包含子节点`, id);
+      for (const end of ["startNode", "endNode"]) {
+        const target = node.props?.[end];
+        if (typeof target === "string" && target !== "" && !scene.nodes[target]) {
+          hint(`线条 ${id}：${end === "startNode" ? "起点" : "终点"}挂着的节点“${target}”不存在，这一头停在原来的位置`, id);
+        }
+      }
+      continue;
+    }
     if (BUILTIN_TYPES.includes(node.type)) continue;
     const component = project.components.get(node.type);
     if (!component) {

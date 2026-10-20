@@ -176,14 +176,17 @@ h3 {
 
 #center-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 8px 12px;
   min-height: 44px;
 }
 
 .segmented {
   display: inline-flex;
+  flex-shrink: 0;
+  white-space: nowrap;
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
@@ -615,4 +618,519 @@ body.preview .vf-node[data-vf-type="Container"] > .vf-body {
   border-radius: 6px;
   background: rgba(31, 36, 48, 0.92);
   color: #fff;
+}
+
+/* ---------- 基础图形和线条 ---------- */
+
+#left section:first-child {
+  max-height: 58%;
+  overflow: auto;
+}
+
+.palette-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(30px, 1fr));
+  gap: 3px;
+}
+
+.preset-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: #fafafa;
+  cursor: grab;
+  touch-action: none;
+}
+
+.preset-tile:hover {
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.palette-grid .palette-empty {
+  grid-column: 1 / -1;
+}
+
+#tool-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+#tool-bar[hidden] {
+  display: none;
+}
+
+#tool-bar .tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#tool-bar .tool:hover {
+  background: #f0f2f5;
+}
+
+#tool-bar .tool[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+#tool-bar .tool-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--line);
+}
+
+#tool-bar .tool-select {
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+#overlay.drawing {
+  cursor: crosshair;
+}
+
+/* 设计窗口的网格：只在编辑模式、打开了网格吸附时显示 */
+body:not(.preview) #stage.show-grid {
+  background-image:
+    linear-gradient(to right, rgba(37, 99, 235, 0.07) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(37, 99, 235, 0.07) 1px, transparent 1px);
+  background-size: var(--grid) var(--grid);
+}
+
+/* 形状和线条：只有图形本身接收鼠标，方框的空白处不算 */
+.vf-node[data-vf-type="Shape"],
+.vf-node[data-vf-type="Line"] {
+  pointer-events: none;
+}
+
+.vf-shape-svg .vf-hit {
+  pointer-events: all;
+}
+
+.vf-line-svg .vf-hit {
+  pointer-events: stroke;
+}
+
+.vf-shape-svg,
+.vf-line-svg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+  overflow: visible;
+}
+
+.vf-shape-text {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  line-height: 1.3;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+.vf-line-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #fff;
+  line-height: 1.3;
+  white-space: pre;
+}
+
+#guides {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+#guides .guide-align {
+  stroke: #f24822;
+  stroke-width: 1;
+}
+
+#guides .guide-gap {
+  stroke: #e0249a;
+  stroke-width: 1;
+}
+
+#guides .guide-label {
+  fill: #e0249a;
+  font-size: 10px;
+  text-anchor: middle;
+}
+
+#guides .attach-box {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+#guides .attach-dot {
+  fill: #fff;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+#guides .attach-dot.active {
+  fill: var(--accent);
+}
+
+#draw-ghost {
+  position: absolute;
+  display: none;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+#selection.line {
+  border-color: transparent;
+}
+
+#selection .size {
+  position: absolute;
+  left: 50%;
+  bottom: -20px;
+  display: none;
+  transform: translateX(-50%);
+  padding: 0 5px;
+  height: 16px;
+  line-height: 16px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.endpoint {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: #fff;
+  cursor: move;
+}
+
+.text-editor {
+  position: absolute;
+  z-index: 5;
+  margin: 0;
+  padding: 2px;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.92);
+  font-family: inherit;
+  line-height: 1.3;
+  resize: none;
+  outline: none;
+}
+
+#stage-frame {
+  position: relative;
+}
+
+#shape-bar {
+  position: absolute;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+  white-space: nowrap;
+}
+
+#shape-bar[hidden] {
+  display: none;
+}
+
+#shape-bar select,
+#shape-bar button,
+#shape-bar input[type="number"] {
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  font-size: 12px;
+}
+
+#shape-bar button {
+  cursor: pointer;
+}
+
+#shape-bar button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+#shape-bar .bar-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#shape-bar .bar-number input {
+  width: 56px;
+}
+
+#shape-bar .bar-color input {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+#shape-bar .swatches {
+  display: flex;
+  gap: 2px;
+}
+
+#shape-bar .swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 2px solid;
+  border-radius: 50%;
+}
+
+#shape-bar .swatch.hollow {
+  border-style: dashed;
+}
+
+#shape-bar .swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+#menu.shape-menu {
+  width: 252px;
+}
+
+#menu .menu-title {
+  padding: 4px 6px 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#menu .menu-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+#menu .menu-grid button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0;
+}
+
+#shape-bar {
+  flex-wrap: wrap;
+  max-width: 480px;
+}
+
+#shape-bar .color-wrap {
+  position: static;
+}
+
+#shape-bar .color-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#shape-bar .color-pop {
+  position: absolute;
+  left: 6px;
+  top: calc(100% + 4px);
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 214px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+}
+
+#shape-bar .color-pop[hidden] {
+  display: none;
+}
+
+#shape-bar .color-pop .swatches {
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+}
+
+/* ---------- 多选、框选、折线的拐点 ---------- */
+
+#marquee {
+  position: absolute;
+  display: none;
+  border: 1px solid var(--accent);
+  background: rgba(37, 99, 235, 0.08);
+  pointer-events: none;
+}
+
+#multi-outlines .multi-outline {
+  position: absolute;
+  border: 1px solid var(--accent);
+  pointer-events: none;
+}
+
+#selection.multi {
+  border-style: dashed;
+}
+
+.bend-handle {
+  position: absolute;
+  width: 14px;
+  height: 6px;
+  margin: -3px 0 0 -7px;
+  border: 1.5px solid var(--accent);
+  border-radius: 3px;
+  background: #fff;
+}
+
+.bend-handle.horizontal {
+  cursor: ns-resize;
+}
+
+.bend-handle.vertical {
+  width: 6px;
+  height: 14px;
+  margin: -7px 0 0 -3px;
+  cursor: ew-resize;
+}
+
+/* ---------- 视角：平移和缩放（见 viewport.ts） ---------- */
+
+#stage-scroll {
+  position: relative;
+  padding: 0;
+  /* 视角由 viewport.ts 管；不让浏览器在内容变大小时自己挪滚动位置 */
+  overflow-anchor: none;
+  background-color: var(--bg);
+  background-image: radial-gradient(circle, rgba(0, 0, 0, 0.09) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+#stage-scroll.pan-ready,
+#stage-scroll.pan-ready #overlay {
+  cursor: grab;
+}
+
+#stage-scroll.panning,
+#stage-scroll.panning * {
+  cursor: grabbing !important;
+}
+
+#stage-space {
+  position: relative;
+}
+
+#stage-space > #stage-frame {
+  position: absolute;
+  margin: 0;
+  transform-origin: 0 0;
+}
+
+#zoom-bar {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+#zoom-bar button {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#zoom-bar button:last-child {
+  border-right: 0;
+}
+
+#zoom-bar button:hover {
+  background: #f0f2f5;
+}
+
+#zoom-level {
+  min-width: 52px !important;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 吸附、网格、撤销重做和缩放放在同一行的右边 */
+#view-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+#view-tools #zoom-bar {
+  margin-left: 0;
+}
+
+.preset-tile.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }

@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VibeFrontend 原型</title>
     <script type="module" src="/src/main.ts" defer></script>
+    <script type="module" src="/src/viewport-init.ts" defer></script>
   </head>
 
   <body>
@@ -23,6 +24,14 @@
         <div id="palette-basic" class="palette"></div>
         <h3>项目素材</h3>
         <div id="palette-project" class="palette"></div>
+        <h3>基础图形</h3>
+        <div id="palette-shapes" class="palette-grid"></div>
+        <h3>流程图</h3>
+        <div id="palette-flow" class="palette-grid"></div>
+        <h3>线条</h3>
+        <div id="palette-lines" class="palette-grid"></div>
+        <h3>我的预设</h3>
+        <div id="palette-user" class="palette-grid"></div>
       </section>
       <section id="layers-section">
         <h2>图层</h2>
@@ -40,11 +49,17 @@
           <button id="restart" type="button">重新开始</button>
           <div id="conditions"></div>
         </div>
+        <div id="view-tools">
+          <div id="tool-bar" role="toolbar" aria-label="吸附和撤销"></div>
+          <div id="zoom-bar" role="group" aria-label="视角缩放"></div>
+        </div>
       </div>
       <div id="stage-scroll">
-        <div id="stage-frame">
-          <div id="stage-title"></div>
-          <div id="stage"></div>
+        <div id="stage-space">
+          <div id="stage-frame">
+            <div id="stage-title"></div>
+            <div id="stage"></div>
+          </div>
         </div>
       </div>
     </main>

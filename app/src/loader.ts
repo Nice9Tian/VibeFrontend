@@ -16,6 +16,9 @@ import {
   type Project,
   type Scene,
 } from "./model.ts";
+import type { ShapePreset } from "./shapes.ts";
+
+export const PRESETS_PATH = "ui/presets.json";
 
 export interface ProjectIO {
   /** 设计项目文件夹的绝对路径 */
@@ -139,6 +142,18 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
     fingerprints.push(JSON.stringify(effect.files));
   }
 
+  // 用户存下来的图形预设
+  let presets: ShapePreset[] = [];
+  const presetsText = await io.readText(PRESETS_PATH);
+  if (presetsText !== null) {
+    try {
+      const parsed = JSON.parse(presetsText) as { presets?: ShapePreset[] };
+      presets = (parsed.presets ?? []).filter((preset) => preset && (preset.type === "Shape" || preset.type === "Line"));
+    } catch (e) {
+      problems.push({ level: "error", message: `${PRESETS_PATH} 不是有效的 JSON：${(e as Error).message}` });
+    }
+  }
+
   const docs = new Map<string, string>();
   const docPaths = new Set<string>([pageDoc]);
   for (const object of Object.values(logic.objects ?? {})) {
@@ -149,9 +164,9 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
     if (text !== null) docs.set(path, text);
   }
 
-  const signature = JSON.stringify([sceneText, logicText, [...docs], fingerprints, configText]);
+  const signature = JSON.stringify([sceneText, logicText, [...docs], fingerprints, configText, presetsText]);
   const project: Project = {
-    root, name, pageDoc, qtExportDir, scene, sceneText: sceneText ?? "", logic, logicText, docs, components, effects, problems, signature,
+    root, name, pageDoc, qtExportDir, presets, scene, sceneText: sceneText ?? "", logic, logicText, docs, components, effects, problems, signature,
   };
   problems.push(...check(project));
   return project;
