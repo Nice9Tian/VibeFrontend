@@ -656,7 +656,8 @@ function containsPoint(id: string, px: number, py: number): boolean {
 
 // ---------- 工具、吸附和样式的设置 ----------
 
-type Tool = { kind: "select" } | { kind: "preset"; preset: ShapePreset };
+/** 当前的工具：选择；画一个图形或线条（预设）；画一个容器、外部容器或控件（节点类型）。 */
+type Tool = { kind: "select" } | { kind: "preset"; preset: ShapePreset } | { kind: "node"; type: string };
 let tool: Tool = { kind: "select" };
 
 function loadSetting<T>(key: string, fallback: T): T {
@@ -706,7 +707,7 @@ function snapTargets(exclude: string | string[] | null): Rect[] {
 function setTool(next: Tool): void {
   if (mode !== "edit") setMode("edit");
   tool = next;
-  overlay.classList.toggle("drawing", tool.kind === "preset");
+  overlay.classList.toggle("drawing", tool.kind !== "select");
   renderToolbar();
 }
 
@@ -1065,7 +1066,7 @@ type Gesture =
   | { kind: "resize"; id: string; handle: string; start: Point; orig: Rect; abs: Rect; moved: boolean; targets: Rect[] }
   | { kind: "marquee"; start: Point; scope: string; base: string[]; clicked: string | null; moved: boolean }
   | { kind: "bend"; id: string; index: number; points: Point[]; start: Point; horizontal: boolean; moved: boolean }
-  | { kind: "draw"; preset: ShapePreset; start: Point; rect: Rect | null; parentId: string; targets: Rect[] }
+  | { kind: "draw"; preset: ShapePreset | null; nodeType: string | null; start: Point; rect: Rect | null; parentId: string; targets: Rect[] }
   | { kind: "line"; preset: ShapePreset; start: Anchor; end: Anchor | null; parentId: string; rawStart: Point; rawEnd: Point | null }
   | { kind: "endpoint"; id: string; which: "start" | "end"; moved: boolean };
 let gesture: Gesture | null = null;
@@ -1102,8 +1103,15 @@ overlay.addEventListener("pointerdown", (e) => {
       gesture = { kind: "line", preset, start: anchorAt(pt, e, null, null), end: null, parentId, rawStart: pt, rawEnd: null };
     } else {
       const snapped = snapPoint(pt.x, pt.y, snapTargets(null), snapOptions(e));
-      gesture = { kind: "draw", preset, start: { x: snapped.x, y: snapped.y }, rect: null, parentId, targets: snapTargets(null) };
+      gesture = { kind: "draw", preset, nodeType: null, start: { x: snapped.x, y: snapped.y }, rect: null, parentId, targets: snapTargets(null) };
     }
+    capturePointer(e);
+    return;
+  }
+  if (tool.kind === "node") {
+    // 画容器、外部容器或控件：和画图形一样拖出大小
+    const snapped = snapPoint(pt.x, pt.y, snapTargets(null), snapOptions(e));
+    gesture = { kind: "draw", preset: null, nodeType: tool.type, start: { x: snapped.x, y: snapped.y }, rect: null, parentId: containerAt(pt.x, pt.y), targets: snapTargets(null) };
     capturePointer(e);
     return;
   }
@@ -1357,7 +1365,14 @@ overlay.addEventListener("pointermove", (e) => {
     if (rect.width < 2 && rect.height < 2) return;
     gesture.rect = rect;
     Object.assign(ghost.style, { display: "block", left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
-    paintShape(ghost, Math.max(1, rect.width), Math.max(1, rect.height), presetProps(gesture.preset));
+    if (gesture.preset) paintShape(ghost, Math.max(1, rect.width), Math.max(1, rect.height), presetProps(gesture.preset));
+    else {
+      const box = document.createElement("div");
+      box.className = "node-ghost";
+      box.textContent = declFor(project, gesture.nodeType ?? "")?.label ?? gesture.nodeType ?? "";
+      ghost.replaceChildren(box);
+    }
+    showSize(rect.width, rect.height);
     return;
   }
 
@@ -1434,12 +1449,20 @@ overlay.addEventListener("pointerup", (e) => {
     return;
   }
   if (finished.kind === "draw") {
+    setTool({ kind: "select" });
+    const dragged = finished.rect && finished.rect.width >= 4 && finished.rect.height >= 4 ? finished.rect : null;
+    if (finished.nodeType) {
+      // 只点了一下没有拖：按它的默认大小，以点击处为中心放一个
+      const size = (declFor(project, finished.nodeType) ?? CONTAINER_DECL).defaultSize ?? CONTAINER_DECL.defaultSize!;
+      const rect = dragged ?? { x: finished.start.x - size.width / 2, y: finished.start.y - size.height / 2, width: size.width, height: size.height };
+      void createNode(finished.nodeType, finished.parentId, rect);
+      return;
+    }
     // 只点了一下没有拖：按预设的大小，以点击处为中心放一个
-    const preset = finished.preset;
+    const preset = finished.preset!;
     const rect = finished.rect && finished.rect.width >= 4 && finished.rect.height >= 4
       ? finished.rect
       : { x: finished.start.x - preset.width / 2, y: finished.start.y - preset.height / 2, width: preset.width, height: preset.height };
-    setTool({ kind: "select" });
     void createFromPreset(preset, rect, finished.parentId).then((id) => {
       if (preset.props.shape === "text") openTextEditor(id);
     });
@@ -2238,6 +2261,10 @@ function markActivePreset(): void {
   for (const tile of document.querySelectorAll<HTMLElement>(".preset-tile")) {
     tile.classList.toggle("active", tile.dataset.preset === current);
   }
+  const currentType = tool.kind === "node" ? tool.type : null;
+  for (const item of document.querySelectorAll<HTMLElement>(".palette-item")) {
+    item.classList.toggle("active", item.dataset.type === currentType);
+  }
 }
 
 // ---------- 样式条：选中形状或线条时浮在它上方 ----------
@@ -2609,8 +2636,9 @@ function renderPalette(): void {
   const make = (type: string, label: string, title: string) => {
     const el = document.createElement("div");
     el.className = "palette-item";
+    el.dataset.type = type;
     el.textContent = label;
-    el.title = title;
+    el.title = `${title}${title ? "\n" : ""}拖进设计窗口；或者点一下，再在设计窗口里拖出大小`;
     el.addEventListener("pointerdown", (e) => startPaletteDrag(e, type));
     if (!BUILTIN_TYPES.includes(type)) {
       el.addEventListener("contextmenu", (e) => {
@@ -2658,6 +2686,11 @@ function startPaletteDrag(down: PointerEvent, type: string): void {
     document.removeEventListener("pointermove", place);
     document.removeEventListener("pointerup", up);
     ghost.remove();
+    // 只点了一下没有拖：把它选为工具，再在设计窗口里拖出大小
+    if (Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) <= 4) {
+      setTool(tool.kind === "node" && tool.type === type ? { kind: "select" } : { kind: "node", type });
+      return;
+    }
     const rect = $("stage").getBoundingClientRect();
     const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
     if (inside) void addNode(type, (e.clientX - rect.left) / viewZoom(), (e.clientY - rect.top) / viewZoom());
