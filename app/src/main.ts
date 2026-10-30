@@ -12,6 +12,8 @@ import {
   computeSceneLayout,
   CONTAINER_DECL,
   declFor,
+  effectsForComponent,
+  effectsForNode,
   EXTERNAL_DECL,
   getSection,
   isLayoutPositionedNode,
@@ -21,6 +23,7 @@ import {
   loadProject,
   LOGIC_PATH,
   MOUSE_EVENTS,
+  paintEffectForNode,
   parentOfNode,
   parseDocRef,
   remapNodeChildren,
@@ -31,6 +34,7 @@ import {
   sectionOffsets,
   STANDARD_COMPONENTS,
   syncResizedNodeDimensions,
+  visibleEffectForNode,
   type ComponentInstance,
   type Project,
   type SceneNode,
@@ -522,7 +526,7 @@ function setShown(id: string, entry: Mounted, shown: boolean): void {
   const first = entry.shown === undefined;
   entry.shown = shown;
   const generation = ++entry.generation;
-  const effectName = project.logic.objects?.[id]?.effects?.visible;
+  const effectName = visibleEffectForNode(project, id);
   const play = effectName ? project.effects.get(effectName)?.play : undefined;
   const finish = () => {
     if (entry.generation === generation) entry.wrapper.style.display = shown ? "" : "none";
@@ -598,6 +602,29 @@ function applyViews(): void {
     } catch (e) {
       entry.instance = undefined;
       showNodeError(entry.body, `运行出错：${(e as Error).message}`);
+    }
+    const paintName = paintEffectForNode(project, id);
+    if (paintName) {
+      const paintEffect = project.effects.get(paintName);
+      const w = Math.max(1, box?.width ?? n?.width ?? 100);
+      const h = Math.max(1, box?.height ?? n?.height ?? 100);
+      if (paintEffect?.paint) {
+        try {
+          paintEffect.paint(entry.body, { props: view.props, width: w, height: h });
+        } catch (e) {
+          showNodeError(entry.body, `绘制效果 ${paintName} 运行出错：${(e as Error).message}`);
+        }
+      } else {
+        let placeholder = entry.body.querySelector<HTMLElement>(".vf-paint-placeholder");
+        if (!placeholder) {
+          placeholder = document.createElement("div");
+          placeholder.className = "vf-paint-placeholder";
+          placeholder.style.cssText =
+            "width:100%;height:100%;box-sizing:border-box;border:1px dashed #94a3b8;border-radius:6px;background:rgba(248,250,252,0.85);color:#475569;font-size:12px;display:flex;align-items:center;justify-content:center;text-align:center;padding:6px;";
+          entry.body.replaceChildren(placeholder);
+        }
+        placeholder.textContent = `[绘制效果占位：${paintName}]`;
+      }
     }
   }
 }
@@ -3541,11 +3568,20 @@ function renderShapePalette(): void {
 // ---------- 素材栏与图层 ----------
 
 function renderPalette(): void {
-  const make = (type: string, label: string, title: string) => {
+  const make = (type: string, label: string, title: string, effectNames: string[] = []) => {
     const el = document.createElement("div");
     el.className = "palette-item";
     el.dataset.type = type;
-    el.textContent = label;
+    const textSpan = document.createElement("span");
+    textSpan.textContent = label;
+    el.append(textSpan);
+    if (effectNames.length > 0) {
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      badge.textContent = "需翻译";
+      badge.title = `包含需要翻译的效果（${effectNames.join("、")}）；导出成 Qt 后要在界面效果层为它提供实现`;
+      el.append(badge);
+    }
     el.title = `${title}${title ? "\n" : ""}拖进设计窗口；或者点一下，再在设计窗口里拖出大小`;
     el.addEventListener("pointerdown", (e) => startPaletteDrag(e, type));
     if (!BUILTIN_TYPES.includes(type)) {
@@ -3574,7 +3610,14 @@ function renderPalette(): void {
   );
   const projectItems = [...project.components.values()]
     .filter((component) => !component.error)
-    .map((component) => make(component.decl.type, component.decl.label ?? component.decl.type, component.decl.description ?? ""));
+    .map((component) =>
+      make(
+        component.decl.type,
+        component.decl.label ?? component.decl.type,
+        component.decl.description ?? "",
+        effectsForComponent(component.decl),
+      ),
+    );
   const items = [...stdItems, ...projectItems];
   if (items.length === 0) {
     const empty = document.createElement("div");
@@ -3635,12 +3678,15 @@ function renderLayers(): void {
     type.className = "type";
     type.textContent = typeLabel(id);
     row.append(name, type);
-    const effectName = project.logic.objects?.[id]?.effects?.visible;
-    if (effectName) {
+    const nodeEffects = effectsForNode(project, id);
+    const effectList: string[] = [];
+    if (nodeEffects.visible) effectList.push(`过渡效果 ${nodeEffects.visible}`);
+    if (nodeEffects.paint) effectList.push(`绘制效果 ${nodeEffects.paint}`);
+    if (effectList.length > 0) {
       const badge = document.createElement("span");
       badge.className = "badge";
       badge.textContent = "需翻译";
-      badge.title = `显示和隐藏时播放效果 ${effectName}；导出成 Qt 后要在界面效果层为它提供实现`;
+      badge.title = `包含${effectList.join("、")}；导出成 Qt 后要在界面效果层为它提供实现`;
       row.append(badge);
     }
     if (id !== project.scene.root) {

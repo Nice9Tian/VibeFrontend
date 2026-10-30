@@ -4,8 +4,8 @@
 # 能包含的只有两个接口层和 Qt。它看不到业务层和界面效果层的任何头文件。
 vf_add_layer(vf_ui_binding Ui.h Ui.cpp UiDriver.h UiDriver.cpp)
 target_link_libraries(vf_ui_binding
-  PUBLIC vf_business_interface vf_ui_interface Qt6::Widgets
+  PUBLIC vf_business_interface vf_ui_interface Qt6::Widgets Qt6::Svg
   PRIVATE Qt6::Qml)
 
 # 逻辑脚本和项目数据编进程序里，运行时从 :/vf/logic/ 读取
-qt_add_resources(vf_ui_binding vf_logic PREFIX "/vf" FILES logic/runtime.js logic/project.json)
+qt_add_resources(vf_ui_binding vf_logic PREFIX "/vf" FILES logic/runtime.js logic/project.json logic/components/StateButton/disabled.svg logic/components/StateButton/hover.svg logic/components/StateButton/normal.svg logic/components/StateButton/pressed.svg logic/components/StateButton/selected.svg)

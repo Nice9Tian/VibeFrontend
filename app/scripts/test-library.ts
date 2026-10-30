@@ -1,9 +1,16 @@
 // 测试结构哈希（structhash.ts）与素材库复制、来源记录、状态判断（library.ts）的纯函数。
 // 运行：npm run test:library
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { check } from "../src/check.ts";
+import { exportQt, type QtAssets } from "../src/export/qt.ts";
+import { effectHash, loadProjectFiles } from "../src/loader.ts";
 import {
   collectComponentInLibrary,
+  collectPairedEffect,
   compareLibraryStatus,
+  computeEffectHash,
   emptyOrigins,
   isSafePathSegment,
   prepareLibraryComponentForProject,
@@ -12,11 +19,13 @@ import {
   removeOrphanedOrigin,
   replaceProjectComponentWithLibrary,
   rewriteComponentIdentity,
+  sanitizePairedEffects,
   statusBadgeText,
   unfavoriteFromLibrary,
   updateLibraryItemFromProject,
 } from "../src/library.ts";
 import { structHash, structHashFromFiles } from "../src/structhash.ts";
+import { nodeIO } from "./node-io.ts";
 
 const baseFiles: Record<string, string> = {
   "component.json": JSON.stringify(
@@ -276,8 +285,6 @@ test("回归：接口签名相同的未关联控件不能被自动关联，只�
     () => "fav-input",
   );
 
-  // 项目的控件 TransparentInput 被删除（或改了实现并同时改了文件夹与 type 名），
-  // 同时项目中存在另一个具有相同 component.json 接口签名但实现不同的控件 OtherInput
   const otherInputFiles = rewriteComponentIdentity(
     {
       ...baseFiles,
@@ -288,17 +295,14 @@ test("回归：接口签名相同的未关联控件不能被自动关联，只�
   );
 
   const rec = reconcileProjectLibrary({ OtherInput: otherInputFiles }, library, origins);
-  // 不能把 OtherInput 自动关联到 fav-input
   assert.equal(rec.matchedByLibraryId.get("fav-input"), undefined);
   assert.equal(rec.origins.origins.OtherInput, undefined);
   assert.equal(rec.origins.origins.TransparentInput?.libraryId, "fav-input");
   assert.equal(rec.originsChanged, false);
-  // 应归入 orphaned 待用户确认，且候选列表包含接口签名相同的 OtherInput
   assert.equal(rec.orphaned.length, 1);
   assert.equal(rec.orphaned[0].missingType, "TransparentInput");
   assert.deepEqual(rec.orphaned[0].candidateTypes, ["OtherInput"]);
 
-  // 用户手动确认关联后，再对账即可关联并识别为本地已改（modified）
   const confirmedOrigins = relinkOrphanedOrigin(rec.origins, "TransparentInput", "OtherInput");
   const recAfterConfirm = reconcileProjectLibrary({ OtherInput: otherInputFiles }, library, confirmedOrigins);
   assert.equal(recAfterConfirm.matchedByLibraryId.get("fav-input")?.localType, "OtherInput");
@@ -320,7 +324,6 @@ test("回归：更新为收藏版本时清理本地新增的额外文件，状�
     () => "fav-nostyle",
   );
 
-  // 本地多出了 style.css 和 helper.txt
   const localWithExtra: Record<string, string> = {
     ...filesWithoutStyle,
     "style.css": ":scope { color: red; }\n",
@@ -336,7 +339,6 @@ test("回归：更新为收藏版本时清理本地新增的额外文件，状�
   assert.ok(Array.isArray(replaced.removedFiles));
   assert.deepEqual(replaced.removedFiles.sort(), ["helper.txt", "style.css"]);
 
-  // 模拟按 removedFiles 删除本地残留文件后重新计算状态
   const diskFilesAfterReplace: Record<string, string> = { ...localWithExtra, ...replaced.writtenFiles };
   for (const rm of replaced.removedFiles) delete diskFilesAfterReplace[rm];
   const rec = reconcileProjectLibrary({ TransparentInput: diskFilesAfterReplace }, library, replaced.origins);
@@ -367,7 +369,6 @@ test("回归：过滤或拒绝包含 ../ 或路径分隔符的非法文件名", 
   assert.equal(isSafePathSegment("a/b"), false);
   assert.equal(isSafePathSegment("Valid_Name-1.json"), true);
 
-  // 孤儿来源记录手动重关联与清理
   const orphanOrigins = {
     version: 1 as const,
     origins: { OldDeletedInput: { libraryId: "fav-bad", baseHash: maliciousFav.hash } },
@@ -377,6 +378,264 @@ test("回归：过滤或拒绝包含 ../ 或路径分隔符的非法文件名", 
   assert.equal(relinked.origins.NewInput?.libraryId, "fav-bad");
   const removed = removeOrphanedOrigin(relinked, "NewInput");
   assert.equal(Object.keys(removed.origins).length, 0);
+});
+
+// 11. [回归测试 - 审核问题 3 & 6] 收藏控件按 effectsForComponent 过滤效果；同名冲突改名时不污染 qtFiles 且控件状态保持 clean
+test("回归：收藏控件仅收集关联效果，同名冲突改名复制时不污染旧 qtFiles 且状态保持 clean", () => {
+  const cpFiles: Record<string, string> = {
+    "component.json": JSON.stringify(
+      {
+        type: "ColorPicker",
+        label: "调色盘",
+        description: "自绘调色盘",
+        defaultSize: { width: 240, height: 156 },
+        entry: "index.js",
+        style: "style.css",
+        props: { hue: { type: "number", default: 210, logic: true } },
+        effects: { paint: "ColorPickerDraw" },
+        children: false,
+      },
+      null,
+      2,
+    ),
+    "index.js": "export default function create(el) { return { update() {}, destroy() {} }; }\n",
+    "style.css": ":scope { display: block; }\n",
+  };
+  const drawEffectFiles: Record<string, string> = {
+    "effect.json": JSON.stringify({ name: "ColorPickerDraw", kind: "paint", entry: "index.js" }, null, 2),
+    "index.js": "export default function paint(el) { return { update() {}, destroy() {} }; }\n",
+  };
+  const expandEffectFiles: Record<string, string> = {
+    "effect.json": JSON.stringify({ name: "PanelExpand", kind: "visibility", entry: "index.js" }, null, 2),
+    "index.js": "export default function play(el) { return Promise.resolve(); }\n",
+  };
+  const allProjectEffects = {
+    ColorPickerDraw: collectPairedEffect("ColorPickerDraw", drawEffectFiles, {
+      "ColorPickerDrawEffect.h": "class ColorPickerDrawPainter : public vf::ColorPickerDrawEffect<0x00000000> {};\n",
+      "ColorPickerDrawEffect.cpp": "// impl\n",
+    }),
+    PanelExpand: collectPairedEffect("PanelExpand", expandEffectFiles, {
+      "PanelExpandEffect.h": "class PanelExpandAnimation : public vf::PanelExpandEffect<0x00000000> {};\n",
+    }),
+  };
+
+  // 1) 无效果控件收藏时不应挂载任何 pairedEffects
+  const noEffCollected = collectComponentInLibrary(
+    "TransparentInput",
+    baseFiles,
+    "proj-1",
+    [],
+    emptyOrigins(),
+    () => "fav-noeff",
+    allProjectEffects,
+  );
+  assert.equal(noEffCollected.item.pairedEffects, undefined);
+
+  // 2) ColorPicker 收藏时只保留自身声明引用的 ColorPickerDraw，不混入 PanelExpand
+  const cpCollected = collectComponentInLibrary(
+    "ColorPicker",
+    cpFiles,
+    "proj-1",
+    [],
+    emptyOrigins(),
+    () => "fav-cp",
+    allProjectEffects,
+  );
+  assert.deepEqual(Object.keys(cpCollected.item.pairedEffects ?? {}), ["ColorPickerDraw"]);
+  assert.deepEqual(Object.keys(cpCollected.item.pairedEffects!.ColorPickerDraw.qtFiles).sort(), [
+    "ColorPickerDrawEffect.cpp",
+    "ColorPickerDrawEffect.h",
+  ]);
+
+  // 3) 拖入已有不同实现 ColorPickerDraw 的目标项目 → 效果改名为 ColorPickerDraw_2，qtFiles 仅含改名后文件，状态仍为 clean
+  const targetExistingEffects = {
+    ColorPickerDraw: {
+      "effect.json": JSON.stringify({ name: "ColorPickerDraw", kind: "paint", entry: "index.js" }, null, 2),
+      "index.js": "// completely different effect in target project\nexport default function paint() {}\n",
+    },
+  };
+  const dragConflict = prepareLibraryComponentForProject(
+    cpCollected.item,
+    {},
+    emptyOrigins(),
+    targetExistingEffects,
+    { "ColorPickerDrawEffect.h": "// target existing header\n" },
+  );
+  assert.deepEqual(Object.keys(dragConflict.copiedEffects), ["ColorPickerDraw_2"]);
+  assert.equal("ColorPickerDraw" in dragConflict.copiedEffects, false);
+  assert.deepEqual(Object.keys(dragConflict.pairedEffects.ColorPickerDraw_2.qtFiles).sort(), [
+    "ColorPickerDraw_2Effect.cpp",
+    "ColorPickerDraw_2Effect.h",
+  ]);
+  assert.equal("ColorPickerDrawEffect.h" in dragConflict.pairedEffects.ColorPickerDraw_2.qtFiles, false);
+
+  // 验证问题 6：效果因冲突改名为 ColorPickerDraw_2 后，控件结构哈希与收藏哈希仍一致，compareLibraryStatus 为 clean
+  assert.ok(dragConflict.copiedFiles);
+  const localHashAfterRename = structHashFromFiles(dragConflict.copiedFiles);
+  assert.equal(localHashAfterRename, cpCollected.item.hash);
+  assert.equal(
+    compareLibraryStatus(
+      localHashAfterRename,
+      cpCollected.item.hash,
+      dragConflict.origins.origins.ColorPicker.baseHash,
+    ),
+    "clean",
+  );
+  const recAfterConflict = reconcileProjectLibrary(
+    { ColorPicker: dragConflict.copiedFiles },
+    cpCollected.library,
+    dragConflict.origins,
+  );
+  assert.equal(recAfterConflict.matchedByLibraryId.get("fav-cp")?.status, "clean");
+});
+
+// 12. [回归测试 - 审核问题 5 & 8] pairedEffects 路径安全校验与 effectHash / computeEffectHash 嵌套对象键排序及单 \r 归一化
+test("回归：pairedEffects 路径安全过滤与 effectHash 嵌套键递归排序及单 \\r 归一化", () => {
+  // 问题 5：sanitizePairedEffects 与 replaceProjectComponentWithLibrary 拒绝 ../ 与子目录路径
+  const rawMalicious = {
+    "../BadEffect": {
+      name: "../BadEffect",
+      hash: "12345678",
+      files: { "effect.json": "{}" },
+      qtFiles: { "Evil.h": "//" },
+    },
+    ColorPickerDraw: {
+      name: "ColorPickerDraw",
+      hash: "12345678",
+      files: {
+        "effect.json": '{"name":"ColorPickerDraw","kind":"paint"}',
+        "index.js": "export default function paint() {}",
+        "../escape.js": "pwn",
+      },
+      qtFiles: {
+        "../ESC.txt": "pwned",
+        "sub/dir.h": "pwned",
+        "ColorPickerDrawEffect.h": "// safe\n",
+      },
+    },
+  };
+  const sanitized = sanitizePairedEffects(rawMalicious);
+  assert.deepEqual(Object.keys(sanitized), ["ColorPickerDraw"]);
+  assert.equal("../escape.js" in sanitized.ColorPickerDraw.files, false);
+  assert.deepEqual(Object.keys(sanitized.ColorPickerDraw.qtFiles), ["ColorPickerDrawEffect.h"]);
+
+  const replaced = replaceProjectComponentWithLibrary(
+    "TransparentInput",
+    {
+      id: "fav-1",
+      type: "TransparentInput",
+      label: "输入框",
+      description: "",
+      hash: structHashFromFiles(baseFiles),
+      sourceProjectId: "p1",
+      files: baseFiles,
+      pairedEffects: rawMalicious,
+    },
+    emptyOrigins(),
+  );
+  assert.equal("../ESC.txt" in replaced.writtenQtEffects, false);
+  assert.equal("sub/dir.h" in replaced.writtenQtEffects, false);
+  assert.deepEqual(Object.keys(replaced.writtenQtEffects), ["ColorPickerDrawEffect.h"]);
+
+  // 问题 8：effectHash 与 computeEffectHash 对嵌套对象键顺序和 \r / \r\n / \n 完全一致
+  const filesA = {
+    "effect.json": JSON.stringify({
+      name: "TestEff",
+      kind: "paint",
+      label: "测试A",
+      params: { z: 1, a: { d: 4, c: 3 } },
+    }),
+    "index.js": "export default function paint() {\r  return 1;\r}\r",
+  };
+  const filesB = {
+    "effect.json": JSON.stringify({
+      kind: "paint",
+      name: "TestEff",
+      label: "不同标签不影响哈希",
+      params: { a: { c: 3, d: 4 }, z: 1 },
+    }),
+    "index.js": "export default function paint() {\r\n  return 1;\r\n}\r\n",
+  };
+  const hA = computeEffectHash(filesA, "TestEff");
+  const hB = computeEffectHash(filesB, "TestEff");
+  const hLoaderA = effectHash(JSON.parse(filesA["effect.json"]), filesA);
+  const hLoaderB = effectHash(JSON.parse(filesB["effect.json"]), filesB);
+  assert.equal(hA, hB);
+  assert.equal(hA, hLoaderA);
+  assert.equal(hLoaderA, hLoaderB);
+});
+
+// 13. [回归测试 - 审核问题 1, 2, 4, 5(exportQt)]
+const animeanRoot = path.resolve("../examples/animean/design");
+const project = await loadProjectFiles(nodeIO(animeanRoot), null);
+
+test("回归：StateButton 与 ColorPicker 的 index.js 均默认导出创建函数且包含 destroy()", async () => {
+  for (const compName of ["StateButton", "ColorPicker"]) {
+    const jsPath = path.join(animeanRoot, "components", compName, "index.js");
+    const src = fs.readFileSync(jsPath, "utf8");
+    const dataUrl = `data:text/javascript;base64,${Buffer.from(src, "utf8").toString("base64")}`;
+    const mod = (await import(dataUrl)) as { default?: unknown };
+    assert.equal(typeof mod.default, "function", `${compName}/index.js 应有 export default function`);
+  }
+});
+
+test("回归：控件文件夹内无任何 .svg 文件时 check.ts 准确检出 stateImages 缺失文件，且 check.ts 报告 comp.error 不重复", () => {
+  const cloned = structuredClone(project);
+  const sb = cloned.components.get("StateButton")!;
+  assert.ok(sb);
+  sb.svgFiles = {};
+  const probs = check(cloned);
+  const missingSvgs = probs.filter((p) => p.level === "error" && p.message.includes("stateImages.") && p.message.includes("找不到"));
+  assert.equal(missingSvgs.length, 5, "5 个状态 SVG 全部缺失时应报 5 条错误");
+
+  // 验证 comp.error 与 effect.error 在 check(project) 中均只报一次
+  sb.error = "找不到实现文件 index.js";
+  const probsWithCompErr = check(cloned).filter((p) => p.message === "控件 StateButton：找不到实现文件 index.js");
+  assert.equal(probsWithCompErr.length, 1);
+});
+
+test("回归：exportQt 读取 .designer/paired-effects.json 时拒绝 ../ 等非法 qtFiles 文件名", () => {
+  const designerDir = path.join(animeanRoot, ".designer");
+  const hadDesignerDir = fs.existsSync(designerDir);
+  const pairedPath = path.join(designerDir, "paired-effects.json");
+  const origPaired = fs.existsSync(pairedPath) ? fs.readFileSync(pairedPath, "utf8") : null;
+  try {
+    fs.mkdirSync(designerDir, { recursive: true });
+    const effHash = project.effects.get("ColorPickerDraw")!.hash;
+    fs.writeFileSync(
+      pairedPath,
+      JSON.stringify({
+        version: 1,
+        effects: {
+          ColorPickerDraw: {
+            name: "ColorPickerDraw",
+            hash: effHash,
+            qtFiles: {
+              "../ESC.txt": "pwned",
+              "ColorPickerDrawEffect.h": "// safe header\n",
+            },
+          },
+        },
+      }),
+    );
+    const dummyTemplates: QtAssets = {
+      generated: {},
+      scaffold: {},
+      runtimeJs: "// runtime\n",
+    };
+    const out = exportQt(project, dummyTemplates, null);
+    assert.equal(out.scaffold.has("ui_effects/../ESC.txt"), false);
+    assert.equal(out.scaffold.has("ui_effects/ColorPickerDrawEffect.h"), true);
+  } finally {
+    if (origPaired !== null) {
+      fs.writeFileSync(pairedPath, origPaired);
+    } else {
+      if (fs.existsSync(pairedPath)) fs.rmSync(pairedPath, { force: true });
+      if (!hadDesignerDir && fs.existsSync(designerDir)) {
+        fs.rmSync(designerDir, { recursive: true, force: true });
+      }
+    }
+  }
 });
 
 console.log(`全部 ${passed} 项测试通过`);

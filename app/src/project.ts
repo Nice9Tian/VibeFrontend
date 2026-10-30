@@ -1,9 +1,17 @@
 // 工具界面里读取设计项目：在 loader.ts 读出的内容之上，把控件和效果的实现文件加载成可以运行的模块，
 // 并把控件的样式注入页面。数据结构和查找函数在 model.ts 里，这里原样转出，界面代码只需要引用这一个文件。
-import { STANDARD_COMPONENT_LIST } from "../standard/index.ts";
+import { mountStateImageControl, STANDARD_COMPONENT_LIST } from "../standard/index.ts";
+import { check } from "./check.ts";
 import { listDir, projectRoot, readText } from "./fs";
 import { loadProjectFiles } from "./loader.ts";
-import type { ComponentCreate, EffectPlay, Project } from "./model.ts";
+import {
+  isPaintEffect,
+  STATE_IMAGE_KEYS,
+  type ComponentCreate,
+  type EffectPaint,
+  type EffectPlay,
+  type Project,
+} from "./model.ts";
 
 export * from "./model.ts";
 
@@ -52,29 +60,89 @@ async function injectComponentStyles(project: Project): Promise<string> {
 /** previous 用于在 YAML 写坏时沿用上一份有效的逻辑。 */
 export async function loadProject(previous: Project | null): Promise<Project> {
   const project = await loadProjectFiles({ root: projectRoot, readText, listDir }, previous);
+  const preCheckSet = new Set(check(project).map((p) => `${p.level}\0${p.message}`));
+  const loaderProblems = project.problems.filter((p) => !preCheckSet.has(`${p.level}\0${p.message}`));
+  let svgSignature = "";
 
-  for (const [type, component] of project.components) {
+  for (const [, component] of project.components) {
+    if (!component.folder) continue;
+    const svgFiles: Record<string, string> = { ...(component.svgFiles ?? {}) };
+    const entries = await listDir(`components/${component.folder}`);
+    const svgNames = new Set<string>(
+      entries.filter((e) => !e.isDir && e.name.toLowerCase().endsWith(".svg")).map((e) => e.name),
+    );
+    if (component.decl.stateImages) {
+      for (const key of STATE_IMAGE_KEYS) {
+        const fname = component.decl.stateImages[key];
+        if (typeof fname === "string" && fname) svgNames.add(fname);
+      }
+    }
+    for (const name of [...svgNames].sort()) {
+      const text = await readText(`components/${component.folder}/${name}`);
+      if (text !== null) {
+        svgFiles[name] = text;
+        svgSignature += `\ncomponents/${component.folder}/${name}\n${text}`;
+      }
+    }
+    component.svgFiles = svgFiles;
+  }
+
+  for (const [, component] of project.components) {
     if (component.source === undefined) continue;
     const entry = component.decl.entry ?? "index.js";
     const loaded = await importSource(`components/${component.folder}/${entry}`, component.source);
     if (loaded.error) component.error = `${entry} ${loaded.error}`;
     else if (typeof loaded.module?.default !== "function") component.error = `${entry} 没有默认导出一个创建函数`;
-    else component.create = loaded.module.default as ComponentCreate;
-    if (component.error) project.problems.push({ level: "error", message: `控件 ${type}：${component.error}` });
+    else {
+      const rawCreate = loaded.module.default as ComponentCreate;
+      const stateImages = component.decl.stateImages;
+      const svgFiles = component.svgFiles ?? {};
+      if (stateImages) {
+        component.create = (el, ctx) => {
+          const userInst = rawCreate(el, { ...ctx, stateImages, svgFiles });
+          const stateInst = mountStateImageControl(el, {
+            props: ctx.props,
+            emit: ctx.emit,
+            mode: ctx.mode,
+            stateImages,
+            svgFiles,
+          });
+          return {
+            update(next) {
+              userInst?.update?.(next);
+              stateInst.update(next);
+            },
+            destroy() {
+              userInst?.destroy?.();
+              stateInst.destroy();
+            },
+          };
+        };
+      } else {
+        component.create = rawCreate;
+      }
+    }
   }
 
-  for (const [name, effect] of project.effects) {
+  for (const [, effect] of project.effects) {
     const entry = effect.decl.entry ?? "index.js";
     const source = effect.files[entry];
     if (effect.error || source === undefined) continue;
     const loaded = await importSource(`effects/${effect.folder}/${entry}`, source);
     if (loaded.error) effect.error = `${entry} ${loaded.error}`;
-    else if (typeof loaded.module?.default !== "function") effect.error = `${entry} 没有默认导出一个播放函数`;
-    else effect.play = loaded.module.default as EffectPlay;
-    if (effect.error) project.problems.push({ level: "error", message: `效果 ${name}：${effect.error}` });
+    else if (typeof loaded.module?.default !== "function") {
+      effect.error = `${entry} 没有默认导出一个${isPaintEffect(effect.decl.kind) ? "绘制" : "播放"}函数`;
+    } else if (isPaintEffect(effect.decl.kind)) {
+      effect.paint = loaded.module.default as EffectPaint;
+    } else {
+      effect.play = loaded.module.default as EffectPlay;
+    }
   }
 
+  // 重新运行静态检查（保留加载阶段的语法/缺失报错，并合并浏览器模式下读取到的 SVG 检查与模块导出检查）
+  project.problems = [...loaderProblems, ...check(project)];
+
   const css = await injectComponentStyles(project);
-  project.signature += css;
+  project.signature += svgSignature + css;
   return project;
 }

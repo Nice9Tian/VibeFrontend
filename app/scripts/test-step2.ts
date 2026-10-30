@@ -184,6 +184,88 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
 
       const synced = syncPreviewSelectionToTextarea();
 
+      // 3. Step 6 复审浏览器实测：
+      //    (a) 通过 loadProject 加载 examples/animean/design，验证 StateButton/ColorPicker 的 export default create 与 destroy
+      //    (b) 验证 StateButton 在编辑模式（#window.edit）下不响应 hover/press，在预览模式（#window.preview）下正常切换状态，且 .vf-state-image-root 的 5 层 SVG 不被 textContent 清空
+      //    (c) 验证 loadProject 在存在加载期语法错误（如损坏的 JSON 或语法错误的 index.js）时，project.problems 同时保留加载期错误与 check(project) 结果且不重复
+      const { loadProject } = await import("/src/project.ts");
+      const animeanProj = await loadProject(null);
+      const stateBtnComp = animeanProj.components.get("StateButton");
+      const colorPickerComp = animeanProj.components.get("ColorPicker");
+
+      const hostWin = document.createElement("div");
+      hostWin.id = "window";
+      hostWin.className = "edit";
+      const sbEl = document.createElement("div");
+      hostWin.appendChild(sbEl);
+      document.body.appendChild(hostWin);
+
+      let emittedCount = 0;
+      const sbInst = stateBtnComp.create(sbEl, {
+        props: { text: "播放", checkable: true, checked: false, enabled: true },
+        emit: () => { emittedCount++; },
+        mode: "design",
+      });
+      const sbRoot = sbEl.querySelector(".vf-state-image-root");
+      const sbLayerCount = sbEl.querySelectorAll(".vf-state-image-layer").length;
+      const sbTextContent = sbEl.querySelector(".vf-state-image-text")?.textContent ?? "";
+
+      // 编辑模式下派发 mouseenter / mousedown / click，状态必须保持 normal，不触发 hover/pressed
+      sbRoot.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+      const stateAfterEditHover = sbRoot.dataset.state;
+      sbRoot.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      const stateAfterEditPress = sbRoot.dataset.state;
+      sbRoot.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+      const emittedInEdit = emittedCount;
+
+      // 切换到预览模式后派发 mouseenter / mousedown / click
+      hostWin.className = "preview";
+      sbInst.destroy();
+      const sbInstPreview = stateBtnComp.create(sbEl, {
+        props: { text: "播放", checkable: true, checked: false, enabled: true },
+        emit: () => { emittedCount++; },
+        mode: "preview",
+      });
+      const sbRootPreview = sbEl.querySelector(".vf-state-image-root");
+      sbRootPreview.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+      const stateAfterPreviewHover = sbRootPreview.dataset.state;
+      sbRootPreview.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      const stateAfterPreviewPress = sbRootPreview.dataset.state;
+      sbRootPreview.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+      const emittedInPreview = emittedCount;
+      sbInstPreview.destroy();
+      const sbRootAfterDestroy = sbEl.querySelector(".vf-state-image-root");
+
+      // ColorPicker 挂载与销毁 + ColorPickerDraw 效果挂载
+      const cpEl = document.createElement("div");
+      hostWin.appendChild(cpEl);
+      const cpInst = colorPickerComp.create(cpEl, {
+        props: { hue: 210, sat: 78, val: 92 },
+        emit: () => {},
+        mode: "preview",
+      });
+      const cpDrawEff = animeanProj.effects.get("ColorPickerDraw");
+      cpDrawEff.paint(cpEl, {
+        props: { hue: 210, saturation: 78, brightness: 92, hexColor: "#3394eb" },
+        width: 228,
+        height: 152,
+      });
+      const cpHasRoot = cpEl.classList.contains("vf-color-picker-host") && Boolean(cpEl.querySelector("canvas[data-vf-color-picker]"));
+      cpInst.destroy();
+      const cpHasRootAfterDestroy = cpEl.classList.contains("vf-color-picker-host");
+
+      // 注入损坏文件覆盖（模拟 ui/scene.json 后面多写字符 + ColorPicker/index.js 语法错误），验证 loadProject 保留加载期报错且不重复
+      await fetch("/__fs/set-overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          "ui/scene.json": "{ broken json",
+          "components/ColorPicker/index.js": "export default function ((( broken syntax",
+        }),
+      });
+      const brokenProj = await loadProject(animeanProj);
+      const brokenProblems = brokenProj.problems.map((p) => ({ file: p.file, message: p.message }));
+
       await fetch("/report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -194,6 +276,21 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
           selStart: docTextarea.selectionStart,
           selEnd: docTextarea.selectionEnd,
           docValue: docTextarea.value,
+          animeanProblems: animeanProj.problems,
+          stateBtnHasError: stateBtnComp?.error ?? null,
+          colorPickerHasError: colorPickerComp?.error ?? null,
+          sbLayerCount,
+          sbTextContent,
+          stateAfterEditHover,
+          stateAfterEditPress,
+          emittedInEdit,
+          stateAfterPreviewHover,
+          stateAfterPreviewPress,
+          emittedInPreview,
+          sbRootAfterDestroy: Boolean(sbRootAfterDestroy),
+          cpHasRoot,
+          cpHasRootAfterDestroy,
+          brokenProblems,
         }),
       });
     } catch (err) {
@@ -208,18 +305,37 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
 </html>`;
 
   interface BrowserReport {
+    error?: string;
     paletteTypes: string[];
     docMode: string;
     synced: boolean;
     selStart: number;
     selEnd: number;
     docValue: string;
+    animeanProblems: Array<{ level: string; file?: string; message: string }>;
+    stateBtnHasError: string | null;
+    colorPickerHasError: string | null;
+    sbLayerCount: number;
+    sbTextContent: string;
+    stateAfterEditHover: string;
+    stateAfterEditPress: string;
+    emittedInEdit: number;
+    stateAfterPreviewHover: string;
+    stateAfterPreviewPress: string;
+    emittedInPreview: number;
+    sbRootAfterDestroy: boolean;
+    cpHasRoot: boolean;
+    cpHasRootAfterDestroy: boolean;
+    brokenProblems: Array<{ file: string; message: string }>;
   }
   let reportData: BrowserReport | null = null;
   let resolveReport!: () => void;
   const reportPromise = new Promise<void>((res) => {
     resolveReport = res;
   });
+
+  const animeanDesignRoot = path.resolve(REPO_ROOT, "examples/animean/design");
+  let fsOverrides: Record<string, string | null> = {};
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -234,6 +350,60 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
       });
       return;
     }
+    if (url.pathname === "/__fs/set-overrides" && req.method === "POST") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        fsOverrides = JSON.parse(body);
+        res.writeHead(200);
+        res.end("ok");
+      });
+      return;
+    }
+    if (url.pathname === "/__fs/root") {
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(animeanDesignRoot);
+      return;
+    }
+    if (url.pathname === "/__fs/read") {
+      const rel = (url.searchParams.get("path") ?? "").replace(/^\/+/, "");
+      if (rel in fsOverrides) {
+        const v = fsOverrides[rel];
+        if (v === null) {
+          res.writeHead(404);
+          res.end("Not Found");
+        } else {
+          res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end(v);
+        }
+        return;
+      }
+      const abs = path.resolve(animeanDesignRoot, rel);
+      if (!abs.startsWith(animeanDesignRoot) || !fs.existsSync(abs) || fs.statSync(abs).isDirectory()) {
+        res.writeHead(404);
+        res.end("Not Found");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(fs.readFileSync(abs, "utf8"));
+      return;
+    }
+    if (url.pathname === "/__fs/list") {
+      const rel = (url.searchParams.get("path") ?? "").replace(/^\/+/, "");
+      const abs = path.resolve(animeanDesignRoot, rel);
+      if (!abs.startsWith(animeanDesignRoot) || !fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end("[]");
+        return;
+      }
+      const entries = fs.readdirSync(abs, { withFileTypes: true }).map((e) => ({
+        name: e.name,
+        isDir: e.isDirectory(),
+      }));
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(entries));
+      return;
+    }
     if (url.pathname === "/" || url.pathname === "/index.html") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
@@ -244,8 +414,16 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
       res.end("export async function invoke() { return null; }\n");
       return;
     }
+    if (url.pathname.startsWith("/@id/@tauri-apps/api/event")) {
+      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8" });
+      res.end("export async function listen() { return () => {}; }\n");
+      return;
+    }
     const relPath = decodeURIComponent(url.pathname).replace(/^\/+/, "");
-    const absPath = path.resolve(APP_ROOT, relPath);
+    let absPath = path.resolve(APP_ROOT, relPath);
+    if (!fs.existsSync(absPath) && fs.existsSync(`${absPath}.ts`)) {
+      absPath = `${absPath}.ts`;
+    }
     if (!absPath.startsWith(APP_ROOT) || !fs.existsSync(absPath) || fs.statSync(absPath).isDirectory()) {
       res.writeHead(404);
       res.end("Not Found");
@@ -264,6 +442,8 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
     if (absPath.endsWith(".ts") || absPath.endsWith(".js")) {
       let source = fs.readFileSync(absPath, "utf8");
       source = source.replace(/@tauri-apps\/api\/core/g, "/@id/@tauri-apps/api/core");
+      source = source.replace(/@tauri-apps\/api\/event/g, "/@id/@tauri-apps/api/event");
+      source = source.replace(/from\s+["']yaml["']/g, 'from "/node_modules/yaml/browser/index.js"');
       const js = absPath.endsWith(".ts")
         ? ts.transpileModule(source, {
             compilerOptions: {
@@ -315,6 +495,7 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
 
   const report = reportData as BrowserReport | null;
   assert.ok(report, "应收到无头浏览器的实测报告");
+  assert.equal(report.error, undefined, `无头浏览器执行报错：${report.error}`);
   const expectedStd = [...STANDARD_COMPONENTS.keys()];
   assert.deepEqual(
     report.paletteTypes,
@@ -328,7 +509,38 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
   // 验证行号计算：在题设 7 行文本中，“第二段要被引用的目标文字。”位于第 5 行（若该小节在文件第 10 行开始，则对应文件第 14 行）
   const lineRange = selectionRange(report.docValue, report.selStart, report.selEnd, 10);
   assert.deepEqual(lineRange, { start: 14, end: 14 }, `选中第二段时计算出的文件行号应为 14-14，实测=${JSON.stringify(lineRange)}`);
-  console.log("PASS 第 1 项与第 5 项（标准控件常驻与名称保护 + 预览模式 #doc-quote 选中行号映射）");
+
+  // 验证 Step 6 复审项（无头浏览器内真实 loadProject + StateButton/ColorPicker 挂载 + 编辑/预览模式 + problems 保留）：
+  const animeanErrors = report.animeanProblems.filter((p) => p.level === "error");
+  assert.equal(animeanErrors.length, 0, `examples/animean/design 在浏览器中 loadProject 应无 error，实测=${JSON.stringify(animeanErrors)}`);
+  assert.ok(
+    report.animeanProblems.some((p) => p.level === "hint" && p.message.includes("ColorPickerDraw") && p.message.includes("ba2779df")),
+    "loadProject 应包含 ColorPickerDraw 翻译提示（哈希 ba2779df）",
+  );
+  assert.ok(
+    report.animeanProblems.some((p) => p.level === "hint" && p.message.includes("PanelExpand") && p.message.includes("4c42b870")),
+    "loadProject 应包含 PanelExpand 翻译提示（哈希 4c42b870）",
+  );
+  assert.equal(report.stateBtnHasError, null, "StateButton/index.js 应通过 export default create 正常加载");
+  assert.equal(report.colorPickerHasError, null, "ColorPicker/index.js 应通过 export default create 正常加载");
+  assert.equal(report.sbLayerCount, 5, "StateButton 挂载后 .vf-state-image-root 应保留全部 5 个状态图层（不被 textContent 清空）");
+  assert.equal(report.sbTextContent, "播放", "StateButton 挂载后 .vf-state-image-text 应显示文本“播放”");
+  assert.equal(report.stateAfterEditHover, "normal", "编辑模式下 mouseenter 不应把 StateButton 切为 hover");
+  assert.equal(report.stateAfterEditPress, "normal", "编辑模式下 mousedown 不应把 StateButton 切为 pressed");
+  assert.equal(report.emittedInEdit, 0, "编辑模式下 click 不应触发 StateButton 的 clicked 事件");
+  assert.equal(report.stateAfterPreviewHover, "hover", "预览模式下 mouseenter 应把 StateButton 切为 hover");
+  assert.equal(report.stateAfterPreviewPress, "pressed", "预览模式下 mousedown 应把 StateButton 切为 pressed");
+  assert.equal(report.emittedInPreview, 1, "预览模式下 click 应触发 StateButton 的 clicked 事件");
+  assert.equal(report.sbRootAfterDestroy, false, "StateButton.destroy() 后应清理 .vf-state-image-root");
+  assert.equal(report.cpHasRoot, true, "ColorPicker 挂载后应渲染 .cp-root");
+  assert.equal(report.cpHasRootAfterDestroy, false, "ColorPicker.destroy() 后应清理 .cp-root");
+
+  const sceneBrokenErrors = report.brokenProblems.filter((p) => p.message.includes("ui/scene.json 不是有效的 JSON"));
+  assert.equal(sceneBrokenErrors.length, 1, `loadProject 应保留 loader 阶段的 ui/scene.json 语法错误且仅出现 1 次，实测=${JSON.stringify(report.brokenProblems)}`);
+  const cpBrokenErrors = report.brokenProblems.filter((p) => p.message.includes("控件 ColorPicker：index.js 加载失败"));
+  assert.equal(cpBrokenErrors.length, 1, `loadProject 应报告 ColorPicker/index.js 语法错误且仅出现 1 次，实测=${JSON.stringify(report.brokenProblems)}`);
+
+  console.log("PASS 第 1 项与第 5 项 + Step 6 浏览器实测（StateButton/ColorPicker 模块契约、5 层状态图片、编辑/预览模式隔离、loadProject 错误保留）");
 }
 
 async function testItem3JsChecker(): Promise<void> {
