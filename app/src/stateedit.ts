@@ -3,23 +3,173 @@
 // 2) 支持可视化新增、修改初始值和删除状态变量（string / number / boolean / enum / array）；
 // 3) 支持添加或编辑业务事件（owner: business 及 simulate 模拟步骤）；
 // 4) 所有修改通过 editLogic 保留 YAML 注释格式并计入撤销/重做历史。
-import { isMap, parseDocument, type Document } from "yaml";
-import type { Value } from "./expr.ts";
+import { isMap, isSeq, parseDocument, type Document } from "yaml";
+import { parseAssignment, parseExpr, pathsIn, type Value } from "./expr.ts";
 import {
   allStateLeaves,
   businessEvent,
+  findCondition,
+  findStateLeaf,
+  isBusinessState,
+  isNameTakenAcrossTables,
+  isValidIdentifier,
+  requestEvent,
   type ConditionDef,
+  type Logic,
   type Project,
+  type Scene,
   type StateLeaf,
   type Step,
 } from "./model.ts";
 
-const VALID_SEG_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const YAML_OUTPUT = { lineWidth: 0 };
 
+function ensureBlockStyle(node: unknown): void {
+  if (isMap(node)) {
+    node.flow = false;
+    for (const pair of node.items) {
+      ensureBlockStyle(pair.value);
+    }
+  } else if (isSeq(node)) {
+    node.flow = false;
+    for (const item of node.items) {
+      ensureBlockStyle(item);
+    }
+  }
+}
+
+function docToLogic(doc: Document): Logic {
+  try {
+    return (doc.toJS() as Logic | null) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 状态路径必须至少包含两段（<分组>.<状态名>），且每段都是合法的非保留字标识符。
+ */
 export function isValidStatePath(statePath: string): boolean {
   const parts = statePath.trim().split(".");
-  return parts.length > 0 && parts.every((seg) => VALID_SEG_RE.test(seg));
+  return parts.length >= 2 && parts.every((seg) => isValidIdentifier(seg));
+}
+
+function collectStepTargets(steps: Step[] | undefined, out: string[] = []): string[] {
+  if (!Array.isArray(steps)) return out;
+  for (const step of steps) {
+    if (!step || typeof step !== "object") continue;
+    if ("set" in step && typeof step.set === "string") {
+      try {
+        const parsed = parseAssignment(step.set);
+        out.push(parsed.target);
+      } catch {
+        // 语法错误由专门校验处理
+      }
+    } else if ("push" in step) {
+      const to = typeof step.push === "string" ? step.push : step.push?.to;
+      if (typeof to === "string" && to) out.push(to);
+    } else if ("remove" in step) {
+      const from = typeof step.remove === "string" ? step.remove : step.remove?.from;
+      if (typeof from === "string" && from) out.push(from);
+    } else if ("move" in step) {
+      const target = typeof step.move === "string" ? step.move : step.move?.in;
+      if (typeof target === "string" && target) out.push(target);
+    } else if ("if" in step) {
+      collectStepTargets(step.then, out);
+      collectStepTargets(step.else, out);
+    }
+  }
+  return out;
+}
+
+/**
+ * 校验将状态 statePath 切换为 nextOwner 是否与当前逻辑中的 bind、普通事件步骤或业务事件 simulate 冲突。
+ * 若合法返回 null，否则返回人类可读的冲突原因。
+ */
+export function validateStateOwnerChange(
+  logic: Logic,
+  statePath: string,
+  nextOwner: "ui" | "business",
+): string | null {
+  if (nextOwner === "business") {
+    for (const [objId, obj] of Object.entries(logic.objects ?? {})) {
+      if (!obj) continue;
+      if (obj.bind === statePath) {
+        return `状态“${statePath}”已被控件“${objId}”绑定（bind），不能改为业务管`;
+      }
+      for (const [evName, steps] of Object.entries(obj.events ?? {})) {
+        if (collectStepTargets(steps).includes(statePath)) {
+          return `状态“${statePath}”在控件“${objId}”的 ${evName} 事件中被直接修改，不能改为业务管`;
+        }
+      }
+    }
+    for (const [evName, def] of Object.entries(logic.events ?? {})) {
+      if (Array.isArray(def)) {
+        if (collectStepTargets(def).includes(statePath)) {
+          return `状态“${statePath}”在全局事件“${evName}”中被直接修改，不能改为业务管`;
+        }
+      } else if (def && typeof def === "object" && def.owner === "ui") {
+        const rDef = requestEvent(logic, evName);
+        if (rDef && collectStepTargets(rDef.steps).includes(statePath)) {
+          return `状态“${statePath}”在请求事件“${evName}”中被直接修改，不能改为业务管`;
+        }
+      }
+    }
+    for (const [actName, act] of Object.entries(logic.actions ?? {})) {
+      if (!act) continue;
+      if (
+        collectStepTargets(act.onSuccess).includes(statePath) ||
+        collectStepTargets(act.onError).includes(statePath)
+      ) {
+        return `状态“${statePath}”在动作“${actName}”的回调中被直接修改，不能改为业务管`;
+      }
+    }
+  } else {
+    for (const [evName] of Object.entries(logic.events ?? {})) {
+      const bDef = businessEvent(logic, evName);
+      if (bDef && collectStepTargets(bDef.simulate).includes(statePath)) {
+        return `状态“${statePath}”在业务事件“${evName}”的模拟步骤（simulate）中被修改，不能改为界面自管`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 校验业务事件的 simulate 步骤是否合法：目标状态必须存在且归属为 business。
+ */
+export function validateSimulateSteps(logic: Logic, steps: Step[]): string | null {
+  for (const step of steps) {
+    if ("set" in step) {
+      let parsed: ReturnType<typeof parseAssignment>;
+      try {
+        parsed = parseAssignment(step.set);
+      } catch (e) {
+        return `模拟赋值语法无效：${(e as Error).message}`;
+      }
+      const leaf = findStateLeaf(logic, parsed.target);
+      if (!leaf) {
+        return `模拟步骤的目标“${parsed.target}”不是已知状态路径`;
+      }
+      if (!isBusinessState(leaf)) {
+        return `模拟步骤只能修改业务管（owner: business）的状态，“${parsed.target}”是界面自管状态`;
+      }
+      if (parsed.index !== undefined && leaf.type !== "array") {
+        return `模拟步骤的目标“${parsed.target}”不是数组状态（type: array）`;
+      }
+    } else {
+      for (const target of collectStepTargets([step])) {
+        const leaf = findStateLeaf(logic, target);
+        if (!leaf) {
+          return `模拟步骤的目标“${target}”不是已知状态路径`;
+        }
+        if (!isBusinessState(leaf)) {
+          return `模拟步骤只能修改业务管（owner: business）的状态，“${target}”是界面自管状态`;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 // ---------- 纯数据操作函数（供界面与自动化测试共用） ----------
@@ -33,7 +183,12 @@ export function setStateOwnerInDoc(doc: Document, statePath: string, owner: "ui"
   if (owner !== "ui" && owner !== "business") return false;
   const parts = statePath.trim().split(".");
   const node = doc.getIn(["state", ...parts]);
-  if (!isMap(node)) return false;
+  if (!isMap(node) || typeof node.get("type") !== "string") return false;
+  const logic = docToLogic(doc);
+  if (validateStateOwnerChange(logic, statePath.trim(), owner) !== null) {
+    return false;
+  }
+  if (isMap(doc.contents)) doc.contents.flow = false;
   if (owner === "business") {
     doc.setIn(["state", ...parts, "owner"], "business");
   } else {
@@ -64,16 +219,64 @@ export function upsertStateLeafInDoc(
     values?: string[];
     owner?: "ui" | "business";
   },
+  scene?: Scene,
 ): boolean {
   if (!isValidStatePath(statePath)) return false;
   const parts = statePath.trim().split(".");
-  if (!isMap(doc.get("state"))) {
-    doc.set("state", doc.createNode({}));
+  const rootSeg = parts[0]!;
+  const logic = docToLogic(doc);
+
+  // 检查状态根名是否与控件 ID、菜单/菜单项 ID、全局条件名或 objects 键冲突
+  if (isNameTakenAcrossTables(rootSeg, { scene, logic, allowStateRoot: true })) {
+    return false;
   }
+  if (logic.objects && rootSeg in logic.objects) {
+    return false;
+  }
+
+  if (isMap(doc.contents)) doc.contents.flow = false;
+  let stateRoot = doc.get("state");
+  if (!isMap(stateRoot)) {
+    const created = doc.createNode({});
+    ensureBlockStyle(created);
+    doc.set("state", created);
+    stateRoot = doc.get("state");
+  }
+  if (isMap(stateRoot)) stateRoot.flow = false;
+
+  // 检查中间路径是否穿过已有叶子节点
+  for (let i = 1; i < parts.length; i++) {
+    const prefix = ["state", ...parts.slice(0, i)];
+    const prefixNode = doc.getIn(prefix);
+    if (isMap(prefixNode)) {
+      if (typeof prefixNode.get("type") === "string") {
+        // 已是状态叶子，不能再作为父级分组写入子路径
+        return false;
+      }
+      prefixNode.flow = false;
+    } else if (prefixNode !== undefined && prefixNode !== null) {
+      return false;
+    }
+  }
+
+  // 检查目标路径是否已经是非叶子的状态分组，或更新已有叶子时违反归属约束
+  const existing = doc.getIn(["state", ...parts]);
+  if (isMap(existing)) {
+    if (typeof existing.get("type") !== "string") {
+      return false;
+    }
+    const nextOwner = spec.owner === "business" ? "business" : "ui";
+    if (validateStateOwnerChange(logic, statePath.trim(), nextOwner) !== null) {
+      return false;
+    }
+  }
+
   for (let i = 1; i < parts.length; i++) {
     const prefix = ["state", ...parts.slice(0, i)];
     if (!isMap(doc.getIn(prefix))) {
-      doc.setIn(prefix, doc.createNode({}));
+      const groupNode = doc.createNode({});
+      ensureBlockStyle(groupNode);
+      doc.setIn(prefix, groupNode);
     }
   }
 
@@ -101,7 +304,9 @@ export function upsertStateLeafInDoc(
     leafObj.owner = "business";
   }
 
-  doc.setIn(["state", ...parts], doc.createNode(leafObj));
+  const leafNode = doc.createNode(leafObj);
+  ensureBlockStyle(leafNode);
+  doc.setIn(["state", ...parts], leafNode);
   return true;
 }
 
@@ -112,7 +317,8 @@ export function updateStateInitialInDoc(doc: Document, statePath: string, initia
   if (!isValidStatePath(statePath)) return false;
   const parts = statePath.trim().split(".");
   const node = doc.getIn(["state", ...parts]);
-  if (!isMap(node)) return false;
+  if (!isMap(node) || typeof node.get("type") !== "string") return false;
+  if (isMap(doc.contents)) doc.contents.flow = false;
   doc.setIn(["state", ...parts, "initial"], doc.createNode(initial));
   return true;
 }
@@ -124,6 +330,7 @@ export function removeStateLeafInDoc(doc: Document, statePath: string): boolean 
   if (!isValidStatePath(statePath)) return false;
   const parts = statePath.trim().split(".");
   if (!isMap(doc.getIn(["state", ...parts]))) return false;
+  if (isMap(doc.contents)) doc.contents.flow = false;
   doc.deleteIn(["state", ...parts]);
   for (let i = parts.length - 1; i >= 1; i--) {
     const parentPath = ["state", ...parts.slice(0, i)];
@@ -146,19 +353,33 @@ export function upsertBusinessEventInDoc(
   spec: { text?: string; simulateSet?: string; simulateSteps?: Step[] },
 ): boolean {
   const clean = eventName.trim();
-  if (!VALID_SEG_RE.test(clean)) return false;
-  if (!isMap(doc.get("events"))) {
-    doc.set("events", doc.createNode({}));
-  }
+  if (!isValidIdentifier(clean)) return false;
   const steps: Step[] =
     spec.simulateSteps ??
     (spec.simulateSet?.trim() ? [{ set: spec.simulateSet.trim() }] : []);
+  const logic = docToLogic(doc);
+  if (validateSimulateSteps(logic, steps) !== null) {
+    return false;
+  }
+
+  if (isMap(doc.contents)) doc.contents.flow = false;
+  let eventsMap = doc.get("events");
+  if (!isMap(eventsMap)) {
+    const created = doc.createNode({});
+    ensureBlockStyle(created);
+    doc.set("events", created);
+    eventsMap = doc.get("events");
+  }
+  if (isMap(eventsMap)) eventsMap.flow = false;
+
   const evObj: Record<string, unknown> = {
     owner: "business",
   };
   if (spec.text?.trim()) evObj.text = spec.text.trim();
   if (steps.length > 0) evObj.simulate = steps;
-  doc.setIn(["events", clean], doc.createNode(evObj));
+  const evNode = doc.createNode(evObj);
+  ensureBlockStyle(evNode);
+  doc.setIn(["events", clean], evNode);
   return true;
 }
 
@@ -169,13 +390,47 @@ export function upsertGlobalConditionInDoc(
   doc: Document,
   condId: string,
   spec: ConditionDef,
+  scene?: Scene,
 ): boolean {
   const clean = condId.trim();
-  if (!VALID_SEG_RE.test(clean)) return false;
-  if (!isMap(doc.get("conditions"))) {
-    doc.set("conditions", doc.createNode({}));
+  if (!isValidIdentifier(clean)) return false;
+  const logic = docToLogic(doc);
+  if (isNameTakenAcrossTables(clean, { scene, logic, allowCondition: true })) {
+    // 若与 state 根名、scene 节点或菜单/菜单项冲突则拒绝（允许更新同名已有条件）
+    return false;
   }
-  doc.setIn(["conditions", clean], doc.createNode(spec));
+  if (logic.state && clean in logic.state) return false;
+  if (logic.objects && clean in logic.objects) return false;
+
+  if (spec.type === "symbol") {
+    if (!spec.expr?.trim()) return false;
+    try {
+      const ast = parseExpr(spec.expr);
+      for (const p of pathsIn(ast)) {
+        const known =
+          Boolean(findStateLeaf(logic, p)) ||
+          Boolean(findCondition(logic, p)) ||
+          (p.endsWith(".length") && Boolean(findStateLeaf(logic, p.slice(0, -".length".length))));
+        if (!known) return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  if (isMap(doc.contents)) doc.contents.flow = false;
+  let condMap = doc.get("conditions");
+  if (!isMap(condMap)) {
+    const created = doc.createNode({});
+    ensureBlockStyle(created);
+    doc.set("conditions", created);
+    condMap = doc.get("conditions");
+  }
+  if (isMap(condMap)) condMap.flow = false;
+
+  const condNode = doc.createNode(spec);
+  ensureBlockStyle(condNode);
+  doc.setIn(["conditions", clean], condNode);
   return true;
 }
 
@@ -311,7 +566,12 @@ export function renderStateEditPane(): void {
   addBtn.addEventListener("click", () => {
     const path = pathIn.value.trim();
     if (!isValidStatePath(path)) {
-      deps?.toast("状态路径格式无效（如 layer.visible）");
+      deps?.toast("状态路径格式无效（需为 分组.名称，如 layer.visible）");
+      return;
+    }
+    const rootSeg = path.split(".")[0]!;
+    if (isNameTakenAcrossTables(rootSeg, { scene: project.scene, logic: project.logic, allowStateRoot: true })) {
+      deps?.toast(`状态分组名“${rootSeg}”已与控件、菜单或全局条件重名`);
       return;
     }
     const sType = typeSel.value as StateLeaf["type"];
@@ -322,13 +582,25 @@ export function renderStateEditPane(): void {
       deps?.toast("初始值格式与类型不匹配");
       return;
     }
-    void deps?.editLogic((doc) => {
-      upsertStateLeafInDoc(doc, path, {
-        type: sType,
-        initial: parsed.value,
-        owner: sOwner,
+    let applied = false;
+    void deps
+      ?.editLogic((doc) => {
+        applied = upsertStateLeafInDoc(
+          doc,
+          path,
+          {
+            type: sType,
+            initial: parsed.value,
+            owner: sOwner,
+          },
+          project.scene,
+        );
+      }, `添加状态 ${path}`)
+      .then(() => {
+        if (!applied) {
+          deps?.toast(`状态路径“${path}”与已有状态叶子或分组冲突，或归属切换被已有逻辑阻止`);
+        }
       });
-    }, `添加状态 ${path}`);
   });
 
   addForm.append(pathIn, typeSel, initIn, ownerSel, addBtn);
@@ -374,6 +646,11 @@ export function renderStateEditPane(): void {
       uiBtn.title = "标注为界面自管状态 (owner: ui)";
       uiBtn.addEventListener("click", () => {
         if (!isBiz) return;
+        const err = validateStateOwnerChange(project.logic, path, "ui");
+        if (err) {
+          deps?.toast(err);
+          return;
+        }
         void deps?.editLogic((doc) => {
           setStateOwnerInDoc(doc, path, "ui");
         }, `标注状态 ${path} 为 ui`);
@@ -387,6 +664,11 @@ export function renderStateEditPane(): void {
       bizBtn.title = "标注为业务状态 (owner: business)";
       bizBtn.addEventListener("click", () => {
         if (isBiz) return;
+        const err = validateStateOwnerChange(project.logic, path, "business");
+        if (err) {
+          deps?.toast(err);
+          return;
+        }
         void deps?.editLogic((doc) => {
           setStateOwnerInDoc(doc, path, "business");
         }, `标注状态 ${path} 为 business`);
@@ -466,11 +748,17 @@ export function renderStateEditPane(): void {
   addEvBtn.textContent = "+ 添加业务事件";
   addEvBtn.addEventListener("click", () => {
     const name = evNameIn.value.trim();
-    if (!VALID_SEG_RE.test(name)) {
+    if (!isValidIdentifier(name)) {
       deps?.toast("请输入合法的业务事件名");
       return;
     }
     const sim = evSimIn.value.trim();
+    const steps: Step[] = sim ? [{ set: sim }] : [];
+    const simErr = validateSimulateSteps(project.logic, steps);
+    if (simErr) {
+      deps?.toast(simErr);
+      return;
+    }
     void deps?.editLogic((doc) => {
       upsertBusinessEventInDoc(doc, name, { simulateSet: sim });
     }, `添加业务事件 ${name}`);
@@ -488,7 +776,20 @@ export function renderStateEditPane(): void {
     item.dataset.bizeventRow = name;
     const firstSim = bDef.simulate?.[0];
     const simStr = firstSim && "set" in firstSim ? firstSim.set : JSON.stringify(bDef.simulate ?? []);
-    item.innerHTML = `<div class="vf-row-between"><strong>${name}</strong><span class="vf-type-tag">owner: business</span></div><div class="vf-muted-note">simulate: ${simStr}</div>`;
+
+    const headRow = document.createElement("div");
+    headRow.className = "vf-row-between";
+    const nameStrong = document.createElement("strong");
+    nameStrong.textContent = name;
+    const tagSpan = document.createElement("span");
+    tagSpan.className = "vf-type-tag";
+    tagSpan.textContent = "owner: business";
+    headRow.append(nameStrong, tagSpan);
+
+    const simNote = document.createElement("div");
+    simNote.className = "vf-muted-note";
+    simNote.textContent = `simulate: ${simStr}`;
+    item.append(headRow, simNote);
     bizList.append(item);
   }
   bizSec.append(bizList);
@@ -522,13 +823,24 @@ export function renderStateEditPane(): void {
   addCondBtn.addEventListener("click", () => {
     const id = condIdIn.value.trim();
     const expr = condExprIn.value.trim();
-    if (!VALID_SEG_RE.test(id) || !expr) {
+    if (!isValidIdentifier(id) || !expr) {
       deps?.toast("请输入合法的条件名与表达式");
       return;
     }
-    void deps?.editLogic((doc) => {
-      upsertGlobalConditionInDoc(doc, id, { type: "symbol", expr });
-    }, `添加全局条件 ${id}`);
+    if (isNameTakenAcrossTables(id, { scene: project.scene, logic: project.logic, allowCondition: true })) {
+      deps?.toast(`条件名“${id}”已与控件、菜单或状态分组重名`);
+      return;
+    }
+    let applied = false;
+    void deps
+      ?.editLogic((doc) => {
+        applied = upsertGlobalConditionInDoc(doc, id, { type: "symbol", expr }, project.scene);
+      }, `添加全局条件 ${id}`)
+      .then(() => {
+        if (!applied) {
+          deps?.toast(`条件“${id}”名称冲突或表达式引用了未知的状态路径`);
+        }
+      });
   });
   condForm.append(condIdIn, condExprIn, addCondBtn);
   condSec.append(condForm);
@@ -539,7 +851,20 @@ export function renderStateEditPane(): void {
     const item = document.createElement("div");
     item.className = "vf-state-row";
     item.dataset.conditionRow = cid;
-    item.innerHTML = `<div class="vf-row-between"><strong>${cid}</strong><span class="vf-type-tag">${cDef.type}</span></div><div class="vf-muted-note">${cDef.expr ?? cDef.text ?? ""}</div>`;
+
+    const headRow = document.createElement("div");
+    headRow.className = "vf-row-between";
+    const idStrong = document.createElement("strong");
+    idStrong.textContent = cid;
+    const typeSpan = document.createElement("span");
+    typeSpan.className = "vf-type-tag";
+    typeSpan.textContent = cDef.type;
+    headRow.append(idStrong, typeSpan);
+
+    const exprNote = document.createElement("div");
+    exprNote.className = "vf-muted-note";
+    exprNote.textContent = cDef.expr ?? cDef.text ?? "";
+    item.append(headRow, exprNote);
     condList.append(item);
   }
   condSec.append(condList);

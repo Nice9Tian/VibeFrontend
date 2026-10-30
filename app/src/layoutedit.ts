@@ -4,10 +4,11 @@
 // 3) 设置控件尺寸规则（SizePolicy：horizontal / vertical / preferred / min / max / fixed / stretch）与容器排版参数（LayoutSpec）；
 // 4) 摆放与配置主窗口停靠面板（Dock：left / right / top / bottom、标题、标题栏高度、主窗口分区 central / statusBar / docks）；
 // 5) 所有修改均受锁定保护（节点自身或祖先鎖定时禁止修改）并记录进撤销/重做历史。
-import { isMap, type Document } from "yaml";
+import { isMap, isSeq, type Document } from "yaml";
 import type { Value } from "./expr.ts";
 import {
   canNodeHoldChildren,
+  childrenOfNode,
   clampHeight,
   clampWidth,
   computeDockDropTarget,
@@ -15,6 +16,8 @@ import {
   computeSceneLayout,
   CONTAINER_DECL,
   declFor,
+  findStateLeaf,
+  isBusinessState,
   isLayoutPositionedNode,
   isSceneNodeLocked,
   layoutOf,
@@ -41,6 +44,22 @@ const LAYOUT_KIND_TO_TYPE: Record<LayoutKind, string> = {
   stack: "Stack",
 };
 
+function defaultLayoutSpecForKind(kind: LayoutKind): LayoutSpec {
+  if (kind === "grid") return { kind: "grid", columns: 2, padding: 0, gap: 8 };
+  if (kind === "form") return { kind: "form", labelWidth: 96, padding: 0, gap: 8 };
+  return { kind, padding: 0, gap: 8 };
+}
+
+function clearMenuDockReference(scene: Scene, dockId: string): void {
+  for (const n of Object.values(scene.nodes)) {
+    for (const menu of n.menuBar?.menus ?? []) {
+      for (const item of menu.items ?? []) {
+        if (item.dock === dockId) delete item.dock;
+      }
+    }
+  }
+}
+
 // ---------- 纯数据操作函数（供界面与自动化测试共用） ----------
 
 /**
@@ -64,9 +83,11 @@ export function placeNewNodeInScene(
     boxes?: Map<string, ComputedBox>;
     dockArea?: DockArea;
     insertIndex?: number;
+    exactTopLeft?: { x: number; y: number };
   } = {},
 ): boolean {
   if (scene.nodes[id]) return false;
+  if (options.targetContainerId && isSceneNodeLocked(scene, options.targetContainerId)) return false;
   const layoutBoxes = options.boxes ?? computeSceneLayout(scene);
 
   if (type === "Dock") {
@@ -104,16 +125,20 @@ export function placeNewNodeInScene(
   if (!parent || isSceneNodeLocked(scene, targetParentId)) return false;
 
   const pLayout = layoutOf(parent);
+  const minDim = type === "Line" ? 1 : 8;
   const created: SceneNode = {
     type,
-    width: Math.max(8, Math.round(defaultSize.width)),
-    height: Math.max(8, Math.round(defaultSize.height)),
+    width: Math.max(minDim, Math.round(defaultSize.width)),
+    height: Math.max(minDim, Math.round(defaultSize.height)),
   };
   if (options.props && Object.keys(options.props).length > 0) {
     created.props = JSON.parse(JSON.stringify(options.props)) as Record<string, Value>;
   }
   if (options.canHaveChildren || type === "Container" || type === "Dock" || type === "Dialog" || type in LAYOUT_TYPE_KINDS) {
     created.children = [];
+  }
+  if (type in LAYOUT_TYPE_KINDS) {
+    created.layout = defaultLayoutSpecForKind(LAYOUT_TYPE_KINDS[type]);
   }
 
   parent.children ??= [];
@@ -131,8 +156,13 @@ export function placeNewNodeInScene(
     const pBox = layoutBoxes.get(targetParentId);
     const originX = targetParentId === scene.root ? 0 : (pBox?.absX ?? parent.x ?? 0);
     const originY = targetParentId === scene.root ? 0 : (pBox?.absY ?? parent.y ?? 0);
-    created.x = Math.round(px - originX - created.width / 2);
-    created.y = Math.round(py - originY - created.height / 2);
+    if (options.exactTopLeft) {
+      created.x = Math.round(options.exactTopLeft.x - originX);
+      created.y = Math.round(options.exactTopLeft.y - originY);
+    } else {
+      created.x = Math.round(px - originX - created.width / 2);
+      created.y = Math.round(py - originY - created.height / 2);
+    }
     scene.nodes[id] = created;
     if (options.insertIndex !== undefined) {
       const clampedIdx = Math.max(0, Math.min(parent.children.length, options.insertIndex));
@@ -155,6 +185,8 @@ function insertDockIntoWindowList(
   if (winNode.children) {
     winNode.children = winNode.children.filter((cid) => cid !== dockId);
   }
+  if (winNode.central === dockId) delete winNode.central;
+  if (winNode.statusBar === dockId) delete winNode.statusBar;
   const areaIds = winNode.docks.filter((did) => (scene.nodes[did]?.dockArea ?? "left") === area);
   const clamped = Math.max(0, Math.min(areaIds.length, indexInArea));
   if (areaIds.length === 0 || clamped >= areaIds.length) {
@@ -201,6 +233,16 @@ export function insertOrMoveNodeInLayout(
       if (oldParent.central === nodeId) delete oldParent.central;
       if (oldParent.statusBar === nodeId) delete oldParent.statusBar;
     }
+  }
+
+  // 若原节点是 Dock，移入普通容器 children 时自动脱掉 Dock 身份并清理关联菜单引用
+  if (n.type === "Dock" || n.dockArea !== undefined) {
+    delete n.dockArea;
+    delete n.headerHeight;
+    if (n.type === "Dock") {
+      n.type = n.layout ? LAYOUT_KIND_TO_TYPE[n.layout.kind] : "Container";
+    }
+    clearMenuDockReference(scene, nodeId);
   }
 
   target.children ??= [];
@@ -265,6 +307,8 @@ export function updateContainerLayoutSpec(
   const n = scene.nodes[containerId];
   if (!n || isSceneNodeLocked(scene, containerId)) return false;
   if (containerId === scene.root && n.locked) return false;
+  const childIds = childrenOfNode(n);
+  if (childIds.some((cid) => isSceneNodeLocked(scene, cid))) return false;
 
   if (!spec) {
     const hadLayout = Boolean(n.layout || n.type in LAYOUT_TYPE_KINDS);
@@ -296,7 +340,7 @@ export function updateContainerLayoutSpec(
     n.type = LAYOUT_KIND_TO_TYPE[spec.kind];
   }
   n.children ??= [];
-  for (const cid of n.children) {
+  for (const cid of childIds) {
     const child = scene.nodes[cid];
     if (child) {
       delete child.x;
@@ -466,6 +510,11 @@ export function setWindowPartitionRole(
   if (!n || !winNode || nodeId === scene.root) return false;
   if (isSceneNodeLocked(scene, nodeId) || isSceneNodeLocked(scene, scene.root)) return false;
 
+  const prevCentralId = winNode.central && winNode.central !== nodeId ? winNode.central : undefined;
+  const prevStatusId = winNode.statusBar && winNode.statusBar !== nodeId ? winNode.statusBar : undefined;
+  if (role === "central" && prevCentralId && isSceneNodeLocked(scene, prevCentralId)) return false;
+  if (role === "statusBar" && prevStatusId && isSceneNodeLocked(scene, prevStatusId)) return false;
+
   const oldParentId = parentOfNode(scene, nodeId);
   if (oldParentId && oldParentId !== scene.root) {
     if (isSceneNodeLocked(scene, oldParentId)) return false;
@@ -481,25 +530,40 @@ export function setWindowPartitionRole(
   if (role === "dock") {
     return setDockPanelArea(scene, nodeId, dockArea);
   }
+
+  const stripDockMeta = () => {
+    delete n.dockArea;
+    delete n.headerHeight;
+    if (n.type === "Dock") {
+      n.type = n.layout ? LAYOUT_KIND_TO_TYPE[n.layout.kind] : "Container";
+    }
+    clearMenuDockReference(scene, nodeId);
+  };
+
   if (role === "central") {
+    if (prevCentralId && scene.nodes[prevCentralId]) {
+      winNode.children ??= [];
+      if (!winNode.children.includes(prevCentralId)) winNode.children.push(prevCentralId);
+    }
     delete n.x;
     delete n.y;
-    delete n.dockArea;
-    if (n.type === "Dock") n.type = "Container";
+    stripDockMeta();
     winNode.central = nodeId;
     return true;
   }
   if (role === "statusBar") {
+    if (prevStatusId && scene.nodes[prevStatusId]) {
+      winNode.children ??= [];
+      if (!winNode.children.includes(prevStatusId)) winNode.children.push(prevStatusId);
+    }
     delete n.x;
     delete n.y;
-    delete n.dockArea;
-    if (n.type === "Dock") n.type = "Container";
+    stripDockMeta();
     winNode.statusBar = nodeId;
     return true;
   }
 
-  delete n.dockArea;
-  if (n.type === "Dock") n.type = "Container";
+  stripDockMeta();
   winNode.children ??= [];
   if (!winNode.children.includes(nodeId)) winNode.children.push(nodeId);
   return true;
@@ -634,6 +698,11 @@ export function previewPaletteDropOnStage(type: string, px: number, py: number):
   if (!deps || deps.getMode() !== "edit") return;
   const project = deps.getProject();
   const boxes = deps.currentBoxes();
+  const hoveredContainerId = deps.containerAtPoint(px, py);
+  if (isSceneNodeLocked(project.scene, hoveredContainerId)) {
+    hideLayoutDropIndicator();
+    return;
+  }
   if (type === "Dock") {
     if (isSceneNodeLocked(project.scene, project.scene.root)) {
       hideLayoutDropIndicator();
@@ -644,10 +713,9 @@ export function previewPaletteDropOnStage(type: string, px: number, py: number):
     else hideLayoutDropIndicator();
     return;
   }
-  const containerId = deps.containerAtPoint(px, py);
-  const container = project.scene.nodes[containerId];
-  if (container && layoutOf(container) !== null && !isSceneNodeLocked(project.scene, containerId)) {
-    const target = computeLayoutDropTarget(project.scene, containerId, { x: px, y: py }, boxes);
+  const container = project.scene.nodes[hoveredContainerId];
+  if (container && layoutOf(container) !== null) {
+    const target = computeLayoutDropTarget(project.scene, hoveredContainerId, { x: px, y: py }, boxes);
     if (target) {
       showLayoutIndicator(target);
       return;
@@ -663,8 +731,9 @@ export async function commitPaletteDropOnStage(type: string, px: number, py: num
   const project = deps.getProject();
   const decl = declFor(project, type) ?? CONTAINER_DECL;
   const size = decl.defaultSize ?? CONTAINER_DECL.defaultSize!;
-  const targetContainerId = type === "Dock" ? project.scene.root : deps.containerAtPoint(px, py);
-  if (isSceneNodeLocked(project.scene, targetContainerId)) {
+  const hoveredContainerId = deps.containerAtPoint(px, py);
+  const targetContainerId = type === "Dock" ? project.scene.root : hoveredContainerId;
+  if (isSceneNodeLocked(project.scene, hoveredContainerId) || isSceneNodeLocked(project.scene, targetContainerId)) {
     deps.toast("目标容器已锁定，无法放入控件");
     return null;
   }
@@ -1279,7 +1348,7 @@ export function renderLayoutEditPane(): void {
     }
 
     // 子控件顺序与伸缩列表
-    const children = (n.children ?? []).filter((cid) => Boolean(scene.nodes[cid]));
+    const children = childrenOfNode(n).filter((cid) => Boolean(scene.nodes[cid]));
     const childListWrap = document.createElement("div");
     childListWrap.className = "vf-child-list";
     childListWrap.dataset.layoutChildren = selectedId;
@@ -1654,9 +1723,23 @@ export function renderLayoutEditPane(): void {
 
     // 双向绑定 bind（若控件支持 bind）与动态逻辑属性 / click 事件
     const objLogic = project.logic.objects?.[selectedId];
+    const clearFlowOnNode = (node: unknown) => {
+      if (isMap(node)) {
+        node.flow = false;
+        for (const pair of node.items) clearFlowOnNode(pair.value);
+      } else if (isSeq(node)) {
+        node.flow = false;
+        for (const item of node.items) clearFlowOnNode(item);
+      }
+    };
     const ensureObjMap = (doc: Document) => {
+      if (isMap(doc.contents)) doc.contents.flow = false;
       if (!isMap(doc.get("objects"))) doc.set("objects", doc.createNode({}));
+      const objs = doc.get("objects");
+      if (isMap(objs)) objs.flow = false;
       if (!isMap(doc.getIn(["objects", selectedId]))) doc.setIn(["objects", selectedId], doc.createNode({}));
+      const objNode = doc.getIn(["objects", selectedId]);
+      if (isMap(objNode)) objNode.flow = false;
     };
 
     if (decl?.bind) {
@@ -1668,9 +1751,18 @@ export function renderLayoutEditPane(): void {
           fullWidth: true,
           onChange: (val) => {
             if (locked) return;
+            const targetPath = val.trim();
+            if (targetPath) {
+              const leaf = findStateLeaf(project.logic, targetPath);
+              if (leaf && isBusinessState(leaf)) {
+                deps?.toast(`状态“${targetPath}”归业务管，界面不能直接绑定写入`);
+                renderLayoutEditPane();
+                return;
+              }
+            }
             void deps?.editLogic((doc) => {
               ensureObjMap(doc);
-              if (val.trim()) doc.setIn(["objects", selectedId, "bind"], val.trim());
+              if (targetPath) doc.setIn(["objects", selectedId, "bind"], targetPath);
               else doc.deleteIn(["objects", selectedId, "bind"]);
             }, `设置 ${selectedId} 绑定状态`);
           },
@@ -1693,6 +1785,8 @@ export function renderLayoutEditPane(): void {
               if (!isMap(doc.getIn(["objects", selectedId, "props"]))) {
                 doc.setIn(["objects", selectedId, "props"], doc.createNode({}));
               }
+              const propsNode = doc.getIn(["objects", selectedId, "props"]);
+              if (isMap(propsNode)) propsNode.flow = false;
               if (val.trim()) doc.setIn(["objects", selectedId, "props", lpKey], val.trim());
               else doc.deleteIn(["objects", selectedId, "props", lpKey]);
             }, `设置 ${selectedId}.props.${lpKey} 表达式`);
@@ -1728,7 +1822,11 @@ export function renderLayoutEditPane(): void {
               if (!isMap(doc.getIn(["objects", selectedId, "events"]))) {
                 doc.setIn(["objects", selectedId, "events"], doc.createNode({}));
               }
-              doc.setIn(["objects", selectedId, "events", "click"], doc.createNode(parsed));
+              const eventsNode = doc.getIn(["objects", selectedId, "events"]);
+              if (isMap(eventsNode)) eventsNode.flow = false;
+              const clickNode = doc.createNode(parsed);
+              clearFlowOnNode(clickNode);
+              doc.setIn(["objects", selectedId, "events", "click"], clickNode);
             }, `设置 ${selectedId} 点击事件`);
           } catch {
             deps?.toast("请输入合法的 JSON 步骤数组");

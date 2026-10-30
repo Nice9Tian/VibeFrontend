@@ -606,6 +606,70 @@ export function findMenuItem(scene: Scene, id: string): MenuItemSpec | null {
   return null;
 }
 
+/** 表达式关键字与上下文内置保留字：不能作为控件 ID、菜单/菜单项 ID、状态路径段或条件代号。 */
+export const RESERVED_IDENTIFIERS = new Set([
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "and",
+  "or",
+  "not",
+  "value",
+  "param",
+  "result",
+  "error",
+]);
+
+/** 判断标识符是否合法且不在保留字列表中。 */
+export function isValidIdentifier(name: string): boolean {
+  const trimmed = name.trim();
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed) && !RESERVED_IDENTIFIERS.has(trimmed);
+}
+
+/** 收集画布中全部窗口的所有菜单 ID 与菜单项 ID。 */
+export function allSceneMenuIds(scene: Scene): Set<string> {
+  const ids = new Set<string>();
+  for (const winId of allWindowIds(scene)) {
+    const menuBar = scene.nodes[winId]?.menuBar;
+    if (!menuBar) continue;
+    for (const menu of menuBar.menus ?? []) {
+      if (menu.id) ids.add(menu.id);
+      for (const item of menu.items ?? []) {
+        if (item.id) ids.add(item.id);
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * 检查标识符是否已在画布节点、菜单/菜单项、状态根名或全局条件名中被占用。
+ * allowStateRoot 为 true 时允许与已有 state 顶层分组同名（用于在同一状态分组下继续添加子状态）。
+ */
+export function isNameTakenAcrossTables(
+  name: string,
+  options: {
+    scene?: Scene;
+    logic?: Logic;
+    ignoreId?: string;
+    allowStateRoot?: boolean;
+    allowCondition?: boolean;
+  } = {},
+): boolean {
+  const id = name.trim();
+  if (!id || id === options.ignoreId) return false;
+  if (options.scene) {
+    if (options.scene.nodes[id]) return true;
+    if (allSceneMenuIds(options.scene).has(id)) return true;
+  }
+  if (options.logic) {
+    if (!options.allowStateRoot && options.logic.state && id in options.logic.state) return true;
+    if (!options.allowCondition && options.logic.conditions && id in options.logic.conditions) return true;
+  }
+  return false;
+}
+
 export function layoutOf(node: SceneNode | undefined): LayoutSpec | null {
   if (!node) return null;
   if (node.layout) return node.layout;

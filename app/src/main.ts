@@ -17,6 +17,7 @@ import { focusMenuItemInEditor, initMenuEdit, renderMenuEditPane } from "./menue
 import { initStateEdit, renderStateEditPane } from "./stateedit";
 import { initPreviewLauncher, initStandalonePreviewWindow, syncStandalonePreviewTitle } from "./previewwindow";
 import {
+  allSceneMenuIds,
   allWindowIds,
   appendSection,
   BUILTIN_TYPES,
@@ -28,6 +29,7 @@ import {
   getSection,
   isLayoutPositionedNode,
   isPartitionedWindow,
+  isValidIdentifier,
   layoutOf,
   LAYOUT_TYPE_KINDS,
   loadProject,
@@ -91,7 +93,6 @@ import {
   type Side,
 } from "./shapes";
 import {
-  applyAddNodeToScene,
   applyDeleteFromScene,
   applyMoveToScene,
   applyPropsToScene,
@@ -1473,7 +1474,7 @@ function capturePointer(e: PointerEvent): void {
 }
 const MIN_SIZE = 8;
 
-/** 落在哪个能装东西且未锁定的节点里：从鼠标下最里面的节点往外找。 */
+/** 落在哪个能装东西的节点里：从鼠标下最里面的节点往外找（不穿透已锁定的容器，由调用方统一拒绝向锁定容器放入控件）。 */
 function containerAt(px: number, py: number, excludeId?: string): string {
   for (let hit = hitTest(px, py); hit; hit = parentOf(hit)) {
     if (excludeId) {
@@ -1486,7 +1487,7 @@ function containerAt(px: number, py: number, excludeId?: string): string {
       }
       if (insideExcluded) continue;
     }
-    if (canHoldChildren(hit) && !isNodeLocked(project.scene, hit)) return hit;
+    if (canHoldChildren(hit)) return hit;
   }
   return project.scene.root;
 }
@@ -1501,6 +1502,10 @@ overlay.addEventListener("pointerdown", (e) => {
   if (tool.kind === "preset") {
     const preset = tool.preset;
     const parentId = containerAt(pt.x, pt.y);
+    if (isNodeLocked(project.scene, parentId)) {
+      toast("目标容器已锁定，无法放入控件");
+      return;
+    }
     if (preset.type === "Line") {
       gesture = { kind: "line", preset, start: anchorAt(pt, e, null, null), end: null, parentId, rawStart: pt, rawEnd: null };
     } else {
@@ -1512,8 +1517,13 @@ overlay.addEventListener("pointerdown", (e) => {
   }
   if (tool.kind === "node") {
     // 画容器、外部容器或控件：和画图形一样拖出大小
+    const parentId = containerAt(pt.x, pt.y);
+    if (parentId && isNodeLocked(project.scene, parentId)) {
+      toast("目标容器已锁定，无法放入控件");
+      return;
+    }
     const snapped = snapPoint(pt.x, pt.y, snapTargets(null), snapOptions(e));
-    gesture = { kind: "draw", preset: null, nodeType: tool.type, start: { x: snapped.x, y: snapped.y }, rect: null, parentId: containerAt(pt.x, pt.y), targets: snapTargets(null) };
+    gesture = { kind: "draw", preset: null, nodeType: tool.type, start: { x: snapped.x, y: snapped.y }, rect: null, parentId, targets: snapTargets(null) };
     capturePointer(e);
     return;
   }
@@ -2270,11 +2280,12 @@ function newId(type: string, idBase?: string): string {
   const base = idBase || (type === "Container" ? "box" : type === "External" ? "host" : type.charAt(0).toLowerCase() + type.slice(1));
   const taken = new Set([
     ...Object.keys(project.scene.nodes),
+    ...allSceneMenuIds(project.scene),
     ...Object.keys(project.logic.state ?? {}),
     ...Object.keys(project.logic.conditions ?? {}),
   ]);
   for (let i = 1; ; i++) {
-    if (!taken.has(`${base}${i}`)) return `${base}${i}`;
+    if (!taken.has(`${base}${i}`) && isValidIdentifier(`${base}${i}`)) return `${base}${i}`;
   }
 }
 
@@ -2285,39 +2296,31 @@ function idBaseOf(id: string): string {
 
 /** 放一个新节点进画布。rect 是设计窗口里的绝对坐标。 */
 async function createNode(type: string, parentId: string, rect: Rect, props?: Record<string, Value>, idBase?: string): Promise<string> {
+  if (isNodeLocked(project.scene, parentId)) {
+    toast("目标容器已锁定，无法放入控件");
+    return "";
+  }
   const decl = declFor(project, type) ?? CONTAINER_DECL;
   const id = newId(type, idBase);
-  if (type === "Dock") {
-    placeNewNodeInScene(
-      project.scene,
-      type,
-      id,
-      rect.x + rect.width / 2,
-      rect.y + rect.height / 2,
-      { width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) },
-      { props, canHaveChildren: true, boxes: currentLayoutBoxes() },
-    );
-    selectedId = id;
-    await saveScene();
-    return id;
-  }
-  const parentRect = absRect(parentId);
-  const parentNode = node(parentId);
-  const omitCoords =
-    (parentNode ? layoutOf(parentNode) !== null : false) ||
-    (type === "Dock" && parentId === project.scene.root && !!parentNode && isPartitionedWindow(parentNode));
-  const created: SceneNode = {
+  const ok = placeNewNodeInScene(
+    project.scene,
     type,
-    width: Math.max(1, Math.round(rect.width)),
-    height: Math.max(1, Math.round(rect.height)),
-  };
-  if (!omitCoords) {
-    created.x = Math.round(rect.x - (parentId === project.scene.root ? 0 : parentRect.x));
-    created.y = Math.round(rect.y - (parentId === project.scene.root ? 0 : parentRect.y));
+    id,
+    rect.x + rect.width / 2,
+    rect.y + rect.height / 2,
+    { width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) },
+    {
+      targetContainerId: parentId,
+      exactTopLeft: { x: rect.x, y: rect.y },
+      props,
+      canHaveChildren: Boolean(decl.children),
+      boxes: currentLayoutBoxes(),
+    },
+  );
+  if (!ok) {
+    toast("目标容器已锁定，无法放入控件");
+    return "";
   }
-  if (props && Object.keys(props).length > 0) created.props = props;
-  if (decl.children) created.children = [];
-  project.scene = applyAddNodeToScene(project.scene, parentId, id, created);
   selectedId = id;
   await saveScene();
   return id;
@@ -2815,9 +2818,14 @@ async function revertToContainer(id: string): Promise<void> {
 async function renameId(oldId: string, nextId: string): Promise<void> {
   if (nextId === oldId) return;
   if (isNodeLocked(project.scene, oldId)) return toast("控件已锁定，解锁后才能重命名");
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(nextId)) return toast("ID 只能用字母、数字和下划线，且不能以数字开头");
-  if (node(nextId) || project.logic.state?.[nextId] !== undefined || project.logic.conditions?.[nextId]) {
-    return toast(`“${nextId}”已经被别的控件、状态或条件使用`);
+  if (!isValidIdentifier(nextId)) return toast("ID 只能用字母、数字和下划线，不能以数字开头且不能使用保留字");
+  if (
+    node(nextId) ||
+    allSceneMenuIds(project.scene).has(nextId) ||
+    project.logic.state?.[nextId] !== undefined ||
+    project.logic.conditions?.[nextId]
+  ) {
+    return toast(`“${nextId}”已经被别的控件、菜单、状态或条件使用`);
   }
   const doc = parseDocument(project.logicText);
   if (doc.errors.length > 0) return toast("YAML 有语法错误，请先修正再重命名");

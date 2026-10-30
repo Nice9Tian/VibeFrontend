@@ -14,6 +14,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { parseDocument } from "yaml";
 import { check } from "../src/check.ts";
+import { exportQt } from "../src/export/qt.ts";
 import {
   canRedo,
   canUndo,
@@ -26,6 +27,7 @@ import {
   undoHistory,
 } from "../src/history.ts";
 import {
+  insertOrMoveNodeInLayout,
   placeNewNodeInScene,
   reorderChildInLayout,
   setDockPanelArea,
@@ -42,6 +44,7 @@ import {
   bindDockToggleMenuItem,
   removeMenuFromWindow,
   removeMenuItemFromMenu,
+  renameObjectIdInYaml,
   reorderMenuInWindow,
   reorderMenuItemInMenu,
   updateMenuInWindow,
@@ -56,20 +59,26 @@ import {
   findStateLeaf,
   isBusinessState,
   isSceneNodeLocked,
+  isValidIdentifier,
+  parentOfNode,
   type Project,
   type Scene,
 } from "../src/model.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
+  isValidStatePath,
   removeStateLeafInDoc,
+  setStateOwnerInDoc,
   setStateOwnerInYaml,
   updateStateInitialInDoc,
   upsertBusinessEventInDoc,
   upsertGlobalConditionInDoc,
   upsertStateLeafInDoc,
+  validateSimulateSteps,
+  validateStateOwnerChange,
 } from "../src/stateedit.ts";
 import { setNodesLocked } from "../src/transform.ts";
-import { nodeIO } from "./node-io.ts";
+import { nodeIO, readTree } from "./node-io.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..");
@@ -310,6 +319,8 @@ test("锁定节点及父容器继承锁定保护：禁止一切布局、尺寸�
 
   const snapBefore = JSON.stringify(scene);
   assert.equal(placeNewNodeInScene(scene, "Button", "btn3", 80, 160, { width: 80, height: 30 }, { targetContainerId: "layersDock" }), false);
+  // 即使是 Dock 类型，目标容器锁定时也必须拒绝放入
+  assert.equal(placeNewNodeInScene(scene, "Dock", "dockLocked", 80, 160, { width: 120, height: 120 }, { targetContainerId: "layersDock" }), false);
   assert.equal(reorderChildInLayout(scene, "btn1", 1, true), false);
   assert.equal(updateContainerLayoutSpec(scene, "layersDock", { kind: "hbox" }), false);
   assert.equal(updateNodeSizePolicy(scene, "btn1", { stretch: 2 }), false);
@@ -321,6 +332,152 @@ test("锁定节点及父容器继承锁定保护：禁止一切布局、尺寸�
   setNodesLocked(scene, ["layersDock"], false);
   assert.equal(reorderChildInLayout(scene, "btn1", 1, true), true);
   assert.deepEqual(scene.nodes.layersDock.children, ["btn2", "btn1"]);
+
+  // 当容器未锁定但子控件 btn1 锁定时，修改容器排版（如切换为自由定位或改变排版参数）会被拒绝，不改动锁定子控件
+  setNodesLocked(scene, ["btn1"], true);
+  const snapChildLocked = JSON.stringify(scene);
+  assert.equal(updateContainerLayoutSpec(scene, "layersDock", null, true), false);
+  assert.equal(updateContainerLayoutSpec(scene, "layersDock", { kind: "hbox" }), false);
+  assert.equal(JSON.stringify(scene), snapChildLocked, "子控件锁定时不得改写父容器排版参数");
+  setNodesLocked(scene, ["btn1"], false);
+});
+
+test("审核回归：主窗口分区切换防孤儿/防双挂载、Dock 移入普通容器降级及导出 Qt 合法性", async () => {
+  const animeanProj = await loadProjectFiles(nodeIO(animeanDesignDir), null);
+  const scene = cloneScene(animeanProj.scene);
+  assert.equal(scene.nodes.window.central, "centralArea");
+
+  // 新增一个容器 otherBox，验证替换 centralArea 时：
+  // 1) 若原 centralArea 锁定，则拒绝替换；
+  // 2) 若原 centralArea 未锁定，替换后原 centralArea 降级保留在 window.children 中，绝不变成无父孤儿节点。
+  placeNewNodeInScene(scene, "VBox", "otherBox", 500, 300, { width: 400, height: 300 });
+  assert.equal(scene.nodes.otherBox.layout?.kind, "vbox", "新建 VBox 应自动初始化 layout: { kind: 'vbox' }");
+
+  setNodesLocked(scene, ["centralArea"], true);
+  assert.equal(setWindowPartitionRole(scene, "otherBox", "central"), false, "原 central 锁定时应拒绝替换");
+  assert.equal(scene.nodes.window.central, "centralArea");
+
+  setNodesLocked(scene, ["centralArea"], false);
+  assert.equal(setWindowPartitionRole(scene, "otherBox", "central"), true);
+  assert.equal(scene.nodes.window.central, "otherBox");
+  assert.equal(parentOfNode(scene, "centralArea"), "window", "被顶替的旧 centralArea 必须保留在 window.children 中而不变成孤儿");
+
+  // 把当前作为 central 的 otherBox 直接通过 setDockPanelArea 改为停靠面板：window.central 必须同步清空，不得双重挂载
+  assert.equal(setDockPanelArea(scene, "otherBox", "right"), true);
+  assert.equal(scene.nodes.window.central, undefined, "central 节点转为 Dock 后应清理 window.central");
+  assert.ok(scene.nodes.window.docks?.includes("otherBox"));
+
+  // 恢复 centralArea 为 central，并把原本是 Dock 的 layersDock 移入 centralArea.children：
+  // 必须自动清理 Dock 专属字段（dockArea、headerHeight、type: Dock -> VBox）以及菜单项关联
+  assert.equal(setWindowPartitionRole(scene, "centralArea", "central"), true);
+  assert.equal(insertOrMoveNodeInLayout(scene, "layersDock", "centralArea", 0), true);
+  assert.equal(scene.nodes.window.docks?.includes("layersDock"), false);
+  assert.equal(scene.nodes.layersDock.type, "VBox");
+  assert.equal(scene.nodes.layersDock.dockArea, undefined);
+  assert.equal(scene.nodes.layersDock.headerHeight, undefined);
+  assert.equal(findMenuItem(scene, "menuToggleLayers")?.dock, undefined);
+
+  // 验证此时项目检查 0 错误，且导出 Qt 生成的 Ui.cpp 不会重复把 layersDock 声明为 QDockWidget
+  const testProj: Project = { ...animeanProj, scene };
+  const errs = check(testProj).filter((p) => p.level === "error");
+  assert.deepEqual(errs, []);
+  const qtRes = exportQt(
+    testProj,
+    {
+      runtimeJs: "",
+      generated: readTree(path.join(repoRoot, "app", "qt-templates", "generated")),
+      scaffold: readTree(path.join(repoRoot, "app", "qt-templates", "scaffold")),
+    },
+    null,
+  );
+  assert.deepEqual(qtRes.problems.filter((p) => p.level === "error"), []);
+  const uiCpp = qtRes.files.get("ui_binding/Ui.cpp") ?? "";
+  const dockDeclMatches = uiCpp.match(/QDockWidget\s*\*\s*layersDock\b/g) ?? [];
+  assert.equal(dockDeclMatches.length, 0, "降级为普通子容器后不应再生成 QDockWidget* layersDock");
+});
+
+test("审核回归：状态归属冲突拦截、simulate 目标归属校验、跨表唯一性、保留字拦截与菜单项重命名同步 YAML", () => {
+  // 1) 保留字与状态路径段数校验
+  assert.equal(isValidIdentifier("true"), false);
+  assert.equal(isValidIdentifier("and"), false);
+  assert.equal(isValidIdentifier("value"), false);
+  assert.equal(isValidIdentifier("validName1"), true);
+  assert.equal(isValidStatePath("singleSeg"), false, "单段路径不得作为状态路径");
+  assert.equal(isValidStatePath("true.flag"), false, "含保留字的路径应被拒绝");
+  assert.equal(isValidStatePath("layer.visible"), true);
+
+  // 2) 状态叶子与分组前缀覆盖保护、归属双向冲突拦截与 simulate 目标校验
+  const yamlText = [
+    "state:",
+    "  layer:",
+    "    visible:",
+    "      type: boolean",
+    "      initial: true",
+    "      owner: business",
+    "  layers:",
+    "    selectedIndex:",
+    "      type: number",
+    "      initial: 0",
+    "events:",
+    "  layerToggleVisible:",
+    "    owner: business",
+    "    simulate:",
+    "      - set: layer.visible = not layer.visible",
+    "objects:",
+    "  layerList:",
+    "    bind: layers.selectedIndex",
+    "",
+  ].join("\n");
+  const doc = parseDocument(yamlText);
+  const scene = makeEmptyScene();
+  placeNewNodeInScene(scene, "Dock", "layersDock", 60, 200, { width: 240, height: 580 });
+  addMenuToWindow(scene, { id: "viewMenu", title: "视图" });
+  addMenuItemToMenu(scene, "viewMenu", { id: "menuSave", text: "保存" });
+
+  // 穿过已有叶子 layer.visible 写入子路径 layer.visible.sub 应拒绝；覆盖已有分组 layer 应拒绝
+  assert.equal(upsertStateLeafInDoc(doc, "layer.visible.sub", { type: "boolean", initial: false }, scene), false);
+  assert.equal(upsertStateLeafInDoc(doc, "layer", { type: "string", initial: "" }, scene), false);
+
+  // layer.visible 在业务事件 simulate 中被修改，禁止切回 ui
+  assert.ok(validateStateOwnerChange(doc.toJSON(), "layer.visible", "ui") !== null);
+  assert.equal(setStateOwnerInDoc(doc, "layer.visible", "ui"), false);
+
+  // layers.selectedIndex 被 layerList.bind 绑定，禁止切为 business
+  assert.ok(validateStateOwnerChange(doc.toJSON(), "layers.selectedIndex", "business") !== null);
+  assert.equal(setStateOwnerInDoc(doc, "layers.selectedIndex", "business"), false);
+
+  // 业务事件 simulate 试图修改 ui 状态 layers.selectedIndex 或不存在的状态时应被拒绝
+  assert.ok(validateSimulateSteps(doc.toJSON(), [{ set: "layers.selectedIndex = 1" }]) !== null);
+  assert.equal(upsertBusinessEventInDoc(doc, "badBizEvent", { simulateSet: "layers.selectedIndex = 1" }), false);
+  assert.equal(upsertBusinessEventInDoc(doc, "badBizEvent2", { simulateSet: "unknown.state = 1" }), false);
+
+  // 3) 跨表重名拦截（控件、菜单/菜单项、状态根名、全局条件）
+  assert.equal(upsertStateLeafInDoc(doc, "layersDock.flag", { type: "boolean", initial: false }, scene), false, "状态根名与控件重名应拒绝");
+  assert.equal(upsertStateLeafInDoc(doc, "viewMenu.flag", { type: "boolean", initial: false }, scene), false, "状态根名与菜单重名应拒绝");
+  assert.equal(upsertGlobalConditionInDoc(doc, "layers", { type: "symbol", expr: "layers.selectedIndex >= 0" }, scene), false, "条件名与状态根名重名应拒绝");
+  assert.equal(upsertGlobalConditionInDoc(doc, "layersDock", { type: "symbol", expr: "layers.selectedIndex >= 0" }, scene), false, "条件名与控件重名应拒绝");
+  assert.equal(upsertGlobalConditionInDoc(doc, "menuSave", { type: "symbol", expr: "layers.selectedIndex >= 0" }, scene), false, "条件名与菜单项重名应拒绝");
+  assert.equal(addMenuToWindow(scene, { id: "layers", title: "冲突菜单" }, "window", doc.toJSON()), null, "菜单 ID 与状态根名重名应拒绝");
+  assert.equal(addMenuItemToMenu(scene, "viewMenu", { id: "layersDock", text: "冲突项" }, "window", doc.toJSON()), null, "菜单项 ID 与控件重名应拒绝");
+
+  // 4) 菜单项重命名时同步更新 YAML 中的 objects.<itemId>
+  const yamlWithMenuObj = [
+    "state:",
+    "  layers:",
+    "    selectedIndex:",
+    "      type: number",
+    "      initial: 0",
+    "objects:",
+    "  menuSave:",
+    "    props:",
+    "      enabled: layers.selectedIndex >= 0",
+    "",
+  ].join("\n");
+  const logicObj = parseDocument(yamlWithMenuObj).toJSON();
+  assert.equal(updateMenuItemInMenu(scene, "menuSave", { id: "menuSaveProject" }, "window", logicObj), true);
+  const renamedYaml = renameObjectIdInYaml(yamlWithMenuObj, "menuSave", "menuSaveProject");
+  assert.ok(renamedYaml.includes("menuSaveProject:"), "YAML 中 objects.menuSave 应同步重命名为 menuSaveProject");
+  assert.ok(!renamedYaml.includes("menuSave:"), "YAML 中不应残留旧键 menuSave");
 });
 
 // ---------- 2. 真实无头浏览器（Headless Chrome + CDP 真实鼠标事件）端到端测试 ----------
@@ -892,11 +1049,20 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     await cdp.setInputValue('[data-logic-prop="text"]', 'layer.visible ? "隐藏图层" : "显示图层"');
     await cdp.setInputValue('[data-logic-click-steps="toggleVisibleBtn"]', JSON.stringify([{ emit: "layerToggleVisible" }]));
 
-    // 8) 在真实浏览器中验证锁定保护与撤销/重做
+    // 8) 在真实浏览器中验证锁定保护（含向已锁定容器拖拽控件拒绝穿透）与撤销/重做
     await selectLayerInTree("layersDock");
     await cdp.clickSelector('[data-action="lock"]');
     const lockBannerExists = await cdp.eval<boolean>(`Boolean(document.querySelector('[data-layout-locked="true"]'))`);
     assert.equal(lockBannerExists, true, "锁定 layersDock 后布局页签应显示锁定横幅并禁用控件");
+
+    // 实操验证审核项 1：当 layersDock 已锁定时，从素材栏拖 Button 到 layersDock (100, 200) 必须被拦截，不得穿透落入 window
+    const sceneWhileDockLocked = fs.readFileSync(path.join(tmpDir, "ui", "scene.json"), "utf8");
+    await dragFromPaletteToStage("Button", 100, 200);
+    assert.equal(
+      fs.readFileSync(path.join(tmpDir, "ui", "scene.json"), "utf8"),
+      sceneWhileDockLocked,
+      "向已锁定的 layersDock 拖入控件应被拦截，scene.json 不得改变",
+    );
 
     // 点击撤销按钮恢复解锁状态，再点击重做与撤销验证历史栈工作正常
     await cdp.clickSelector('[data-action="undo"]');
@@ -909,16 +1075,73 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
 
     await cdp.clickSelector('[data-action="undo"]');
 
+    // 实操验证审核项 1（嵌套子容器锁定）：单独锁定子容器 layerToolbar 后，向其内部 (100, 78) 拖入 Button 不得穿透落入父容器 layersDock
+    await selectLayerInTree("layerToolbar");
+    await cdp.clickSelector('[data-action="lock"]');
+    const sceneWhileToolbarLocked = fs.readFileSync(path.join(tmpDir, "ui", "scene.json"), "utf8");
+    await dragFromPaletteToStage("Button", 100, 78);
+    assert.equal(
+      fs.readFileSync(path.join(tmpDir, "ui", "scene.json"), "utf8"),
+      sceneWhileToolbarLocked,
+      "向已锁定的子容器 layerToolbar 拖入控件应被拦截，不得穿透落入未锁定的父容器 layersDock",
+    );
+    await cdp.clickSelector('[data-action="undo"]');
+
+    // 实操验证审核项 3：选中分区主窗口 window 时，布局页签应通过 childrenOfNode 列出分区子节点 layersDock
+    await selectLayerInTree("window");
+    const winHasDockRow = await cdp.eval<boolean>(
+      `Boolean(document.querySelector('[data-layout-children="window"] [data-child-row="layersDock"]'))`,
+    );
+    assert.equal(winHasDockRow, true, "选中分区主窗口 window 时布局页签应显示其分区子节点列表");
+
+    // 实操验证审核项 5：在菜单页签中尝试把菜单项 menuToggleLayers 重命名为已存在的控件名 layersDock 或保留字 true 均被拦截
+    await cdp.clickSelector("#tab-menu");
+    await cdp.setInputValue('[data-item-id="menuToggleLayers"]', "layersDock");
+    await cdp.setInputValue('[data-item-id="menuToggleLayers"]', "true");
+    const sceneAfterInvalidMenuRename = JSON.parse(fs.readFileSync(path.join(tmpDir, "ui", "scene.json"), "utf8")) as Scene;
+    assert.ok(findMenuItem(sceneAfterInvalidMenuRename, "menuToggleLayers"), "与控件重名或使用保留字重命名菜单项应被拒绝");
+    await cdp.clickSelector("#tab-layout");
+
+    // 实操验证审核项 4 与审核项 6：
+    // - 在状态页签中点击已被业务事件 simulate 修改的 layer.visible 的 ui 按钮、以及已被 layerList.bind 绑定的 layers.selectedIndex 的 business 按钮，均应被拦截；
+    // - 含有 `<` 号的条件表达式（canMoveLayerDown）必须按纯文本渲染，不得被当作 HTML 标签吞掉或注入节点；
+    // - 磁盘上的 logic/app.logic.yaml 必须为多行块格式（不含 state: { / objects: { 单行流式映射）。
+    await cdp.clickSelector("#tab-state");
+    await cdp.clickSelector('[data-state-owner-ui="layer.visible"]');
+    await cdp.clickSelector('[data-state-owner-business="layers.selectedIndex"]');
+    await cdp.setInputValue("[data-new-bizevent-name]", "badSimEvent");
+    await cdp.setInputValue("[data-new-bizevent-sim]", "layers.selectedIndex = 0");
+    await cdp.clickSelector('[data-state-action="add-bizevent"]');
+
+    const condDomCheck = await cdp.eval<{ text: string; childCount: number }>(`(() => {
+      const note = document.querySelector('[data-condition-row="canMoveLayerDown"] .vf-muted-note');
+      return { text: note?.textContent ?? "", childCount: note?.childElementCount ?? -1 };
+    })()`);
+    assert.equal(
+      condDomCheck.text,
+      "layers.selectedIndex >= 0 and layers.selectedIndex < layers.items.length - 1",
+      "含 < 的表达式应完整以纯文本显示，不被当作 HTML 标签截断",
+    );
+    assert.equal(condDomCheck.childCount, 0, "状态面板渲染表达式时不得注入任何 HTML 子元素");
+
+    const savedLogicText = fs.readFileSync(path.join(tmpDir, "logic", "app.logic.yaml"), "utf8");
+    assert.ok(!savedLogicText.includes("state: {"), "logic/app.logic.yaml 的 state 应使用多行块格式而非单行流式 {}");
+    assert.ok(!savedLogicText.includes("objects: {"), "logic/app.logic.yaml 的 objects 应使用多行块格式而非单行流式 {}");
+    assert.ok(!savedLogicText.includes("events: {"), "logic/app.logic.yaml 的 events 应使用多行块格式而非单行流式 {}");
+    assert.ok(!savedLogicText.includes("conditions: {"), "logic/app.logic.yaml 的 conditions 应使用多行块格式而非单行流式 {}");
+
     // 9) 加载搭出来的项目与 examples/animean/design，检查无错误并对比运行结果
     const builtProject = await loadProjectFiles(nodeIO(tmpDir), null);
     const problems = check(builtProject);
     const errors = problems.filter((p) => p.level === "error");
     assert.deepEqual(errors, [], `搭出的项目不应有任何检查错误: ${JSON.stringify(errors)}`);
 
-    // 验证 layer.visible 确实被标注为 owner: business
+    // 验证 layer.visible 仍为 business，layers.selectedIndex 仍为 ui，且非法业务事件未写入
     const visLeaf = findStateLeaf(builtProject.logic, "layer.visible");
     assert.ok(visLeaf);
     assert.equal(visLeaf.owner, "business");
+    assert.equal(findStateLeaf(builtProject.logic, "layers.selectedIndex")?.owner, undefined);
+    assert.equal(builtProject.logic.events?.badSimEvent, undefined);
     assert.equal(allStateLeaves(builtProject.logic).length, 5);
 
     const animeanProject = await loadProjectFiles(nodeIO(animeanDesignDir), null);

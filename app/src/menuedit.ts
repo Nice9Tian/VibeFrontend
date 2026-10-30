@@ -3,9 +3,13 @@
 // 2) 增删改查与排序菜单项（id、text、shortcut、checkable、checked、关联停靠面板 dock、触发全局事件 emit）；
 // 3) 一键为停靠面板（Dock）生成或绑定“视图”菜单中的开关菜单项；
 // 4) 所有操作受窗口锁定状态保护并记录进撤销/重做历史。
+import { isMap, parseDocument } from "yaml";
 import {
   allMenuItems,
+  isNameTakenAcrossTables,
   isSceneNodeLocked,
+  isValidIdentifier,
+  type Logic,
   type MenuBarSpec,
   type MenuItemSpec,
   type MenuSpec,
@@ -13,22 +17,38 @@ import {
   type Scene,
 } from "./model.ts";
 
-const VALID_ID_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const YAML_OUTPUT = { lineWidth: 0 };
 
-function uniqueMenuId(scene: Scene, base: string): string {
-  const clean = VALID_ID_RE.test(base) ? base : "menu";
-  const taken = new Set<string>(Object.keys(scene.nodes));
-  for (const win of Object.values(scene.nodes)) {
-    for (const m of win.menuBar?.menus ?? []) {
-      taken.add(m.id);
-      for (const it of m.items ?? []) taken.add(it.id);
-    }
-  }
-  if (!taken.has(clean)) return clean;
+function uniqueMenuId(scene: Scene, base: string, logic?: Logic): string {
+  const clean = isValidIdentifier(base) ? base.trim() : "menu";
+  if (!isNameTakenAcrossTables(clean, { scene, logic })) return clean;
   for (let i = 1; ; i++) {
     const candidate = `${clean}${i}`;
-    if (!taken.has(candidate)) return candidate;
+    if (!isNameTakenAcrossTables(candidate, { scene, logic })) return candidate;
   }
+}
+
+/**
+ * 在 YAML 文本中将 objects.<oldId> 条目及其内部局部条件引用重命名为 nextId。
+ */
+export function renameObjectIdInYaml(yamlText: string, oldId: string, nextId: string): string {
+  if (!yamlText.trim() || oldId === nextId) return yamlText;
+  const doc = parseDocument(yamlText);
+  if (doc.errors.length > 0) return yamlText;
+  let changed = false;
+  const objects = doc.get("objects");
+  if (isMap(objects)) {
+    for (const pair of objects.items) {
+      const key = pair.key as { value?: unknown };
+      if (key.value === oldId) {
+        key.value = nextId;
+        changed = true;
+      }
+    }
+  }
+  if (!changed) return yamlText;
+  const escaped = oldId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return doc.toString(YAML_OUTPUT).replace(new RegExp(`(?<![\\w.])${escaped}\\.(?=[A-Za-z_])`, "g"), `${nextId}.`);
 }
 
 // ---------- 纯数据操作函数（供界面与自动化测试共用） ----------
@@ -59,12 +79,15 @@ export function addMenuToWindow(
   scene: Scene,
   menu: { id?: string; title: string },
   windowId = scene.root,
+  logic?: Logic,
 ): string | null {
   const bar = ensureWindowMenuBar(scene, windowId);
   if (!bar) return null;
   const rawId = menu.id?.trim() ?? "";
-  if (rawId && !VALID_ID_RE.test(rawId)) return null;
-  const id = rawId ? uniqueMenuId(scene, rawId) : uniqueMenuId(scene, "menu");
+  if (rawId) {
+    if (!isValidIdentifier(rawId) || isNameTakenAcrossTables(rawId, { scene, logic })) return null;
+  }
+  const id = rawId || uniqueMenuId(scene, "menu", logic);
   const created: MenuSpec = {
     id,
     title: menu.title.trim() || id,
@@ -79,6 +102,7 @@ export function updateMenuInWindow(
   menuId: string,
   patch: { id?: string; title?: string },
   windowId = scene.root,
+  logic?: Logic,
 ): boolean {
   const win = scene.nodes[windowId];
   if (!win?.menuBar?.menus || isSceneNodeLocked(scene, windowId) || win.locked) return false;
@@ -86,9 +110,9 @@ export function updateMenuInWindow(
   if (!target) return false;
   if (patch.id !== undefined) {
     const nextId = patch.id.trim();
-    if (!VALID_ID_RE.test(nextId)) return false;
+    if (!isValidIdentifier(nextId)) return false;
     if (nextId !== menuId) {
-      if (scene.nodes[nextId] || win.menuBar.menus.some((m) => m.id === nextId)) return false;
+      if (isNameTakenAcrossTables(nextId, { scene, logic, ignoreId: menuId })) return false;
       target.id = nextId;
     }
   }
@@ -126,14 +150,17 @@ export function addMenuItemToMenu(
   menuId: string,
   item: Partial<MenuItemSpec> & { text: string },
   windowId = scene.root,
+  logic?: Logic,
 ): string | null {
   const bar = ensureWindowMenuBar(scene, windowId);
   if (!bar) return null;
   const menu = bar.menus.find((m) => m.id === menuId);
   if (!menu) return null;
   const rawId = item.id?.trim() ?? "";
-  if (rawId && !VALID_ID_RE.test(rawId)) return null;
-  const id = rawId ? uniqueMenuId(scene, rawId) : uniqueMenuId(scene, "menuItem");
+  if (rawId) {
+    if (!isValidIdentifier(rawId) || isNameTakenAcrossTables(rawId, { scene, logic })) return null;
+  }
+  const id = rawId || uniqueMenuId(scene, "menuItem", logic);
   const created: MenuItemSpec = {
     id,
     text: item.text.trim() || id,
@@ -158,6 +185,7 @@ export function updateMenuItemInMenu(
   itemId: string,
   patch: Partial<MenuItemSpec>,
   windowId = scene.root,
+  logic?: Logic,
 ): boolean {
   const win = scene.nodes[windowId];
   if (!win?.menuBar?.menus || isSceneNodeLocked(scene, windowId) || win.locked) return false;
@@ -173,10 +201,14 @@ export function updateMenuItemInMenu(
 
   if (patch.id !== undefined) {
     const nextId = patch.id.trim();
-    if (!VALID_ID_RE.test(nextId)) return false;
+    if (!isValidIdentifier(nextId)) return false;
     if (nextId !== itemId) {
-      if (scene.nodes[nextId] || allMenuItems(scene).some((entry) => entry.item.id === nextId)) return false;
+      if (isNameTakenAcrossTables(nextId, { scene, logic, ignoreId: itemId })) return false;
       target.id = nextId;
+      if (logic?.objects && itemId in logic.objects) {
+        logic.objects[nextId] = logic.objects[itemId];
+        delete logic.objects[itemId];
+      }
     }
   }
   if (patch.text !== undefined && patch.text.trim()) {
@@ -248,17 +280,21 @@ export function bindDockToggleMenuItem(
   dockId: string,
   options: { menuId?: string; menuTitle?: string; itemId?: string; text?: string } = {},
   windowId = scene.root,
+  logic?: Logic,
 ): string | null {
   const dockNode = scene.nodes[dockId];
   if (!dockNode || dockNode.type !== "Dock") return null;
   const bar = ensureWindowMenuBar(scene, windowId);
   if (!bar) return null;
 
-  const menuId = options.menuId?.trim() || "viewMenu";
+  const rawMenuId = options.menuId?.trim() || "viewMenu";
   const menuTitle = options.menuTitle?.trim() || "视图";
-  let menu = bar.menus.find((m) => m.id === menuId || m.title === menuTitle);
+  let menu = bar.menus.find((m) => m.id === rawMenuId || m.title === menuTitle);
   if (!menu) {
-    menu = { id: menuId, title: menuTitle, items: [] };
+    const safeMenuId = isNameTakenAcrossTables(rawMenuId, { scene, logic })
+      ? uniqueMenuId(scene, rawMenuId, logic)
+      : rawMenuId;
+    menu = { id: safeMenuId, title: menuTitle, items: [] };
     bar.menus.push(menu);
   }
 
@@ -272,9 +308,12 @@ export function bindDockToggleMenuItem(
   }
 
   const cap = dockId.replace(/Dock$/, "");
-  const defaultItemId =
+  const baseItemId =
     options.itemId?.trim() ||
     `menuToggle${cap.charAt(0).toUpperCase()}${cap.slice(1)}`;
+  const defaultItemId = isNameTakenAcrossTables(baseItemId, { scene, logic })
+    ? uniqueMenuId(scene, baseItemId, logic)
+    : baseItemId;
   return addMenuItemToMenu(
     scene,
     menu.id,
@@ -286,6 +325,7 @@ export function bindDockToggleMenuItem(
       checked: true,
     },
     windowId,
+    logic,
   );
 }
 
@@ -411,7 +451,7 @@ export function renderMenuEditPane(): void {
       b.disabled = locked;
       b.textContent = bound ? `✓ ${dNode.title ?? did} (${bound.item.id})` : `+ 绑定 ${dNode.title ?? did}`;
       b.addEventListener("click", () => {
-        const itemId = bindDockToggleMenuItem(scene, did, {}, winId);
+        const itemId = bindDockToggleMenuItem(scene, did, {}, winId, project.logic);
         if (itemId) {
           void deps?.saveScene({ label: `绑定停靠面板 ${did} 菜单项` });
         }
@@ -446,9 +486,9 @@ export function renderMenuEditPane(): void {
   addMenuBtn.addEventListener("click", () => {
     const title = newMenuTitleInput.value.trim() || "新菜单";
     const id = newMenuIdInput.value.trim() || undefined;
-    const createdId = addMenuToWindow(scene, { id, title }, winId);
+    const createdId = addMenuToWindow(scene, { id, title }, winId, project.logic);
     if (!createdId) {
-      deps?.toast("菜单 ID 不合法或窗口已锁定");
+      deps?.toast("菜单 ID 不合法、已被占用或窗口已锁定");
       return;
     }
     newMenuIdInput.value = "";
@@ -485,7 +525,7 @@ export function renderMenuEditPane(): void {
     idIn.disabled = locked;
     idIn.title = "菜单 ID";
     idIn.addEventListener("change", () => {
-      if (updateMenuInWindow(scene, menu.id, { id: idIn.value }, winId)) {
+      if (updateMenuInWindow(scene, menu.id, { id: idIn.value }, winId, project.logic)) {
         void deps?.saveScene({ label: `重命名菜单 ${menu.id}` });
       } else {
         deps?.toast("菜单 ID 无效或已被占用");
@@ -501,7 +541,7 @@ export function renderMenuEditPane(): void {
     titleIn.disabled = locked;
     titleIn.title = "菜单显示标题";
     titleIn.addEventListener("change", () => {
-      if (updateMenuInWindow(scene, menu.id, { title: titleIn.value }, winId)) {
+      if (updateMenuInWindow(scene, menu.id, { title: titleIn.value }, winId, project.logic)) {
         void deps?.saveScene({ label: `修改菜单标题 ${titleIn.value}` });
       }
     });
@@ -571,8 +611,11 @@ export function renderMenuEditPane(): void {
       itIdIn.disabled = locked;
       itIdIn.title = "菜单项 ID";
       itIdIn.addEventListener("change", () => {
-        if (updateMenuItemInMenu(scene, item.id, { id: itIdIn.value }, winId)) {
-          void deps?.saveScene({ label: `重命名菜单项 ${item.id}` });
+        const oldItemId = item.id;
+        const nextItemId = itIdIn.value.trim();
+        if (updateMenuItemInMenu(scene, oldItemId, { id: nextItemId }, winId, project.logic)) {
+          const nextLogicText = renameObjectIdInYaml(project.logicText, oldItemId, nextItemId);
+          void deps?.saveScene({ nextLogicText, label: `重命名菜单项 ${oldItemId} -> ${nextItemId}` });
         } else {
           deps?.toast("菜单项 ID 无效或已被占用");
           renderMenuEditPane();
@@ -587,7 +630,7 @@ export function renderMenuEditPane(): void {
       itTextIn.disabled = locked;
       itTextIn.title = "菜单项文字";
       itTextIn.addEventListener("change", () => {
-        if (updateMenuItemInMenu(scene, item.id, { text: itTextIn.value }, winId)) {
+        if (updateMenuItemInMenu(scene, item.id, { text: itTextIn.value }, winId, project.logic)) {
           void deps?.saveScene({ label: `修改菜单项文字 ${itTextIn.value}` });
         }
       });
@@ -655,7 +698,7 @@ export function renderMenuEditPane(): void {
         dockSel.append(opt);
       }
       dockSel.addEventListener("change", () => {
-        if (updateMenuItemInMenu(scene, item.id, { dock: dockSel.value || undefined }, winId)) {
+        if (updateMenuItemInMenu(scene, item.id, { dock: dockSel.value || undefined }, winId, project.logic)) {
           void deps?.saveScene({ label: `设置菜单项 ${item.id} 关联停靠面板` });
         }
       });
@@ -672,7 +715,7 @@ export function renderMenuEditPane(): void {
       emitIn.value = item.emit ?? "";
       emitIn.disabled = locked;
       emitIn.addEventListener("change", () => {
-        if (updateMenuItemInMenu(scene, item.id, { emit: emitIn.value }, winId)) {
+        if (updateMenuItemInMenu(scene, item.id, { emit: emitIn.value }, winId, project.logic)) {
           void deps?.saveScene({ label: `设置菜单项 ${item.id} 触发事件` });
         }
       });
@@ -689,7 +732,7 @@ export function renderMenuEditPane(): void {
       scIn.value = item.shortcut ?? "";
       scIn.disabled = locked;
       scIn.addEventListener("change", () => {
-        if (updateMenuItemInMenu(scene, item.id, { shortcut: scIn.value }, winId)) {
+        if (updateMenuItemInMenu(scene, item.id, { shortcut: scIn.value }, winId, project.logic)) {
           void deps?.saveScene({ label: `修改菜单项 ${item.id} 快捷键` });
         }
       });
@@ -706,7 +749,7 @@ export function renderMenuEditPane(): void {
       inCheckable.checked = Boolean(item.checkable);
       inCheckable.disabled = locked;
       inCheckable.addEventListener("change", () => {
-        if (updateMenuItemInMenu(scene, item.id, { checkable: inCheckable.checked }, winId)) {
+        if (updateMenuItemInMenu(scene, item.id, { checkable: inCheckable.checked }, winId, project.logic)) {
           void deps?.saveScene({ label: `修改菜单项 ${item.id} 可勾选状态` });
         }
       });
@@ -720,7 +763,7 @@ export function renderMenuEditPane(): void {
       inChecked.checked = Boolean(item.checked);
       inChecked.disabled = locked || !item.checkable;
       inChecked.addEventListener("change", () => {
-        if (updateMenuItemInMenu(scene, item.id, { checked: inChecked.checked }, winId)) {
+        if (updateMenuItemInMenu(scene, item.id, { checked: inChecked.checked }, winId, project.logic)) {
           void deps?.saveScene({ label: `修改菜单项 ${item.id} 默认勾选` });
         }
       });
@@ -773,9 +816,9 @@ export function renderMenuEditPane(): void {
       const text = addTextIn.value.trim() || "新菜单项";
       const id = addIdIn.value.trim() || undefined;
       const dock = addDockSel.value || undefined;
-      const createdId = addMenuItemToMenu(scene, menu.id, { id, text, dock }, winId);
+      const createdId = addMenuItemToMenu(scene, menu.id, { id, text, dock }, winId, project.logic);
       if (!createdId) {
-        deps?.toast("菜单项 ID 无效或窗口已锁定");
+        deps?.toast("菜单项 ID 无效、已被占用或窗口已锁定");
         return;
       }
       addIdIn.value = "";
