@@ -89,6 +89,7 @@ export function check(project: Project): Problem[] {
 
   // 画布
   for (const [id, node] of Object.entries(scene.nodes)) {
+    if (node.rotation) hint(`控件 ${id} 设置了旋转（${node.rotation}°），导出成 Qt 时暂不处理旋转`, id);
     if (node.type === "External") {
       if (node.children?.length) error(`外部容器 ${id} 不能包含子节点，里面的控件由业务提供`, id);
       continue;

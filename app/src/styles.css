@@ -1051,6 +1051,145 @@ body:not(.preview) #stage.show-grid {
   cursor: ew-resize;
 }
 
+.bend-handle.bend-add {
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+  background: rgba(255, 255, 255, 0.9);
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.bend-handle.bend-add:hover {
+  opacity: 1;
+  transform: scale(1.25);
+}
+
+.bend-handle.bend-point {
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 2px;
+  border: 1.5px solid var(--accent);
+  background: #fff;
+  cursor: move;
+}
+
+.rotate-handle {
+  position: absolute;
+  left: 50%;
+  top: -22px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+  background: #fff;
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.rotate-handle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 9px;
+  width: 1.5px;
+  height: 12px;
+  margin-left: -0.75px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+#selection.locked {
+  border-color: #d97706;
+  border-style: dashed;
+}
+
+#selection.locked .tag {
+  background: #d97706;
+}
+
+.layer.locked > span:first-child {
+  color: var(--muted);
+}
+
+.layer .layer-lock {
+  margin-left: auto;
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.layer:hover .layer-lock,
+.layer .layer-lock.active {
+  opacity: 0.85;
+}
+
+#tool-bar .tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#delete-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.35);
+}
+
+#delete-confirm .confirm-card {
+  width: 380px;
+  max-width: 90vw;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+
+#delete-confirm .confirm-title {
+  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+#delete-confirm .confirm-msg {
+  margin-bottom: 14px;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+#delete-confirm .confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+#delete-confirm .confirm-actions button {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+}
+
+#delete-confirm .confirm-actions button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
 /* ---------- 视角：平移和缩放（见 viewport.ts） ---------- */
 
 #stage-scroll {

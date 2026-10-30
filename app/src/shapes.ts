@@ -531,25 +531,67 @@ function angleOf(from: Point, to: Point): number {
   return Math.atan2(to.y - from.y, to.x - from.x);
 }
 
-/** 线的路径。route 为 straight、elbow 或 curved；折线可以带手动调整过的拐点（绝对坐标）。 */
-export function lineGeometry(route: Value, start: Endpoint, end: Endpoint, bends: Point[] = []): LineGeometry {
+/** 曲线通过一组拐点（waypoints = [S, ...bends, E]）：每一段是一条三次贝塞尔曲线，返回 [S, C1, C2, P1, C3, C4, P2, ...]。 */
+function curvedPoints(start: Endpoint, end: Endpoint, bends: Point[]): Point[] {
   const S = start.point;
   const E = end.point;
-  if (route === "curved") {
+  if (bends.length === 0) {
     const distance = Math.hypot(E.x - S.x, E.y - S.y);
     const k = Math.max(30, distance * 0.4);
     const ds = start.direction ?? dominantDirection(S, E);
     const de = end.direction ?? dominantDirection(E, S);
     const C1 = { x: S.x + ds.x * k, y: S.y + ds.y * k };
     const C2 = { x: E.x + de.x * k, y: E.y + de.y * k };
+    return [S, C1, C2, E];
+  }
+  const waypoints = [S, ...bends, E];
+  const tangents: Point[] = waypoints.map((p, i) => {
+    if (i === 0) {
+      if (start.direction) return start.direction;
+      const next = waypoints[1];
+      const d = Math.hypot(next.x - p.x, next.y - p.y) || 1;
+      return { x: (next.x - p.x) / d, y: (next.y - p.y) / d };
+    }
+    if (i === waypoints.length - 1) {
+      if (end.direction) return { x: -end.direction.x, y: -end.direction.y };
+      const prev = waypoints[i - 1];
+      const d = Math.hypot(p.x - prev.x, p.y - prev.y) || 1;
+      return { x: (p.x - prev.x) / d, y: (p.y - prev.y) / d };
+    }
+    const prev = waypoints[i - 1];
+    const next = waypoints[i + 1];
+    const d = Math.hypot(next.x - prev.x, next.y - prev.y) || 1;
+    return { x: (next.x - prev.x) / d, y: (next.y - prev.y) / d };
+  });
+  const result: Point[] = [S];
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const a = waypoints[i];
+    const b = waypoints[i + 1];
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const k = Math.max(12, dist * 0.35);
+    const ta = tangents[i];
+    const tb = tangents[i + 1];
+    const c1 = { x: a.x + ta.x * k, y: a.y + ta.y * k };
+    const c2 = { x: b.x - tb.x * k, y: b.y - tb.y * k };
+    result.push(c1, c2, b);
+  }
+  return result;
+}
+
+/** 线的路径。route 为 straight、elbow 或 curved；都可以带手动调整过的拐点（绝对坐标）。 */
+export function lineGeometry(route: Value, start: Endpoint, end: Endpoint, bends: Point[] = []): LineGeometry {
+  const S = start.point;
+  const E = end.point;
+  if (route === "curved") {
+    const pts = curvedPoints(start, end, bends);
     return {
-      path: `M${fmt(S.x)} ${fmt(S.y)} C${fmt(C1.x)} ${fmt(C1.y)} ${fmt(C2.x)} ${fmt(C2.y)} ${fmt(E.x)} ${fmt(E.y)}`,
-      points: [S, C1, C2, E],
-      startAngle: angleOf(C1, S),
-      endAngle: angleOf(C2, E),
+      path: pathFromPoints("curved", pts),
+      points: pts,
+      startAngle: angleOf(pts[1], pts[0]),
+      endAngle: angleOf(pts[pts.length - 2], pts[pts.length - 1]),
     };
   }
-  const points = route === "elbow" ? (bends.length > 0 ? elbowWithBends(start, end, bends) : elbowPoints(start, end)) : [S, E];
+  const points = route === "elbow" ? (bends.length > 0 ? elbowWithBends(start, end, bends) : elbowPoints(start, end)) : [S, ...bends, E];
   const safe = points.length >= 2 ? points : [S, { x: S.x + 1, y: S.y }];
   return {
     path: safe.map((p, i) => `${i === 0 ? "M" : "L"}${fmt(p.x)} ${fmt(p.y)}`).join(" "),
@@ -623,11 +665,60 @@ export function shortenEnd(points: Point[], fromStart: boolean, distance: number
 
 /** 曲线或折线的路径文字，按点重新拼。 */
 export function pathFromPoints(route: Value, points: Point[]): string {
-  if (route === "curved" && points.length === 4) {
-    const [S, C1, C2, E] = points;
-    return `M${fmt(S.x)} ${fmt(S.y)} C${fmt(C1.x)} ${fmt(C1.y)} ${fmt(C2.x)} ${fmt(C2.y)} ${fmt(E.x)} ${fmt(E.y)}`;
+  if (route === "curved" && points.length >= 4 && (points.length - 1) % 3 === 0) {
+    let d = `M${fmt(points[0].x)} ${fmt(points[0].y)}`;
+    for (let i = 1; i + 2 < points.length; i += 3) {
+      const c1 = points[i];
+      const c2 = points[i + 1];
+      const p = points[i + 2];
+      d += ` C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p.x)} ${fmt(p.y)}`;
+    }
+    return d;
   }
   return points.map((p, i) => `${i === 0 ? "M" : "L"}${fmt(p.x)} ${fmt(p.y)}`).join(" ");
+}
+
+/** 直线和曲线每一段的中点，用来放置“拖动添加拐点”的把手。 */
+export function lineSegmentMidpoints(route: Value, start: Endpoint, end: Endpoint, bends: Point[] = []): Point[] {
+  if (route === "curved") {
+    const pts = curvedPoints(start, end, bends);
+    const mids: Point[] = [];
+    for (let i = 0; i + 3 < pts.length; i += 3) {
+      const p0 = pts[i];
+      const c1 = pts[i + 1];
+      const c2 = pts[i + 2];
+      const p1 = pts[i + 3];
+      mids.push({
+        x: 0.125 * (p0.x + p1.x) + 0.375 * (c1.x + c2.x),
+        y: 0.125 * (p0.y + p1.y) + 0.375 * (c1.y + c2.y),
+      });
+    }
+    return mids;
+  }
+  const waypoints = [start.point, ...bends, end.point];
+  const mids: Point[] = [];
+  for (let i = 0; i + 1 < waypoints.length; i++) {
+    mids.push({
+      x: (waypoints[i].x + waypoints[i + 1].x) / 2,
+      y: (waypoints[i].y + waypoints[i + 1].y) / 2,
+    });
+  }
+  return mids;
+}
+
+export function insertLineBend(bends: Point[], index: number, point: Point): Point[] {
+  const next = bends.map((p) => ({ ...p }));
+  const clamped = Math.max(0, Math.min(next.length, index));
+  next.splice(clamped, 0, { x: point.x, y: point.y });
+  return next;
+}
+
+export function updateLineBend(bends: Point[], index: number, point: Point): Point[] {
+  return bends.map((p, i) => (i === index ? { x: point.x, y: point.y } : { ...p }));
+}
+
+export function removeLineBend(bends: Point[], index: number): Point[] {
+  return bends.filter((_, i) => i !== index).map((p) => ({ ...p }));
 }
 
 export function sideDirection(side: Side): Point {

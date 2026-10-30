@@ -44,6 +44,7 @@ import {
   parseBends,
   FONT_SIZES,
   LINE_STYLE_KEYS,
+  lineSegmentMidpoints,
   presetById,
   ROUTES,
   SHAPE_KINDS,
@@ -62,6 +63,36 @@ import {
   type ShapePreset,
   type Side,
 } from "./shapes";
+import {
+  canRedo,
+  canUndo,
+  collectSubtreeIds,
+  createHistory,
+  nodesWithYamlEntries,
+  pushHistory,
+  redoHistory,
+  removeYamlObjects,
+  restoreHistoryVersion,
+  undoHistory,
+} from "./history";
+import {
+  addBendToLine,
+  alignSceneNodes,
+  computeRotationAngle,
+  deleteBendFromLine,
+  distributeSceneNodes,
+  filterUnlocked,
+  isNodeLocked,
+  moveBendOnLine,
+  pointInRotatedRect,
+  rotatePoint,
+  scaleGroupItems,
+  setNodeRotation,
+  toggleNodesLocked,
+  type AlignKind,
+  type DistributeAxis,
+  type MultiResizeItem,
+} from "./transform";
 import { snapMove, snapPoint, snapResize, type Guide, type SnapOptions } from "./snap";
 import { onZoomChange, viewZoom } from "./viewport";
 import { PRESETS_PATH } from "./loader";
@@ -153,38 +184,75 @@ function canHoldChildren(id: string): boolean {
 
 // ---------- 写文件 ----------
 
-// 画布操作的撤销和重做：每次写 scene.json 之前，把写之前的原文记下来
-const undoStack: string[] = [];
-const redoStack: string[] = [];
+// 画布与逻辑操作的撤销和重做：保存操作前的快照（含 scene.json 与 app.logic.yaml）
 const HISTORY_LIMIT = 200;
+let history = createHistory(HISTORY_LIMIT);
 
-async function saveScene(options: { history?: boolean } = {}): Promise<void> {
+async function saveScene(options: { history?: boolean; nextLogicText?: string; label?: string } = {}): Promise<void> {
   normalizeLines();
   const text = JSON.stringify(project.scene, null, 2) + "\n";
-  if (text === project.sceneText) return;
+  const nextLogic = options.nextLogicText ?? project.logicText;
+  const logicChanged = nextLogic !== project.logicText;
+  if (text === project.sceneText && !logicChanged) return;
   if (options.history !== false) {
-    undoStack.push(project.sceneText);
-    if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
-    redoStack.length = 0;
+    history = pushHistory(
+      history,
+      { sceneText: project.sceneText, logicText: project.logicText },
+      { sceneText: text, logicText: nextLogic },
+      options.label ?? "画布修改",
+    );
   }
-  await writeText(SCENE_PATH, text);
+  if (logicChanged) {
+    yamlDirty = false;
+    await writeText(LOGIC_PATH, nextLogic);
+  }
+  if (text !== project.sceneText) {
+    await writeText(SCENE_PATH, text);
+  }
   await reload();
 }
 
 async function undo(): Promise<void> {
-  const previous = undoStack.pop();
-  if (previous === undefined) return toast("没有可以撤销的画布操作");
-  redoStack.push(project.sceneText);
-  await writeText(SCENE_PATH, previous);
+  const res = undoHistory(history, { sceneText: project.sceneText, logicText: project.logicText });
+  if (!res.snapshot) return toast("没有可以撤销的画布操作");
+  history = res.stack;
+  if (res.snapshot.logicText !== project.logicText) {
+    yamlDirty = false;
+    await writeText(LOGIC_PATH, res.snapshot.logicText);
+  }
+  if (res.snapshot.sceneText !== project.sceneText) {
+    await writeText(SCENE_PATH, res.snapshot.sceneText);
+  }
   await reload();
 }
 
 async function redo(): Promise<void> {
-  const next = redoStack.pop();
-  if (next === undefined) return toast("没有可以重做的画布操作");
-  undoStack.push(project.sceneText);
-  await writeText(SCENE_PATH, next);
+  const res = redoHistory(history, { sceneText: project.sceneText, logicText: project.logicText });
+  if (!res.snapshot) return toast("没有可以重做的画布操作");
+  history = res.stack;
+  if (res.snapshot.logicText !== project.logicText) {
+    yamlDirty = false;
+    await writeText(LOGIC_PATH, res.snapshot.logicText);
+  }
+  if (res.snapshot.sceneText !== project.sceneText) {
+    await writeText(SCENE_PATH, res.snapshot.sceneText);
+  }
   await reload();
+}
+
+async function restoreVersion(index: number): Promise<void> {
+  const res = restoreHistoryVersion(history, index, { sceneText: project.sceneText, logicText: project.logicText });
+  if (!res.snapshot) return;
+  history = res.stack;
+  if (res.snapshot.logicText !== project.logicText) {
+    yamlDirty = false;
+    await writeText(LOGIC_PATH, res.snapshot.logicText);
+  }
+  if (res.snapshot.sceneText !== project.sceneText) {
+    await writeText(SCENE_PATH, res.snapshot.sceneText);
+  }
+  await reload();
+  toast("已恢复到所选版本");
 }
 
 /** 用保留注释和格式的方式修改 YAML。 */
@@ -195,8 +263,17 @@ async function editLogic(mutate: (doc: Document) => void): Promise<boolean> {
     return false;
   }
   mutate(doc);
+  const nextText = doc.toString(YAML_OUTPUT);
+  if (nextText !== project.logicText) {
+    history = pushHistory(
+      history,
+      { sceneText: project.sceneText, logicText: project.logicText },
+      { sceneText: project.sceneText, logicText: nextText },
+      "修改逻辑",
+    );
+  }
   yamlDirty = false;
-  await writeText(LOGIC_PATH, doc.toString(YAML_OUTPUT));
+  await writeText(LOGIC_PATH, nextText);
   await reload();
   return true;
 }
@@ -257,6 +334,8 @@ function buildNode(id: string, parentEl: HTMLElement): void {
     top: `${n.y ?? 0}px`,
     width: `${n.width}px`,
     height: `${n.height}px`,
+    transform: n.rotation ? `rotate(${n.rotation}deg)` : "",
+    transformOrigin: "center center",
   });
   const body = document.createElement("div");
   body.className = "vf-body";
@@ -562,9 +641,9 @@ function lineEndpoints(id: string, props: Record<string, Value>): { start: Endpo
 
 function lineLayoutOf(id: string, props: Record<string, Value>): LineLayout {
   const { start, end } = lineEndpoints(id, props);
-  // 折线手动调整过的拐点存的是相对于父节点的坐标
+  // 手动调整过的拐点存的是相对于父节点的坐标（直线、曲线、折线都支持拐点）
   const origin = parentOrigin(id);
-  const bends = props.route === "elbow" ? parseBends(props.bends).map((p) => ({ x: p.x + origin.x, y: p.y + origin.y })) : [];
+  const bends = parseBends(props.bends).map((p) => ({ x: p.x + origin.x, y: p.y + origin.y }));
   return layoutLine(start, end, props, bends);
 }
 
@@ -640,18 +719,28 @@ function normalizeLines(): void {
   }
 }
 
-/** 一个点在不在节点上。形状和线条按图形本身判断，别的按方框。 */
+/** 一个点在不在节点上。形状和线条按图形本身判断，别的按方框（支持旋转后的方框）。 */
 function containsPoint(id: string, px: number, py: number): boolean {
   const n = node(id);
   const entry = mounted.get(id);
+  const r = absRect(id);
+  let testX = px;
+  let testY = py;
+  if (n?.rotation) {
+    const unrot = rotatePoint(
+      { x: px, y: py },
+      { x: r.x + r.width / 2, y: r.y + r.height / 2 },
+      -n.rotation,
+    );
+    testX = unrot.x;
+    testY = unrot.y;
+  }
   if (n && entry?.hit && (n.type === "Shape" || n.type === "Line")) {
     if (n.type === "Line") return entry.hit.isPointInStroke(new DOMPoint(px, py));
-    const r = absRect(id);
-    const local = new DOMPoint(px - r.x, py - r.y);
+    const local = new DOMPoint(testX - r.x, testY - r.y);
     return entry.hit.isPointInFill(local) || entry.hit.isPointInStroke(local);
   }
-  const r = absRect(id);
-  return px >= r.x && px <= r.x + r.width && py >= r.y && py <= r.y + r.height;
+  return pointInRotatedRect({ x: px, y: py }, r, n?.rotation ?? 0);
 }
 
 // ---------- 工具、吸附和样式的设置 ----------
@@ -735,6 +824,12 @@ for (const [name, [left, top]] of Object.entries(HANDLES)) {
   handle.style.cursor = `${name}-resize`;
   selectionBox.append(handle);
 }
+// 旋转把手：单选非线条、非根窗口、未锁定时显示在选中框正上方
+const rotateHandle = document.createElement("div");
+rotateHandle.className = "rotate-handle";
+rotateHandle.dataset.rotate = "true";
+rotateHandle.title = "拖动旋转（按住 Shift 按 15° 对齐）";
+selectionBox.append(rotateHandle);
 // 线条选中时，两端各有一个可以拖动的圆点
 const endpointHandles = (["start", "end"] as const).map((which) => {
   const handle = document.createElement("div");
@@ -753,7 +848,7 @@ marqueeBox.id = "marquee";
 // 多选时每个选中的东西各有一个细框
 const outlines = document.createElement("div");
 outlines.id = "multi-outlines";
-// 折线每一段中间的小把手，拖动它调整这一段的位置
+// 折线、直线、曲线的拐点把手
 const bendHandles = document.createElement("div");
 bendHandles.id = "bend-handles";
 overlay.append(ghost, guidesLayer, outlines, selectionBox, bendHandles, ...endpointHandles, marqueeBox);
@@ -776,26 +871,56 @@ function unionRect(ids: string[]): Rect | null {
   return box;
 }
 
-/** 选中的那条折线：每一段中间放一个小把手。 */
+/** 选中的线条：折线每段中间放平移把手；直线和曲线在每段中点放添加拐点把手、在每个拐点上放拖动/双击删除把手。 */
 function updateBendHandles(): void {
   bendHandles.replaceChildren();
   const id = selectedIds.length === 1 ? selectedId : null;
   const n = id ? node(id) : undefined;
-  if (!id || n?.type !== "Line" || mode !== "edit") return;
+  if (!id || n?.type !== "Line" || mode !== "edit" || isNodeLocked(project.scene, id)) return;
   const props = designRuntime.view(id).props;
-  if (props.route !== "elbow") return;
-  const points = lineLayoutOf(id, props).geometry.points;
-  for (let i = 0; i + 1 < points.length; i++) {
-    const a = points[i];
-    const b = points[i + 1];
-    const length = Math.hypot(b.x - a.x, b.y - a.y);
-    if (length < 14) continue;
-    const horizontal = Math.abs(a.y - b.y) < 0.5;
+  if (props.route === "elbow") {
+    const points = lineLayoutOf(id, props).geometry.points;
+    for (let i = 0; i + 1 < points.length; i++) {
+      const a = points[i];
+      const b = points[i + 1];
+      const length = Math.hypot(b.x - a.x, b.y - a.y);
+      if (length < 14) continue;
+      const horizontal = Math.abs(a.y - b.y) < 0.5;
+      const handle = document.createElement("div");
+      handle.className = `bend-handle ${horizontal ? "horizontal" : "vertical"}`;
+      handle.dataset.segment = String(i);
+      handle.title = horizontal ? "上下拖动这一段" : "左右拖动这一段";
+      Object.assign(handle.style, { left: `${(a.x + b.x) / 2}px`, top: `${(a.y + b.y) / 2}px` });
+      bendHandles.append(handle);
+    }
+    return;
+  }
+  // 直线（straight）和曲线（curved）：在相邻折点中点提供添加拐点把手，在已有拐点上提供拖动与双击删除把手
+  const origin = parentOrigin(id);
+  const bends = parseBends(props.bends).map((p) => ({ x: p.x + origin.x, y: p.y + origin.y }));
+  const layout = lineLayoutOf(id, props);
+  const waypoints = [layout.start.point, ...bends, layout.end.point];
+  const mids = lineSegmentMidpoints(str(props.route, "straight"), layout.start, layout.end, bends);
+  for (let i = 0; i < mids.length; i++) {
+    const a = waypoints[i];
+    const b = waypoints[i + 1];
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 20) continue;
+    const mid = mids[i];
     const handle = document.createElement("div");
-    handle.className = `bend-handle ${horizontal ? "horizontal" : "vertical"}`;
+    handle.className = "bend-handle bend-add";
+    handle.dataset.bendInsert = String(i);
     handle.dataset.segment = String(i);
-    handle.title = horizontal ? "上下拖动这一段" : "左右拖动这一段";
-    Object.assign(handle.style, { left: `${(a.x + b.x) / 2}px`, top: `${(a.y + b.y) / 2}px` });
+    handle.title = "拖动添加拐点";
+    Object.assign(handle.style, { left: `${mid.x}px`, top: `${mid.y}px` });
+    bendHandles.append(handle);
+  }
+  for (let i = 0; i < bends.length; i++) {
+    const p = bends[i];
+    const handle = document.createElement("div");
+    handle.className = "bend-handle bend-point";
+    handle.dataset.bendIndex = String(i);
+    handle.title = "拖动调整拐点，双击删除拐点";
+    Object.assign(handle.style, { left: `${p.x}px`, top: `${p.y}px` });
     bendHandles.append(handle);
   }
 }
@@ -809,50 +934,81 @@ function updateSelectionBox(): void {
   bendHandles.replaceChildren();
   if (!selectedId || !n) {
     selectionBox.style.display = "none";
+    selectionBox.style.transform = "";
+    selectionBox.classList.remove("locked");
+    rotateHandle.style.display = "none";
     positionShapeBar();
     return;
   }
   if (selectedIds.length > 1) {
-    // 多选：每个东西一个细框，外面一个合起来的框，不能缩放，只能整体移动
+    // 多选：每个东西一个细框，外面一个合起来的框，支持整体移动和整体按比例缩放
     for (const id of selectedIds) {
       const r = absRect(id);
+      const eachNode = node(id);
       const box = document.createElement("div");
       box.className = "multi-outline";
-      Object.assign(box.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.width}px`, height: `${r.height}px` });
+      Object.assign(box.style, {
+        left: `${r.x}px`,
+        top: `${r.y}px`,
+        width: `${r.width}px`,
+        height: `${r.height}px`,
+        transform: eachNode?.rotation ? `rotate(${eachNode.rotation}deg)` : "",
+        transformOrigin: "center center",
+      });
       outlines.append(box);
     }
-    const all = unionRect(topSelection())!;
-    Object.assign(selectionBox.style, { display: "", left: `${all.x}px`, top: `${all.y}px`, width: `${all.width}px`, height: `${all.height}px` });
+    const tops = topSelection();
+    const unlockedIds = filterUnlocked(project.scene, tops);
+    const allLocked = unlockedIds.length === 0;
+    const all = unionRect(tops)!;
+    Object.assign(selectionBox.style, {
+      display: "",
+      left: `${all.x}px`,
+      top: `${all.y}px`,
+      width: `${all.width}px`,
+      height: `${all.height}px`,
+      transform: "",
+    });
     selectionBox.classList.remove("line");
     selectionBox.classList.add("multi");
-    selectionTag.textContent = `已选中 ${selectedIds.length} 个`;
+    selectionBox.classList.toggle("locked", allLocked);
+    selectionTag.textContent = `已选中 ${selectedIds.length} 个${allLocked ? "（已锁定）" : ""}`;
     selectionTag.style.display = "";
-    for (const handle of selectionBox.querySelectorAll<HTMLElement>(".handle")) handle.style.display = "none";
+    rotateHandle.style.display = "none";
+    for (const handle of selectionBox.querySelectorAll<HTMLElement>(".handle")) {
+      handle.style.display = allLocked ? "none" : "";
+    }
     positionShapeBar();
     return;
   }
   selectionBox.classList.remove("multi");
   const r = absRect(selectedId);
   const isRoot = selectedId === project.scene.root;
+  const locked = isNodeLocked(project.scene, selectedId);
+  const rot = n.rotation ?? 0;
   Object.assign(selectionBox.style, {
     display: "",
     left: `${r.x}px`,
     top: `${r.y}px`,
     width: `${r.width}px`,
     height: `${r.height}px`,
+    transform: rot ? `rotate(${rot}deg)` : "",
+    transformOrigin: "center center",
   });
   selectionBox.classList.toggle("line", isLine);
-  selectionTag.textContent = `${selectedId} · ${typeLabel(selectedId)}`;
+  selectionBox.classList.toggle("locked", locked);
+  selectionTag.textContent = `${selectedId} · ${typeLabel(selectedId)}${rot ? ` · ${rot}°` : ""}${locked ? " · 已锁定" : ""}`;
   selectionTag.style.display = isRoot ? "none" : "";
-  // 根窗口只能从右边和下边调整尺寸；线条用两端的圆点调整
+  // 根窗口只能从右边和下边调整尺寸；线条用两端的圆点调整；已锁定的节点不显示缩放和旋转把手
   for (const handle of selectionBox.querySelectorAll<HTMLElement>(".handle")) {
-    handle.style.display = isLine ? "none" : !isRoot || ["e", "s", "se"].includes(handle.dataset.handle!) ? "" : "none";
+    handle.style.display = locked || isLine ? "none" : !isRoot || ["e", "s", "se"].includes(handle.dataset.handle!) ? "" : "none";
   }
+  rotateHandle.style.display = locked || isLine || isRoot ? "none" : "";
   if (isLine) {
     const layout = lineLayoutOf(selectedId, designRuntime.view(selectedId).props);
     for (const handle of endpointHandles) {
       const point = handle.dataset.endpoint === "start" ? layout.start.point : layout.end.point;
-      Object.assign(handle.style, { display: "", left: `${point.x}px`, top: `${point.y}px` });
+      Object.assign(handle.style, { display: locked ? "none" : "", left: `${point.x}px`, top: `${point.y}px` });
     }
     updateBendHandles();
   }
@@ -1064,8 +1220,20 @@ type Gesture =
       toggleOnClick: string | null;
     }
   | { kind: "resize"; id: string; handle: string; start: Point; orig: Rect; abs: Rect; moved: boolean; targets: Rect[] }
+  | {
+      kind: "groupResize";
+      ids: string[];
+      items: MultiResizeItem[];
+      handle: string;
+      start: Point;
+      origBox: Rect;
+      moved: boolean;
+      targets: Rect[];
+    }
+  | { kind: "rotate"; id: string; center: Point; startPointer: Point; startRotation: number; moved: boolean }
   | { kind: "marquee"; start: Point; scope: string; base: string[]; clicked: string | null; moved: boolean }
   | { kind: "bend"; id: string; index: number; points: Point[]; start: Point; horizontal: boolean; moved: boolean }
+  | { kind: "waybend"; id: string; index: number; moved: boolean }
   | { kind: "draw"; preset: ShapePreset | null; nodeType: string | null; start: Point; rect: Rect | null; parentId: string; targets: Rect[] }
   | { kind: "line"; preset: ShapePreset; start: Anchor; end: Anchor | null; parentId: string; rawStart: Point; rawEnd: Point | null }
   | { kind: "endpoint"; id: string; which: "start" | "end"; moved: boolean };
@@ -1116,16 +1284,58 @@ overlay.addEventListener("pointerdown", (e) => {
     return;
   }
 
+  // 旋转把手
+  if (target.dataset.rotate && selectedId && selectedIds.length === 1) {
+    const n = node(selectedId);
+    if (!n || n.type === "Line" || selectedId === project.scene.root || isNodeLocked(project.scene, selectedId)) return;
+    const r = absRect(selectedId);
+    const center = { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    gesture = {
+      kind: "rotate",
+      id: selectedId,
+      center,
+      startPointer: pt,
+      startRotation: n.rotation ?? 0,
+      moved: false,
+    };
+    capturePointer(e);
+    return;
+  }
+
   const endpoint = target.dataset.endpoint as "start" | "end" | undefined;
-  if (endpoint && selectedId) {
+  if (endpoint && selectedId && !isNodeLocked(project.scene, selectedId)) {
     gesture = { kind: "endpoint", id: selectedId, which: endpoint, moved: false };
+    capturePointer(e);
+    return;
+  }
+
+  // 直线或曲线：在某段中点把手按下添加新拐点并拖动
+  const bendInsert = target.dataset.bendInsert;
+  if (bendInsert !== undefined && selectedId && !isNodeLocked(project.scene, selectedId)) {
+    const n = node(selectedId);
+    if (!n || n.type !== "Line") return;
+    const insertIdx = Number(bendInsert);
+    const origin = parentOrigin(selectedId);
+    n.props = addBendToLine(n.props ?? {}, insertIdx, pt, origin);
+    const entry = mounted.get(selectedId);
+    if (entry) paintGraphic(selectedId, entry, { ...designRuntime.view(selectedId).props, ...n.props });
+    updateSelectionBox();
+    gesture = { kind: "waybend", id: selectedId, index: insertIdx, moved: true };
+    capturePointer(e);
+    return;
+  }
+
+  // 直线或曲线：拖动已有拐点
+  const bendIndex = target.dataset.bendIndex;
+  if (bendIndex !== undefined && selectedId && !isNodeLocked(project.scene, selectedId)) {
+    gesture = { kind: "waybend", id: selectedId, index: Number(bendIndex), moved: false };
     capturePointer(e);
     return;
   }
 
   // 折线某一段中间的小把手
   const segment = target.dataset.segment;
-  if (segment !== undefined && selectedId) {
+  if (segment !== undefined && selectedId && !isNodeLocked(project.scene, selectedId)) {
     const props = designRuntime.view(selectedId).props;
     const points = lineLayoutOf(selectedId, props).geometry.points;
     const index = Number(segment);
@@ -1138,11 +1348,38 @@ overlay.addEventListener("pointerdown", (e) => {
     return;
   }
 
-  // 缩放：只有选中一个东西时才有手柄
+  // 缩放：单选缩放 或 多选整体按比例缩放
   const handle = target.dataset.handle ?? null;
   if (handle && selectedId) {
+    if (selectedIds.length > 1) {
+      const ids = filterUnlocked(project.scene, topSelection());
+      if (ids.length === 0) return;
+      const items: MultiResizeItem[] = ids.map((each) => {
+        const eachNode = node(each)!;
+        return {
+          id: each,
+          abs: absRect(each),
+          parentOrigin: parentOrigin(each),
+          isLine: eachNode.type === "Line",
+          lineProps: eachNode.type === "Line" ? { ...eachNode.props } : undefined,
+        };
+      });
+      const origBox = unionRect(ids)!;
+      gesture = {
+        kind: "groupResize",
+        ids,
+        items,
+        handle,
+        start: { x: e.clientX, y: e.clientY },
+        origBox,
+        moved: false,
+        targets: snapTargets(ids),
+      };
+      capturePointer(e);
+      return;
+    }
     const n = node(selectedId);
-    if (!n || n.type === "Line") return;
+    if (!n || n.type === "Line" || isNodeLocked(project.scene, selectedId)) return;
     const orig = { x: n.x ?? 0, y: n.y ?? 0, width: n.width, height: n.height };
     const isRoot = selectedId === project.scene.root;
     gesture = {
@@ -1170,8 +1407,11 @@ overlay.addEventListener("pointerdown", (e) => {
   } else if (!selectedIds.includes(id)) {
     select(id);
   }
-  const ids = topSelection();
-  if (ids.length === 0) return;
+  const ids = filterUnlocked(project.scene, topSelection());
+  if (ids.length === 0) {
+    if (toggleOnClick) gesture = { kind: "move", ids: [], origins: [], start: { x: e.clientX, y: e.clientY }, abs: absRect(id), moved: false, targets: [], toggleOnClick };
+    return;
+  }
   // 只选中一条挂着的线时不能整条拖（和 FigJam 一样，要先把端点拖下来）；和别的东西一起选中时，它没挂的部分跟着走
   if (ids.length === 1) {
     const n = node(ids[0]);
@@ -1201,7 +1441,14 @@ function applyLiveGeometry(id: string): void {
   } else {
     const entry = mounted.get(id);
     if (entry) {
-      Object.assign(entry.wrapper.style, { left: `${n.x}px`, top: `${n.y}px`, width: `${n.width}px`, height: `${n.height}px` });
+      Object.assign(entry.wrapper.style, {
+        left: `${n.x}px`,
+        top: `${n.y}px`,
+        width: `${n.width}px`,
+        height: `${n.height}px`,
+        transform: n.rotation ? `rotate(${n.rotation}deg)` : "",
+        transformOrigin: "center center",
+      });
       if (n.type === "Shape") paintGraphic(id, entry, activeRuntime().view(id).props);
     }
   }
@@ -1303,6 +1550,84 @@ overlay.addEventListener("pointermove", (e) => {
     return;
   }
 
+  if (gesture.kind === "groupResize") {
+    const dx = Math.round((e.clientX - gesture.start.x) / viewZoom());
+    const dy = Math.round((e.clientY - gesture.start.y) / viewZoom());
+    if (dx === 0 && dy === 0 && !gesture.moved) return;
+    gesture.moved = true;
+    const { origBox, handle } = gesture;
+    let width = origBox.width;
+    let height = origBox.height;
+    if (handle.includes("e")) width = origBox.width + dx;
+    if (handle.includes("w")) width = origBox.width - dx;
+    if (handle.includes("s")) height = origBox.height + dy;
+    if (handle.includes("n")) height = origBox.height - dy;
+    if (e.shiftKey && handle.length === 2) {
+      const ratio = origBox.width / Math.max(1, origBox.height);
+      if (Math.abs(width / origBox.width) >= Math.abs(height / Math.max(1, origBox.height))) height = width / ratio;
+      else width = height * ratio;
+    }
+    width = Math.max(MIN_SIZE, width);
+    height = Math.max(MIN_SIZE, height);
+    let box: Rect = {
+      x: origBox.x + (handle.includes("w") ? origBox.width - width : 0),
+      y: origBox.y + (handle.includes("n") ? origBox.height - height : 0),
+      width,
+      height,
+    };
+    if (!(e.shiftKey && handle.length === 2)) {
+      const snapped = snapResize(box, handle, gesture.targets, options);
+      box = snapped.rect;
+      drawGuides(snapped.guides);
+    }
+    box = {
+      x: Math.round(box.x),
+      y: Math.round(box.y),
+      width: Math.max(MIN_SIZE, Math.round(box.width)),
+      height: Math.max(MIN_SIZE, Math.round(box.height)),
+    };
+    const scaledList = scaleGroupItems(gesture.items, origBox, box, MIN_SIZE);
+    for (const [id, scaled] of scaledList) {
+      const eachNode = node(id);
+      if (!eachNode) continue;
+      if (eachNode.type === "Line" && scaled.props) {
+        eachNode.props = scaled.props;
+      } else {
+        eachNode.x = scaled.x;
+        eachNode.y = scaled.y;
+        eachNode.width = scaled.width;
+        eachNode.height = scaled.height;
+        const entry = mounted.get(id);
+        if (entry) {
+          Object.assign(entry.wrapper.style, {
+            left: `${eachNode.x}px`,
+            top: `${eachNode.y}px`,
+            width: `${eachNode.width}px`,
+            height: `${eachNode.height}px`,
+          });
+          if (eachNode.type === "Shape") paintGraphic(id, entry, activeRuntime().view(id).props);
+        }
+      }
+    }
+    showSize(box.width, box.height);
+    refreshLines();
+    updateSelectionBox();
+    return;
+  }
+
+  if (gesture.kind === "rotate") {
+    const n = node(gesture.id);
+    if (!n) return;
+    const deg = computeRotationAngle(gesture.center, pt, gesture.startPointer, gesture.startRotation, e.shiftKey);
+    if (deg === (n.rotation ?? 0) && !gesture.moved) return;
+    gesture.moved = true;
+    setNodeRotation(n, deg);
+    sizeLabel.textContent = `${deg}°`;
+    sizeLabel.style.display = "";
+    applyLiveGeometry(gesture.id);
+    return;
+  }
+
   if (gesture.kind === "marquee") {
     const rect = {
       x: Math.min(gesture.start.x, pt.x),
@@ -1313,8 +1638,9 @@ overlay.addEventListener("pointermove", (e) => {
     if (!gesture.moved && rect.width < 3 && rect.height < 3) return;
     gesture.moved = true;
     Object.assign(marqueeBox.style, { display: "block", left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
-    // 框住的是起点所在的那一层里、和方框有交叠的东西
+    // 框住的是起点所在的那一层里、未锁定且和方框有交叠的东西
     const hits = (node(gesture.scope)?.children ?? []).filter((child) => {
+      if (isNodeLocked(project.scene, child)) return false;
       const r = absRect(child);
       return r.x < rect.x + rect.width && r.x + r.width > rect.x && r.y < rect.y + rect.height && r.y + r.height > rect.y;
     });
@@ -1339,6 +1665,19 @@ overlay.addEventListener("pointermove", (e) => {
     const inner = dragElbowSegment(gesture.points, gesture.index, delta);
     const origin = parentOrigin(gesture.id);
     n.props = { ...n.props, bends: formatBends(inner.map((p) => ({ x: p.x - origin.x, y: p.y - origin.y }))) };
+    const entry = mounted.get(gesture.id);
+    if (entry) paintGraphic(gesture.id, entry, { ...designRuntime.view(gesture.id).props, ...n.props });
+    updateSelectionBox();
+    return;
+  }
+
+  if (gesture.kind === "waybend") {
+    const n = node(gesture.id);
+    if (!n) return;
+    const snapped = snapPoint(pt.x, pt.y, snapTargets(gesture.id), options);
+    drawGuides(snapped.guides);
+    gesture.moved = true;
+    n.props = moveBendOnLine(n.props ?? {}, gesture.index, { x: snapped.x, y: snapped.y }, parentOrigin(gesture.id));
     const entry = mounted.get(gesture.id);
     if (entry) paintGraphic(gesture.id, entry, { ...designRuntime.view(gesture.id).props, ...n.props });
     updateSelectionBox();
@@ -1432,7 +1771,14 @@ overlay.addEventListener("pointerup", (e) => {
     else if (finished.toggleOnClick) select(finished.toggleOnClick, true);
     return;
   }
-  if (finished.kind === "resize" || finished.kind === "endpoint" || finished.kind === "bend") {
+  if (
+    finished.kind === "resize" ||
+    finished.kind === "groupResize" ||
+    finished.kind === "rotate" ||
+    finished.kind === "endpoint" ||
+    finished.kind === "bend" ||
+    finished.kind === "waybend"
+  ) {
     if (finished.moved) void saveScene();
     return;
   }
@@ -1483,6 +1829,16 @@ overlay.addEventListener("pointerup", (e) => {
 
 overlay.addEventListener("dblclick", (e) => {
   if (tool.kind !== "select") return;
+  const target = e.target as HTMLElement;
+  const bendIndex = target.dataset.bendIndex;
+  if (bendIndex !== undefined && selectedId && !isNodeLocked(project.scene, selectedId)) {
+    const n = node(selectedId);
+    if (n && n.type === "Line") {
+      n.props = deleteBendFromLine(n.props ?? {}, Number(bendIndex));
+      void saveScene();
+      return;
+    }
+  }
   const pt = stagePoint(e);
   const id = hitTest(pt.x, pt.y);
   if (id && isGraphic(id)) openTextEditor(id);
@@ -1505,7 +1861,7 @@ let textEditor: { id: string; el: HTMLTextAreaElement; field: "text" | "label" }
 function openTextEditor(id: string): void {
   const n = node(id);
   const entry = mounted.get(id);
-  if (!n || !entry || !isGraphic(id)) return;
+  if (!n || !entry || !isGraphic(id) || isNodeLocked(project.scene, id)) return;
   if (textEditor) commitTextEditor();
   select(id);
   const field = n.type === "Line" ? "label" : "text";
@@ -1588,6 +1944,11 @@ document.addEventListener("keydown", (e) => {
     void redo();
     return;
   }
+  if (ctrl && key === "l") {
+    e.preventDefault();
+    void toggleLock();
+    return;
+  }
   if (ctrl && key === "d") {
     e.preventDefault();
     void duplicateNodes(topSelection());
@@ -1595,8 +1956,8 @@ document.addEventListener("keydown", (e) => {
   }
   if (ctrl && key === "a") {
     e.preventDefault();
-    // 全选：窗口里最外面一层的全部东西
-    setSelection([...(node(project.scene.root)?.children ?? [])]);
+    // 全选：窗口里最外面一层未锁定的全部东西
+    setSelection((node(project.scene.root)?.children ?? []).filter((id) => !isNodeLocked(project.scene, id)));
     return;
   }
   if (ctrl && e.key === "Enter") {
@@ -1631,8 +1992,10 @@ document.addEventListener("keydown", (e) => {
     void deleteNodes(ids);
   } else if (moves[e.key]) {
     e.preventDefault();
+    const unlocked = filterUnlocked(project.scene, ids);
+    if (unlocked.length === 0) return toast("选中的控件已锁定");
     const [dx, dy] = moves[e.key];
-    for (const id of ids) {
+    for (const id of unlocked) {
       const n = node(id);
       if (!n) continue;
       // 线条挪动的是没挂着的那几头和拐点
@@ -1924,14 +2287,90 @@ function rememberClip(clip: Clip): void {
   pasteCount = 0;
 }
 
-async function deleteNodes(ids: string[]): Promise<void> {
-  const removed = new Set<string>();
-  const collect = (target: string) => {
-    removed.add(target);
-    for (const child of node(target)?.children ?? []) collect(child);
-  };
-  for (const id of ids) if (id !== project.scene.root) collect(id);
+/** 询问用户是否把被删控件在 YAML 中的条目一并删除：返回 "both" | "scene-only" | "cancel"。 */
+function askDeleteYamlEntries(yamlIds: string[]): Promise<"both" | "scene-only" | "cancel"> {
+  return new Promise((resolve) => {
+    const existing = document.getElementById("delete-confirm");
+    if (existing) existing.remove();
+    const backdrop = document.createElement("div");
+    backdrop.id = "delete-confirm";
+    const card = document.createElement("div");
+    card.className = "confirm-card";
+    const title = document.createElement("div");
+    title.className = "confirm-title";
+    title.textContent = "删除控件";
+    const msg = document.createElement("div");
+    msg.className = "confirm-msg";
+    msg.textContent = `控件 ${yamlIds.join("、")} 在 ${LOGIC_PATH} 中有逻辑条目，是否一并删除这些 YAML 条目？`;
+    const actions = document.createElement("div");
+    actions.className = "confirm-actions";
+
+    const finish = (choice: "both" | "scene-only" | "cancel") => {
+      document.removeEventListener("keydown", onKey, true);
+      backdrop.remove();
+      resolve(choice);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        finish("cancel");
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+
+    const btnBoth = document.createElement("button");
+    btnBoth.type = "button";
+    btnBoth.className = "primary";
+    btnBoth.dataset.choice = "both";
+    btnBoth.textContent = "一并删除 YAML 条目";
+    btnBoth.addEventListener("click", () => finish("both"));
+
+    const btnSceneOnly = document.createElement("button");
+    btnSceneOnly.type = "button";
+    btnSceneOnly.dataset.choice = "scene-only";
+    btnSceneOnly.textContent = "只删除控件";
+    btnSceneOnly.addEventListener("click", () => finish("scene-only"));
+
+    const btnCancel = document.createElement("button");
+    btnCancel.type = "button";
+    btnCancel.dataset.choice = "cancel";
+    btnCancel.textContent = "取消";
+    btnCancel.addEventListener("click", () => finish("cancel"));
+
+    actions.append(btnBoth, btnSceneOnly, btnCancel);
+    card.append(title, msg, actions);
+    backdrop.append(card);
+    backdrop.addEventListener("pointerdown", (e) => {
+      if (e.target === backdrop) finish("cancel");
+    });
+    document.body.append(backdrop);
+    btnBoth.focus();
+  });
+}
+
+async function deleteNodes(ids: string[], options: { askYaml?: boolean; removeYaml?: boolean } = {}): Promise<void> {
+  const candidates = ids.filter((id) => id !== project.scene.root);
+  if (candidates.length === 0) return;
+  const unlockedRoots = candidates.filter((id) => {
+    const sub = collectSubtreeIds(project.scene, [id]);
+    return [...sub].every((each) => !isNodeLocked(project.scene, each));
+  });
+  if (unlockedRoots.length === 0) {
+    toast("选中的控件已锁定，解锁后才能删除");
+    return;
+  }
+  const removed = collectSubtreeIds(project.scene, unlockedRoots);
   if (removed.size === 0) return;
+
+  const yamlIds = nodesWithYamlEntries(project.logicText, removed);
+  let deleteYaml = options.removeYaml ?? false;
+  if (yamlIds.length > 0 && options.askYaml !== false && options.removeYaml === undefined) {
+    const choice = await askDeleteYamlEntries(yamlIds);
+    if (choice === "cancel") return;
+    deleteYaml = choice === "both";
+  }
+
   // 挂在被删节点上的线：把那一头停在原地，不再挂着
   for (const [lineId, line] of Object.entries(project.scene.nodes)) {
     if (line.type !== "Line" || removed.has(lineId)) continue;
@@ -1950,11 +2389,38 @@ async function deleteNodes(ids: string[]): Promise<void> {
   for (const target of removed) delete project.scene.nodes[target];
   selectedId = null;
   selectedIds = [];
-  await saveScene();
+  const nextLogicText = deleteYaml && yamlIds.length > 0 ? removeYamlObjects(project.logicText, yamlIds) : undefined;
+  await saveScene({ nextLogicText, label: "删除控件" });
 }
 
 async function deleteNode(id: string): Promise<void> {
   await deleteNodes([id]);
+}
+
+async function toggleLock(targetIds?: string[]): Promise<void> {
+  const ids = (targetIds ?? (selectedIds.length > 0 ? topSelection() : selectedId ? [selectedId] : [])).filter(
+    (id) => id !== project.scene.root && !!node(id),
+  );
+  if (ids.length === 0) return;
+  const locked = toggleNodesLocked(project.scene, ids);
+  await saveScene({ label: locked ? "锁定控件" : "解锁控件" });
+  toast(locked ? `已锁定 ${ids.length} 个控件` : `已解锁 ${ids.length} 个控件`);
+}
+
+async function alignSelected(kind: AlignKind): Promise<void> {
+  const ids = topSelection();
+  if (ids.length < 2) return;
+  const changed = alignSceneNodes(project.scene, ids, kind);
+  if (!changed) return toast("选中的控件已锁定或无需对齐");
+  await saveScene({ label: "对齐控件" });
+}
+
+async function distributeSelected(axis: DistributeAxis): Promise<void> {
+  const ids = topSelection();
+  if (ids.length < 3) return;
+  const changed = distributeSceneNodes(project.scene, ids, axis);
+  if (!changed) return toast("至少需要 3 个未锁定的控件才能等距分布");
+  await saveScene({ label: "分布控件" });
 }
 
 /** 复制、剪切、粘贴走浏览器的剪贴板事件：内容是一段 JSON，可以贴到另一个设计项目里。 */
@@ -1981,7 +2447,7 @@ document.addEventListener("copy", (e) => {
 document.addEventListener("cut", (e) => {
   if (!canvasHasFocus(e)) return;
   const ids = topSelection();
-  if (copySelection(e)) void deleteNodes(ids);
+  if (copySelection(e)) void deleteNodes(ids, { askYaml: false });
 });
 
 document.addEventListener("paste", (e) => {
@@ -2002,6 +2468,7 @@ document.addEventListener("paste", (e) => {
 });
 
 async function reorder(id: string, toFront: boolean): Promise<void> {
+  if (isNodeLocked(project.scene, id)) return toast("控件已锁定");
   const parentId = parentOf(id);
   if (!parentId) return;
   const parent = node(parentId)!;
@@ -2011,6 +2478,7 @@ async function reorder(id: string, toFront: boolean): Promise<void> {
 }
 
 async function revertToContainer(id: string): Promise<void> {
+  if (isNodeLocked(project.scene, id)) return toast("控件已锁定");
   const n = node(id);
   if (!n) return;
   n.type = "Container";
@@ -2021,6 +2489,7 @@ async function revertToContainer(id: string): Promise<void> {
 
 async function renameId(oldId: string, nextId: string): Promise<void> {
   if (nextId === oldId) return;
+  if (isNodeLocked(project.scene, oldId)) return toast("控件已锁定，解锁后才能重命名");
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(nextId)) return toast("ID 只能用字母、数字和下划线，且不能以数字开头");
   if (node(nextId) || project.logic.state?.[nextId] !== undefined || project.logic.conditions?.[nextId]) {
     return toast(`“${nextId}”已经被别的控件、状态或条件使用`);
@@ -2052,9 +2521,7 @@ async function renameId(oldId: string, nextId: string): Promise<void> {
   }
   if (scene.root === oldId) scene.root = nextId;
   selectedId = nextId;
-  yamlDirty = false;
-  await writeText(LOGIC_PATH, logicText);
-  await saveScene();
+  await saveScene({ nextLogicText: logicText, label: `重命名 ${oldId} → ${nextId}` });
 }
 
 async function createDocSection(id: string): Promise<void> {
@@ -2148,22 +2615,47 @@ function showMenu(x: number, y: number, id: string): void {
   // 多选时的菜单：只放对整组都有意义的操作
   if (selectedIds.length > 1 && selectedIds.includes(id)) {
     const ids = topSelection();
-    openMenu(x, y, [
+    const anyUnlocked = ids.some((each) => !isNodeLocked(project.scene, each));
+    const items: MenuItem[] = [
       ...clipboardItems(),
+      "separator",
+      { label: anyUnlocked ? "锁定所选（Ctrl+L）" : "解锁所选（Ctrl+L）", action: () => void toggleLock(ids) },
+    ];
+    if (ids.length >= 2) {
+      items.push(
+        "separator",
+        { label: "左对齐", action: () => void alignSelected("left") },
+        { label: "水平居中对齐", action: () => void alignSelected("centerH") },
+        { label: "右对齐", action: () => void alignSelected("right") },
+        { label: "顶对齐", action: () => void alignSelected("top") },
+        { label: "垂直居中对齐", action: () => void alignSelected("centerV") },
+        { label: "底对齐", action: () => void alignSelected("bottom") },
+      );
+    }
+    if (ids.length >= 3) {
+      items.push(
+        { label: "水平等距分布", action: () => void distributeSelected("horizontal") },
+        { label: "垂直等距分布", action: () => void distributeSelected("vertical") },
+      );
+    }
+    items.push(
       "separator",
       { label: "复制一份（Ctrl+D）", action: () => void duplicateNodes(ids) },
       { label: `删除这 ${ids.length} 个`, action: () => void deleteNodes(ids) },
-    ]);
+    );
+    openMenu(x, y, items);
     return;
   }
   const items: MenuItem[] = [{ label: "复制引用", action: () => void copyReference(controlReference(project, id)) }];
   if (id !== project.scene.root) {
+    const locked = isNodeLocked(project.scene, id);
     items.push(
       "separator",
       { label: "打开说明", action: () => showRightTab("doc") },
       { label: "编辑逻辑", action: () => showRightTab("yaml") },
       { label: "添加条件", action: () => void addCondition(id) },
       "separator",
+      { label: locked ? "解锁（Ctrl+L）" : "锁定（Ctrl+L）", action: () => void toggleLock([id]) },
     );
     if (isGraphic(id)) {
       items.push(
@@ -2212,8 +2704,14 @@ function toolButton(label: string, title: string, active: boolean, onClick: () =
   return button;
 }
 
+function sep(): HTMLSpanElement {
+  const s = document.createElement("span");
+  s.className = "tool-sep";
+  return s;
+}
+
 /**
- * 缩放控件旁边的一组按钮：吸附开关、网格、撤销和重做。只在编辑模式下出现。
+ * 缩放控件旁边的一组按钮：吸附开关、网格、撤销和重做、锁定、对齐与分布。只在编辑模式下出现。
  * 画图形、画线的工具在左侧素材栏里（点一下选为工具，或者直接拖进来），快捷键 V、R、O、L、Shift+L、X、T 照样能用。
  */
 function renderToolbar(): void {
@@ -2242,14 +2740,76 @@ function renderToolbar(): void {
     $("stage").style.setProperty("--grid", snapSettings.grid ? `${snapSettings.grid}px` : "0");
     $("stage").classList.toggle("show-grid", snapSettings.grid > 0);
   });
-  const separator = document.createElement("span");
-  separator.className = "tool-sep";
+
+  const undoBtn = toolButton("↶", "撤销画布操作（Ctrl+Z）", false, () => void undo());
+  undoBtn.dataset.action = "undo";
+  undoBtn.disabled = !canUndo(history);
+  const redoBtn = toolButton("↷", "重做（Ctrl+Y / Ctrl+Shift+Z）", false, () => void redo());
+  redoBtn.dataset.action = "redo";
+  redoBtn.disabled = !canRedo(history);
+
+  const versionBtn = toolButton("历史", "恢复到之前的版本", false, () => {
+    const total = history.past.length + history.future.length;
+    if (total === 0) return toast("暂无历史版本可恢复");
+    const rect = versionBtn.getBoundingClientRect();
+    const items: MenuItem[] = [];
+    for (let i = total; i >= 0; i--) {
+      const isCurrent = i === history.past.length;
+      const label = i === 0 ? "初始状态" : i <= history.past.length ? history.past[i - 1].label : history.future[history.future.length - (i - history.past.length)].label;
+      items.push({
+        label: `${isCurrent ? "● " : "   "}#${i} ${label}`,
+        action: () => void restoreVersion(i),
+      });
+    }
+    openMenu(rect.left, rect.bottom + 4, items);
+  });
+  versionBtn.dataset.action = "versions";
+  versionBtn.disabled = history.past.length === 0 && history.future.length === 0;
+
+  const tops = topSelection();
+  const lockIds = tops.length > 0 ? tops : selectedId && selectedId !== project.scene.root ? [selectedId] : [];
+  const allLocked = lockIds.length > 0 && lockIds.every((id) => isNodeLocked(project.scene, id));
+  const lockBtn = toolButton(allLocked ? "🔒" : "🔓", `${allLocked ? "解锁" : "锁定"}选中控件（Ctrl+L）`, allLocked, () => void toggleLock());
+  lockBtn.dataset.action = "lock";
+  lockBtn.disabled = lockIds.length === 0;
+
+  const unlockedCount = filterUnlocked(project.scene, tops).length;
+  const canAlign = unlockedCount >= 2;
+  const canDistribute = unlockedCount >= 3;
+  const alignDefs: Array<[AlignKind, string, string]> = [
+    ["left", "⫷", "左对齐"],
+    ["centerH", "⫿", "水平居中对齐"],
+    ["right", "⫸", "右对齐"],
+    ["top", "⫯", "顶对齐"],
+    ["centerV", "⫾", "垂直居中对齐"],
+    ["bottom", "⫰", "底对齐"],
+  ];
+  const alignBtns = alignDefs.map(([kind, label, title]) => {
+    const btn = toolButton(label, title, false, () => void alignSelected(kind));
+    btn.dataset.align = kind;
+    btn.disabled = !canAlign;
+    return btn;
+  });
+  const distH = toolButton("⇔", "水平等距分布", false, () => void distributeSelected("horizontal"));
+  distH.dataset.distribute = "horizontal";
+  distH.disabled = !canDistribute;
+  const distV = toolButton("⇕", "垂直等距分布", false, () => void distributeSelected("vertical"));
+  distV.dataset.distribute = "vertical";
+  distV.disabled = !canDistribute;
+
   bar.replaceChildren(
     snap,
     grid,
-    separator,
-    toolButton("↶", "撤销画布操作（Ctrl+Z）", false, () => void undo()),
-    toolButton("↷", "重做（Ctrl+Shift+Z）", false, () => void redo()),
+    sep(),
+    undoBtn,
+    redoBtn,
+    versionBtn,
+    sep(),
+    lockBtn,
+    sep(),
+    ...alignBtns,
+    distH,
+    distV,
   );
   $("stage").style.setProperty("--grid", snapSettings.grid ? `${snapSettings.grid}px` : "0");
   $("stage").classList.toggle("show-grid", snapSettings.grid > 0);
@@ -2280,8 +2840,10 @@ onZoomChange(() => positionShapeBar());
 async function setGraphicProps(id: string, patch: Record<string, Value | undefined>): Promise<void> {
   const n = node(id);
   if (!n) return;
-  // 多选时，改动作用到选中的同一类图形上
-  const targets = selectedIds.includes(id) ? selectedIds.filter((each) => node(each)?.type === n.type) : [id];
+  // 多选时，改动作用到选中的同一类且未锁定的图形上
+  const rawTargets = selectedIds.includes(id) ? selectedIds.filter((each) => node(each)?.type === n.type) : [id];
+  const targets = filterUnlocked(project.scene, rawTargets);
+  if (targets.length === 0) return toast("选中的图形已锁定");
   for (const target of targets) {
     const t = node(target)!;
     t.props = { ...t.props };
@@ -2457,6 +3019,15 @@ function renderShapeBar(): void {
       barSelect("文字对齐", [{ value: "left", label: "左对齐" }, { value: "center", label: "居中" }, { value: "right", label: "右对齐" }], str(props.textAlign, "center"), (value) => void setGraphicProps(id, { textAlign: value })),
       barButton("B", "粗体", () => void setGraphicProps(id, { fontWeight: props.fontWeight === "bold" ? "normal" : "bold" }), props.fontWeight === "bold"),
     );
+    if (selectedIds.length === 1) {
+      items.push(
+        barNumber("旋转°", n.rotation ?? 0, -360, 360, 1, (value) => {
+          if (isNodeLocked(project.scene, id)) return toast("控件已锁定");
+          setNodeRotation(n, value);
+          void saveScene({ label: "旋转控件" });
+        }),
+      );
+    }
   } else {
     items.push(
       barSelect("路径", ROUTES.map((r) => ({ value: r.id, label: r.label })), str(props.route, "straight"), (value) => void setGraphicProps(id, { route: value })),
@@ -2472,8 +3043,8 @@ function renderShapeBar(): void {
       fontSelect,
     );
   }
-  if (n.type === "Line" && props.route === "elbow" && parseBends(props.bends).length > 0) {
-    items.push(barButton("重置折线", "去掉手动调整过的拐点，回到自动算出的走法", () => void setGraphicProps(id, { bends: undefined })));
+  if (n.type === "Line" && parseBends(props.bends).length > 0) {
+    items.push(barButton(props.route === "elbow" ? "重置折线" : "重置拐点", "去掉手动添加或调整过的拐点，回到默认走法", () => void setGraphicProps(id, { bends: undefined })));
   }
   items.push(barButton("文字", n.type === "Line" ? "给线加文字（双击线也可以）" : "编辑文字（双击形状也可以）", () => openTextEditor(id)));
   items.push(barButton("存为预设", "把这个样式存进素材栏的“我的预设”，存在 ui/presets.json", () => void saveAsPreset(id)));
@@ -2505,6 +3076,7 @@ function positionShapeBar(): void {
 
 /** 交换线的起点和终点（端头跟着位置走，所以箭头方向反过来）。 */
 async function reverseLine(id: string): Promise<void> {
+  if (isNodeLocked(project.scene, id)) return toast("线条已锁定");
   const n = node(id);
   if (!n || n.type !== "Line") return;
   const p = { ...n.props };
@@ -2517,6 +3089,8 @@ async function reverseLine(id: string): Promise<void> {
     if (va === undefined) delete p[b];
     else p[b] = va;
   }
+  const bends = parseBends(p.bends);
+  if (bends.length > 0) p.bends = formatBends([...bends].reverse());
   n.props = p;
   await saveScene();
 }
@@ -2704,8 +3278,9 @@ function renderLayers(): void {
   const visit = (id: string, depth: number) => {
     const n = node(id);
     if (!n) return;
+    const locked = isNodeLocked(project.scene, id);
     const row = document.createElement("div");
-    row.className = "layer" + (id === selectedId || selectedIds.includes(id) ? " selected" : "");
+    row.className = "layer" + (id === selectedId || selectedIds.includes(id) ? " selected" : "") + (locked ? " locked" : "");
     row.style.paddingLeft = `${6 + depth * 14}px`;
     const name = document.createElement("span");
     name.textContent = id;
@@ -2720,6 +3295,18 @@ function renderLayers(): void {
       badge.textContent = "需翻译";
       badge.title = `显示和隐藏时播放效果 ${effectName}；导出成 Qt 后要在界面效果层为它提供实现`;
       row.append(badge);
+    }
+    if (id !== project.scene.root) {
+      const lockBtn = document.createElement("button");
+      lockBtn.type = "button";
+      lockBtn.className = "layer-lock" + (locked ? " active" : "");
+      lockBtn.textContent = locked ? "🔒" : "🔓";
+      lockBtn.title = locked ? "解锁（Ctrl+L）" : "锁定（Ctrl+L）";
+      lockBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void toggleLock([id]);
+      });
+      row.append(lockBtn);
     }
     // 按住 Shift 或 Ctrl 点：多选
     row.addEventListener("click", (e) => select(id, e.shiftKey || e.ctrlKey || e.metaKey));
@@ -2760,6 +3347,7 @@ function topSelection(): string[] {
 
 function afterSelectionChange(): void {
   renderLayers();
+  renderToolbar();
   renderRight();
   renderShapeBar();
   updateSelectionBox();
@@ -2826,8 +3414,8 @@ function renderRight(): void {
   const idInput = $<HTMLInputElement>("selection-id");
   const n = selectedId ? node(selectedId) : undefined;
   idInput.value = selectedId ?? "未选中控件";
-  idInput.disabled = !selectedId;
-  $("selection-type").textContent = n ? n.type : "";
+  idInput.disabled = !selectedId || isNodeLocked(project.scene, selectedId);
+  $("selection-type").textContent = n ? `${n.type}${n.locked ? "（已锁定）" : ""}` : "";
 
   // 文档页签
   if (!docDirty) {
@@ -2892,6 +3480,14 @@ async function saveYaml(): Promise<void> {
   window.clearTimeout(yamlTimer);
   if (!yamlDirty) return;
   yamlDirty = false;
+  if (yamlText.value !== project.logicText) {
+    history = pushHistory(
+      history,
+      { sceneText: project.sceneText, logicText: project.logicText },
+      { sceneText: project.sceneText, logicText: yamlText.value },
+      "编辑 YAML",
+    );
+  }
   await writeText(LOGIC_PATH, yamlText.value);
   await reload();
 }

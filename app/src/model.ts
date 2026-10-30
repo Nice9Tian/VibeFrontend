@@ -19,6 +19,8 @@ export interface SceneNode {
   y?: number;
   width: number;
   height: number;
+  rotation?: number;
+  locked?: boolean;
   title?: string;
   props?: Record<string, Value>;
   children?: string[];

@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "export:qt": "node scripts/export-qt.ts",
-    "case": "node scripts/run-case.ts"
+    "case": "node scripts/run-case.ts",
+    "test:editor": "node scripts/test-editor.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
