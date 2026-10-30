@@ -3,7 +3,12 @@
 // 3) 旋转与导出提示；4) 多选整体缩放；5) 对齐与等距分布；6) 直线和曲线加拐点、移拐点、删拐点；
 // 7) 删除控件时检测并清理 YAML 条目。
 import assert from "node:assert/strict";
-import { check } from "../src/check.ts";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { check, RESERVED_IDENTIFIER_NAMES } from "../src/check.ts";
+import { loadProjectFiles } from "../src/loader.ts";
+import { computeSceneLayout, type Scene } from "../src/model.ts";
+import { nodeIO } from "./node-io.ts";
 import {
   applyAddNodeToScene,
   applyDeleteFromScene,
@@ -25,7 +30,6 @@ import {
   snapshotOf,
   undoHistory,
 } from "../src/history.ts";
-import type { Scene } from "../src/model.ts";
 import {
   formatBends,
   insertLineBend,
@@ -1100,5 +1104,133 @@ test("计算排版的节点（VBox 子节点及窗口分区节点）拖动缩放
   assert.equal("x" in addedScene.nodes.item4, false, "向排版容器 vbox 新增子节点应自动剥离无意义的 x");
   assert.equal("y" in addedScene.nodes.item4, false, "向排版容器 vbox 新增子节点应自动剥离无意义的 y");
 });
+
+// 18. [审核问题 8 回归] check.ts 检查保留标识符及菜单项 ID 重名
+await (async () => {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const animeanDir = path.resolve(__dirname, "../../examples/animean/design");
+  const baseProj = await loadProjectFiles(nodeIO(animeanDir), null);
+  const baseErrWarn = check(baseProj).filter((p) => p.level !== "hint");
+  assert.deepEqual(baseErrWarn, [], `examples/animean/design 应无任何 check 报错或警告，实际=${JSON.stringify(baseErrWarn)}`);
+
+  for (const reserved of ["clock", "value", "param", "result", "error", "self", "Window", "Shape", "Line"]) {
+    assert.equal(RESERVED_IDENTIFIER_NAMES.has(reserved), true, `${reserved} 应在 RESERVED_IDENTIFIER_NAMES 中`);
+  }
+
+  // (a) 控件 ID、状态根名、条件名、菜单项 ID 使用保留名
+  const projReserved = {
+    ...baseProj,
+    scene: JSON.parse(JSON.stringify(baseProj.scene)) as Scene,
+    logic: JSON.parse(JSON.stringify(baseProj.logic)),
+  };
+  projReserved.scene.nodes["clock"] = { type: "Label", width: 80, height: 24, props: { text: "bad" } };
+  projReserved.scene.nodes["window"].children?.push("clock");
+  projReserved.logic.state["value"] = { x: { type: "number", initial: 0 } };
+  projReserved.logic.conditions["result"] = { type: "symbol", expr: "true" };
+  projReserved.scene.nodes["window"].menuBar?.menus[0].items.push({ id: "param", text: "BadMenu" });
+
+  const probs1 = check(projReserved);
+  assert.ok(probs1.some((p) => p.level === "error" && p.message.includes("控件 ID“clock”是系统保留名称")));
+  assert.ok(probs1.some((p) => p.level === "error" && p.message.includes("状态根名“value”是系统保留名称")));
+  assert.ok(probs1.some((p) => p.level === "error" && p.message.includes("全局条件“result”是系统保留名称")));
+  assert.ok(probs1.some((p) => p.level === "error" && p.message.includes("菜单项 ID“param”是系统保留名称")));
+
+  // (b) 菜单项 ID 重复，以及菜单项 ID 与控件 ID / 状态根 / 全局条件重名
+  const projDupMenu = {
+    ...baseProj,
+    scene: JSON.parse(JSON.stringify(baseProj.scene)) as Scene,
+  };
+  projDupMenu.scene.nodes["window"].menuBar?.menus[0].items.push(
+    { id: "menuSaveProject", text: "重复菜单项" },
+    { id: "addLayerBtn", text: "与控件重名" },
+    { id: "project", text: "与状态根重名" },
+    { id: "canRemoveLayer", text: "与条件重名" },
+  );
+  const probs2 = check(projDupMenu);
+  assert.ok(probs2.some((p) => p.level === "error" && p.message.includes("菜单项 ID“menuSaveProject”重复定义")));
+  assert.ok(probs2.some((p) => p.level === "error" && p.message.includes("菜单项 ID“addLayerBtn”与控件 ID、状态根名或全局条件重名")));
+  assert.ok(probs2.some((p) => p.level === "error" && p.message.includes("菜单项 ID“project”与控件 ID、状态根名或全局条件重名")));
+  assert.ok(probs2.some((p) => p.level === "error" && p.message.includes("菜单项 ID“canRemoveLayer”与控件 ID、状态根名或全局条件重名")));
+  passed++;
+  console.log("PASS check.ts 保留标识符检查与菜单项 ID 重名检查");
+})();
+
+// 19. [审核问题 2 回归] DataForm 数据格式对齐 animean/childrenpanel/tool_controls/*.json 与 toolcontrol.py
+await (async () => {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const syncPath = pathToFileURL(path.resolve(__dirname, "../../examples/animean/design/functions/syncToolOptions.js")).href;
+  const syncMod = (await import(syncPath)) as { default: (s: Record<string, unknown>) => Record<string, unknown> };
+  const syncToolOptions = syncMod.default;
+
+  // (a) brush 对齐 pen.json：同名 color 按钮带 value: "black"|"blue"|"green" 与 state.color
+  const brushRes = syncToolOptions({ project: { activeTool: "brush" } });
+  const brushSchema = brushRes["toolOptions.schema"] as { controls: Array<Record<string, unknown>> };
+  const colorBtns = brushSchema.controls.filter((c) => c.name === "color" && c.type === "button");
+  assert.equal(colorBtns.length, 3, "brush 工具应有 Black/Blue/Green 3 个同名 color 按钮");
+  assert.deepEqual(
+    colorBtns.map((c) => c.value),
+    ["black", "blue", "green"],
+  );
+  assert.equal((brushRes["toolOptions.values"] as Record<string, unknown>).color, "black");
+
+  // (b) shape (connect) 对齐 connect.json：check 的 value 为 "on"/"off"，list 的 options 为 [{title, value}]，visible_when 为 {name, values}
+  const connectRes = syncToolOptions({ project: { activeTool: "shape" } });
+  const connectSchema = connectRes["toolOptions.schema"] as { controls: Array<Record<string, unknown>> };
+  const snapCheck = connectSchema.controls.find((c) => c.name === "connect_auto_snap")!;
+  assert.equal(snapCheck.value, "on");
+  const modeList = connectSchema.controls.find((c) => c.name === "connect_mode")!;
+  assert.ok(Array.isArray(modeList.options) && typeof (modeList.options as unknown[])[0] === "object");
+  const smoothSlider = connectSchema.controls.find((c) => c.name === "connect_smooth")!;
+  assert.deepEqual(smoothSlider.visible_when, { name: "connect_mode", values: ["smooth"] });
+
+  // (c) h_center_line 扩展工具对齐 toolcontrol.py options_for_extra_tool_json：含 fold_split/fold_seal/bridge_topology/bridge_tension 及末尾 subwindow texture_view
+  const hLineRes = syncToolOptions({ project: { activeTool: "h_center_line" } });
+  const hLineSchema = hLineRes["toolOptions.schema"] as { controls: Array<Record<string, unknown>> };
+  assert.ok(hLineSchema.controls.some((c) => c.name === "fold_seal" && typeof c.visible_when === "object"));
+  assert.ok(hLineSchema.controls.some((c) => c.name === "texture_view" && c.type === "subwindow"));
+  passed++;
+  console.log("PASS AnimeAn 工具选项表单 DataForm 完整覆盖 connect.json / eraser.json / fill.json / pen.json / toolcontrol.py 格式");
+})();
+
+// 20. [审核问题 4 & 6 回归] AnimeAn 统一图层树 layerList 与窄屏 Flow 自动换行及防裁切保护
+await (async () => {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const animeanDir = path.resolve(__dirname, "../../examples/animean/design");
+  const proj = await loadProjectFiles(nodeIO(animeanDir), null);
+
+  // 图层面板只有一个统一的 Tree 控件 layerList，不再重复放置割裂的 layerTree
+  assert.equal(proj.scene.nodes["layerTree"], undefined, "不应再存在割裂的重复控件 layerTree");
+  assert.equal(proj.scene.nodes["layerList"]?.type, "Tree", "layerList 应为统一的 Tree 控件");
+
+  const measureAt = (w: number, h: number) => {
+    const sc = cloneScene(proj.scene);
+    sc.nodes[sc.root].width = w;
+    sc.nodes[sc.root].height = h;
+    return computeSceneLayout(sc);
+  };
+
+  const b1280 = measureAt(1280, 800);
+  const b1440 = measureAt(1440, 900);
+  const b1024 = measureAt(1024, 720);
+  const b800 = measureAt(800, 600);
+
+  // 宽窗口 (1280/1440) 下 toolsDock 与 timelineTransportFlow 均为单行；窄窗口 (1024/800) 下均自动换为两行
+  assert.equal(b1280.get("toolsDock")!.height, 62);
+  assert.equal(b1440.get("toolsDock")!.height, 62);
+  assert.equal(b1024.get("toolsDock")!.height, 94, "1024x720 下 toolsDock 应自动换行撑高至 94px");
+  assert.equal(b800.get("toolsDock")!.height, 94, "800x600 下 toolsDock 应自动换行撑高至 94px");
+
+  assert.equal(b1280.get("timelineTransportFlow")!.height, 28);
+  assert.equal(b1440.get("timelineTransportFlow")!.height, 28);
+  assert.equal(b1024.get("timelineTransportFlow")!.height, 60, "1024x720 下 timelineTransportFlow 应自动换行撑高至 60px");
+  assert.equal(b800.get("timelineTransportFlow")!.height, 60, "800x600 下 timelineTransportFlow 应自动换行撑高至 60px");
+
+  // 即使在最小 800x600 尺寸下，layerList、assetList、canvasTitleLabel 的宽高也绝不归零
+  assert.ok(b800.get("layerList")!.height >= 48, `800x600 下 layerList 高度不应过小，实测=${b800.get("layerList")!.height}`);
+  assert.ok(b800.get("assetList")!.height >= 60, `800x600 下 assetList 高度不应裁切，实测=${b800.get("assetList")!.height}`);
+  assert.ok(b800.get("canvasTitleLabel")!.width >= 24, `800x600 下 canvasTitleLabel 宽度不应归零，实测=${b800.get("canvasTitleLabel")!.width}`);
+  passed++;
+  console.log("PASS AnimeAn 统一图层树 layerList 与 4 种分辨率下 Flow 自动换行及防归零保护");
+})();
 
 console.log(`\n全部 ${passed} 项编辑器单元测试通过。`);

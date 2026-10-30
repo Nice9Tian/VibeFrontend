@@ -4,7 +4,9 @@
     "root": "window",
     "windows": [
       "window",
-      "newProjectDialog"
+      "newProjectDialog",
+      "drawSettingsDialog",
+      "textureFloatDialog"
     ],
     "nodes": {
       "window": {
@@ -22,7 +24,60 @@
                 {
                   "id": "menuNewProject",
                   "text": "新建项目...",
+                  "shortcut": "Ctrl+N",
                   "emit": "openNewProject"
+                },
+                {
+                  "id": "menuOpenProject",
+                  "text": "打开项目...",
+                  "shortcut": "Ctrl+O",
+                  "emit": "openProjectFile"
+                },
+                {
+                  "id": "menuSaveProject",
+                  "text": "保存项目",
+                  "shortcut": "Ctrl+S",
+                  "emit": "saveProjectFile"
+                },
+                {
+                  "id": "menuSaveAsProject",
+                  "text": "另存为...",
+                  "shortcut": "Ctrl+Shift+S",
+                  "emit": "saveAsProjectFile"
+                },
+                {
+                  "id": "menuTextureSub",
+                  "text": "纹理文件 (Texture)",
+                  "items": [
+                    {
+                      "id": "menuOpenTexture",
+                      "text": "打开纹理视图 (.textureview)...",
+                      "emit": "openTextureFile"
+                    },
+                    {
+                      "id": "menuSaveTexture",
+                      "text": "保存纹理视图 (.textureview)",
+                      "emit": "saveTextureFile"
+                    }
+                  ]
+                },
+                {
+                  "id": "menuExportSub",
+                  "text": "导入与导出",
+                  "items": [
+                    {
+                      "id": "menuImportImage",
+                      "text": "导入图像素材...",
+                      "shortcut": "Ctrl+I",
+                      "emit": "importImageAsset"
+                    },
+                    {
+                      "id": "menuExportClip",
+                      "text": "导出视频片段...",
+                      "shortcut": "Ctrl+E",
+                      "emit": "triggerExportClip"
+                    }
+                  ]
                 }
               ]
             },
@@ -39,14 +94,14 @@
                 },
                 {
                   "id": "menuToggleLayers",
-                  "text": "图层面板",
+                  "text": "图层与素材面板",
                   "dock": "layersDock",
                   "checkable": true,
                   "checked": true
                 },
                 {
                   "id": "menuToggleInspector",
-                  "text": "检查器面板",
+                  "text": "选项与检查器面板",
                   "dock": "inspectorDock",
                   "checkable": true,
                   "checked": true
@@ -57,6 +112,149 @@
                   "dock": "timelineDock",
                   "checkable": true,
                   "checked": true
+                },
+                {
+                  "id": "menuOnionSkinToggle",
+                  "text": "洋葱皮透视",
+                  "shortcut": "O",
+                  "checkable": true,
+                  "checked": false,
+                  "emit": "toggleOnionSkin"
+                },
+                {
+                  "id": "menuToggleTextureFloat",
+                  "text": "浮动纹理子视图 (FloatBox)",
+                  "shortcut": "Ctrl+T",
+                  "emit": "toggleTextureFloatWindow"
+                },
+                {
+                  "id": "menuEmbedTexture",
+                  "text": "嵌入纹理至工具面板",
+                  "emit": "embedTextureInToolOptions"
+                },
+                {
+                  "id": "menuResetLayout",
+                  "text": "重置工作区布局",
+                  "emit": "resetWorkspaceLayout"
+                }
+              ]
+            },
+            {
+              "id": "editMenu",
+              "title": "编辑",
+              "items": [
+                {
+                  "id": "menuUndo",
+                  "text": "撤销",
+                  "shortcut": "Ctrl+Z",
+                  "emit": "undoHistory"
+                },
+                {
+                  "id": "menuRedo",
+                  "text": "重做",
+                  "shortcut": "Ctrl+Y",
+                  "emit": "redoHistory"
+                },
+                {
+                  "id": "menuClearFrame",
+                  "text": "清空当前帧",
+                  "shortcut": "Del",
+                  "emit": "clearCurrentFrame"
+                }
+              ]
+            },
+            {
+              "id": "autoMappingMenu",
+              "title": "自动映射",
+              "items": [
+                {
+                  "id": "menuAutoColorize",
+                  "text": "一键自动上色",
+                  "shortcut": "Alt+C",
+                  "emit": "runAutoColorize"
+                },
+                {
+                  "id": "menuAutoInbetween",
+                  "text": "生成中间帧补间",
+                  "shortcut": "Alt+I",
+                  "emit": "runAutoInbetween"
+                },
+                {
+                  "id": "menuTextureSync",
+                  "text": "同步纹理映射",
+                  "emit": "syncTextureMapping"
+                }
+              ]
+            },
+            {
+              "id": "drawMenu",
+              "title": "绘图设置",
+              "items": [
+                {
+                  "id": "menuDrawSettings",
+                  "text": "画笔与压感设置...",
+                  "shortcut": "F5",
+                  "emit": "openDrawSettings"
+                },
+                {
+                  "id": "menuStabilizerSub",
+                  "text": "抖动修正等级",
+                  "items": [
+                    {
+                      "id": "menuStabOff",
+                      "text": "关闭修正 (S0)",
+                      "kind": "radio",
+                      "group": "stabilizerGroup",
+                      "checked": false,
+                      "emit": "setStabilizerOff"
+                    },
+                    {
+                      "id": "menuStabMed",
+                      "text": "标准修正 (S5)",
+                      "kind": "radio",
+                      "group": "stabilizerGroup",
+                      "checked": true,
+                      "emit": "setStabilizerMed"
+                    },
+                    {
+                      "id": "menuStabHigh",
+                      "text": "强力平滑 (S12)",
+                      "kind": "radio",
+                      "group": "stabilizerGroup",
+                      "checked": false,
+                      "emit": "setStabilizerHigh"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "themeMenu",
+              "title": "主题",
+              "items": [
+                {
+                  "id": "menuThemeDark",
+                  "text": "深色创作主题",
+                  "kind": "radio",
+                  "group": "themeGroup",
+                  "checked": true,
+                  "emit": "setThemeDark"
+                },
+                {
+                  "id": "menuThemeGraphite",
+                  "text": "石墨灰护眼主题",
+                  "kind": "radio",
+                  "group": "themeGroup",
+                  "checked": false,
+                  "emit": "setThemeGraphite"
+                },
+                {
+                  "id": "menuThemeLight",
+                  "text": "明亮浅色主题",
+                  "kind": "radio",
+                  "group": "themeGroup",
+                  "checked": false,
+                  "emit": "setThemeLight"
                 }
               ]
             }
@@ -83,141 +281,320 @@
         "type": "Dock",
         "dockArea": "top",
         "width": 1280,
-        "height": 68,
+        "height": 62,
         "headerHeight": 26,
         "title": "工具栏",
         "layout": {
-          "kind": "hbox",
+          "kind": "flow",
           "padding": [
-            6,
+            4,
             12,
-            6,
+            4,
             12
           ],
-          "gap": 8
+          "columnGap": 4,
+          "rowGap": 4
         },
         "children": [
           "newProjectBtn",
-          "toolbarSep1",
+          "toolArrowBtn",
           "toolBrushBtn",
           "toolEraserBtn",
           "toolFillBtn",
-          "toolbarSep2",
-          "projectSummaryLabel"
+          "toolShapeBtn",
+          "toolSelectBtn",
+          "toolMoveBtn",
+          "toolEyedropperBtn",
+          "toolHLineBtn",
+          "toolVLineBtn",
+          "toolMapAreaBtn",
+          "toolAddLineBtn",
+          "toolAutoMapBtn",
+          "toolLockPolicyBtn",
+          "toolMoreMenuBtn",
+          "forcePadBox"
         ]
       },
       "newProjectBtn": {
         "type": "Button",
-        "width": 96,
-        "height": 30,
+        "width": 76,
+        "height": 28,
         "props": {
           "text": "新建项目",
-          "variant": "primary"
+          "variant": "primary",
+          "icon": "add"
         }
       },
-      "toolbarSep1": {
-        "type": "Separator",
-        "width": 8,
-        "height": 30,
+      "toolArrowBtn": {
+        "type": "Button",
+        "width": 58,
+        "height": 28,
         "props": {
-          "orientation": "vertical"
+          "text": "选择",
+          "variant": "secondary",
+          "icon": "move",
+          "checkable": true,
+          "checked": false
         }
       },
       "toolBrushBtn": {
         "type": "Button",
-        "width": 72,
-        "height": 30,
+        "width": 58,
+        "height": 28,
         "props": {
           "text": "画笔",
-          "variant": "primary"
+          "variant": "primary",
+          "icon": "pen",
+          "checkable": true,
+          "checked": true
         }
       },
       "toolEraserBtn": {
         "type": "Button",
-        "width": 72,
-        "height": 30,
+        "width": 58,
+        "height": 28,
         "props": {
           "text": "橡皮",
-          "variant": "secondary"
+          "variant": "secondary",
+          "icon": "eraser",
+          "checkable": true,
+          "checked": false
         }
       },
       "toolFillBtn": {
         "type": "Button",
-        "width": 72,
-        "height": 30,
+        "width": 58,
+        "height": 28,
         "props": {
           "text": "填充",
+          "variant": "secondary",
+          "icon": "bucket",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "toolShapeBtn": {
+        "type": "Button",
+        "width": 58,
+        "height": 28,
+        "props": {
+          "text": "连接",
+          "variant": "secondary",
+          "icon": "shape",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "toolSelectBtn": {
+        "type": "Button",
+        "width": 58,
+        "height": 28,
+        "props": {
+          "text": "套索",
+          "variant": "secondary",
+          "icon": "lasso",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "toolMoveBtn": {
+        "type": "Button",
+        "width": 58,
+        "height": 28,
+        "props": {
+          "text": "变换",
+          "variant": "secondary",
+          "icon": "remap",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "toolEyedropperBtn": {
+        "type": "Button",
+        "width": 58,
+        "height": 28,
+        "props": {
+          "text": "吸管",
+          "variant": "secondary",
+          "icon": "eyedropper",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "toolHLineBtn": {
+        "type": "Button",
+        "width": 62,
+        "height": 28,
+        "props": {
+          "text": "H中线",
+          "variant": "secondary",
+          "icon": "hline",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "toolVLineBtn": {
+        "type": "Button",
+        "width": 62,
+        "height": 28,
+        "props": {
+          "text": "V中线",
+          "variant": "secondary",
+          "icon": "vline",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "toolMapAreaBtn": {
+        "type": "Button",
+        "width": 66,
+        "height": 28,
+        "props": {
+          "text": "映射区",
+          "variant": "secondary",
+          "icon": "area",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "toolAddLineBtn": {
+        "type": "Button",
+        "width": 66,
+        "height": 28,
+        "props": {
+          "text": "辅助线",
+          "variant": "secondary",
+          "icon": "addline",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "toolAutoMapBtn": {
+        "type": "Button",
+        "width": 76,
+        "height": 28,
+        "props": {
+          "text": "自动映射",
+          "variant": "secondary",
+          "icon": "automap",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "toolLockPolicyBtn": {
+        "type": "Button",
+        "width": 76,
+        "height": 28,
+        "props": {
+          "text": "工具锁定",
+          "variant": "secondary",
+          "icon": "lock",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "toolMoreMenuBtn": {
+        "type": "Button",
+        "width": 72,
+        "height": 28,
+        "props": {
+          "text": "预设 ▾",
           "variant": "secondary"
-        }
-      },
-      "toolbarSep2": {
-        "type": "Separator",
-        "width": 8,
-        "height": 30,
-        "props": {
-          "orientation": "vertical"
-        }
-      },
-      "projectSummaryLabel": {
-        "type": "Label",
-        "width": 320,
-        "height": 30,
-        "size": {
-          "stretch": 1,
-          "horizontal": "expanding"
         },
+        "popupMenu": [
+          {
+            "id": "popupResetTool",
+            "text": "重置当前工具参数",
+            "emit": "resetActiveToolOptions"
+          },
+          {
+            "id": "popupOpenDrawSettings",
+            "text": "打开压感设置...",
+            "emit": "openDrawSettings"
+          }
+        ]
+      },
+      "forcePadBox": {
+        "type": "Button",
+        "width": 108,
+        "height": 28,
         "props": {
-          "text": "当前项目：样片镜头",
-          "tone": "muted"
+          "text": "压感板 (0,0)",
+          "variant": "secondary"
         }
       },
       "layersDock": {
         "type": "Dock",
         "dockArea": "left",
-        "width": 240,
-        "height": 580,
+        "width": 236,
+        "height": 554,
         "headerHeight": 26,
-        "title": "图层",
+        "title": "图层与素材",
         "layout": {
           "kind": "vbox",
-          "padding": 10,
-          "gap": 8
+          "padding": 6,
+          "gap": 4
         },
         "children": [
+          "layerViewTabBar",
           "layerToolbar",
           "layerList",
-          "layerVisibilityBar"
+          "layerVisibilityBar",
+          "assetsPanelSep",
+          "assetsHeaderBar",
+          "assetList",
+          "assetNoteInput"
         ]
+      },
+      "layerViewTabBar": {
+        "type": "TabBar",
+        "width": 224,
+        "height": 24,
+        "props": {
+          "tabs": "Main Layers,Child Layers",
+          "value": 0
+        }
       },
       "layerToolbar": {
         "type": "HBox",
-        "width": 220,
-        "height": 30,
+        "width": 224,
+        "height": 24,
         "layout": {
           "kind": "hbox",
           "padding": 0,
-          "gap": 6
+          "gap": 3
         },
         "children": [
           "addLayerBtn",
+          "addGroupBtn",
           "removeLayerBtn",
           "moveLayerUpBtn",
-          "moveLayerDownBtn"
+          "moveLayerDownBtn",
+          "unselectLayerBtn"
         ]
       },
       "addLayerBtn": {
         "type": "Button",
-        "width": 50,
-        "height": 30,
+        "width": 35,
+        "height": 24,
         "props": {
           "text": "新建",
           "variant": "primary"
         }
       },
+      "addGroupBtn": {
+        "type": "Button",
+        "width": 35,
+        "height": 24,
+        "props": {
+          "text": "建组",
+          "variant": "secondary"
+        }
+      },
       "removeLayerBtn": {
         "type": "Button",
-        "width": 50,
-        "height": 30,
+        "width": 35,
+        "height": 24,
         "props": {
           "text": "删除",
           "variant": "danger"
@@ -225,8 +602,8 @@
       },
       "moveLayerUpBtn": {
         "type": "Button",
-        "width": 50,
-        "height": 30,
+        "width": 35,
+        "height": 24,
         "props": {
           "text": "上移",
           "variant": "secondary"
@@ -234,34 +611,73 @@
       },
       "moveLayerDownBtn": {
         "type": "Button",
-        "width": 50,
-        "height": 30,
+        "width": 35,
+        "height": 24,
         "props": {
           "text": "下移",
           "variant": "secondary"
         }
       },
+      "unselectLayerBtn": {
+        "type": "Button",
+        "width": 34,
+        "height": 24,
+        "props": {
+          "text": "取消",
+          "variant": "ghost"
+        }
+      },
       "layerList": {
-        "type": "List",
-        "width": 220,
-        "height": 220,
+        "type": "Tree",
+        "width": 224,
+        "height": 156,
         "size": {
           "stretch": 1,
-          "vertical": "expanding"
+          "vertical": "expanding",
+          "minHeight": 48
         },
         "props": {
           "items": [],
-          "value": 0
-        }
+          "value": 0,
+          "checkable": true,
+          "draggable": true
+        },
+        "contextMenu": [
+          {
+            "id": "ctxDuplicateLayer",
+            "text": "复制选中图层",
+            "emit": "duplicateSelectedLayer"
+          },
+          {
+            "id": "ctxToggleLockLayer",
+            "text": "切换图层锁定",
+            "emit": "toggleSelectedLayerLock"
+          },
+          {
+            "id": "ctxDeleteLayer",
+            "text": "删除选中图层",
+            "emit": "deleteSelectedLayer"
+          },
+          {
+            "id": "ctxDissolveGroup",
+            "text": "解组保留图层",
+            "emit": "dissolveLayerGroup"
+          },
+          {
+            "id": "ctxDeleteGroup",
+            "text": "删组及成员图层",
+            "emit": "deleteLayerGroup"
+          }
+        ]
       },
       "layerVisibilityBar": {
         "type": "HBox",
-        "width": 220,
-        "height": 32,
+        "width": 224,
+        "height": 22,
         "layout": {
           "kind": "hbox",
           "padding": 0,
-          "gap": 8
+          "gap": 4
         },
         "children": [
           "layerVisibleLabel",
@@ -270,8 +686,8 @@
       },
       "layerVisibleLabel": {
         "type": "Label",
-        "width": 112,
-        "height": 32,
+        "width": 130,
+        "height": 22,
         "size": {
           "stretch": 1,
           "horizontal": "expanding"
@@ -283,101 +699,337 @@
       },
       "toggleVisibleBtn": {
         "type": "Button",
-        "width": 100,
-        "height": 32,
+        "width": 90,
+        "height": 22,
         "props": {
           "text": "隐藏图层",
           "variant": "secondary"
         }
       },
-      "centralArea": {
-        "type": "VBox",
-        "width": 780,
-        "height": 580,
-        "layout": {
-          "kind": "vbox",
-          "padding": 10,
-          "gap": 8
-        },
-        "children": [
-          "canvasHeader",
-          "canvasHost"
-        ]
+      "assetsPanelSep": {
+        "type": "Separator",
+        "width": 224,
+        "height": 4,
+        "props": {
+          "orientation": "horizontal"
+        }
       },
-      "canvasHeader": {
+      "assetsHeaderBar": {
         "type": "HBox",
-        "width": 760,
-        "height": 32,
+        "width": 224,
+        "height": 22,
         "layout": {
           "kind": "hbox",
           "padding": 0,
-          "gap": 8
+          "gap": 3
         },
         "children": [
-          "canvasTitleLabel",
-          "activeToolLabel"
+          "assetsTitleLabel",
+          "addAssetBtn",
+          "assetToLayerBtn",
+          "removeAssetBtn",
+          "unselectAssetBtn"
         ]
       },
-      "canvasTitleLabel": {
+      "assetsTitleLabel": {
         "type": "Label",
-        "width": 320,
-        "height": 32,
+        "width": 56,
+        "height": 22,
         "size": {
           "stretch": 1,
           "horizontal": "expanding"
         },
         "props": {
-          "text": "画布",
+          "text": "素材库",
           "tone": "title"
+        }
+      },
+      "addAssetBtn": {
+        "type": "Button",
+        "width": 40,
+        "height": 22,
+        "props": {
+          "text": "+导入",
+          "variant": "secondary"
+        }
+      },
+      "assetToLayerBtn": {
+        "type": "Button",
+        "width": 44,
+        "height": 22,
+        "props": {
+          "text": "转图层",
+          "variant": "primary"
+        }
+      },
+      "removeAssetBtn": {
+        "type": "Button",
+        "width": 40,
+        "height": 22,
+        "props": {
+          "text": "-移除",
+          "variant": "secondary"
+        }
+      },
+      "unselectAssetBtn": {
+        "type": "Button",
+        "width": 32,
+        "height": 22,
+        "props": {
+          "text": "取消",
+          "variant": "ghost"
+        }
+      },
+      "assetList": {
+        "type": "List",
+        "width": 224,
+        "height": 72,
+        "props": {
+          "items": [],
+          "value": 0,
+          "draggable": true
+        }
+      },
+      "assetNoteInput": {
+        "type": "TextArea",
+        "width": 224,
+        "height": 36,
+        "props": {
+          "placeholder": "输入选中素材的备注说明...",
+          "value": ""
+        }
+      },
+      "centralArea": {
+        "type": "VBox",
+        "width": 780,
+        "height": 554,
+        "layout": {
+          "kind": "vbox",
+          "padding": 6,
+          "gap": 4
+        },
+        "children": [
+          "canvasHeader",
+          "textureSubBar",
+          "canvasHost"
+        ]
+      },
+      "canvasHeader": {
+        "type": "HBox",
+        "width": 768,
+        "height": 28,
+        "layout": {
+          "kind": "hbox",
+          "padding": 0,
+          "gap": 4
+        },
+        "children": [
+          "workspaceTabBar",
+          "canvasTitleLabel",
+          "zoomSlider",
+          "activeToolLabel"
+        ]
+      },
+      "workspaceTabBar": {
+        "type": "TabBar",
+        "width": 124,
+        "height": 28,
+        "size": {
+          "fixedWidth": 124
+        },
+        "props": {
+          "tabs": "Drawing,Texture",
+          "value": 0
+        }
+      },
+      "canvasTitleLabel": {
+        "type": "Label",
+        "width": 180,
+        "height": 28,
+        "size": {
+          "stretch": 1,
+          "horizontal": "expanding",
+          "minWidth": 24
+        },
+        "props": {
+          "text": "画布：样片镜头",
+          "tone": "title"
+        }
+      },
+      "zoomSlider": {
+        "type": "Slider",
+        "width": 52,
+        "height": 28,
+        "size": {
+          "fixedWidth": 52
+        },
+        "props": {
+          "min": 25,
+          "max": 400,
+          "step": 25,
+          "value": 100
         }
       },
       "activeToolLabel": {
         "type": "Label",
-        "width": 140,
-        "height": 32,
+        "width": 72,
+        "height": 28,
+        "size": {
+          "fixedWidth": 72
+        },
         "props": {
-          "text": "画笔",
+          "text": "当前工具：画笔",
           "tone": "muted",
           "align": "right"
         }
       },
-      "canvasHost": {
-        "type": "External",
-        "width": 760,
-        "height": 520,
+      "textureSubBar": {
+        "type": "HBox",
+        "width": 768,
+        "height": 24,
+        "layout": {
+          "kind": "hbox",
+          "padding": 0,
+          "gap": 4
+        },
+        "children": [
+          "textureHostLabel",
+          "followTimelineCheck",
+          "followTextureCheck",
+          "floatTextureBtn"
+        ]
+      },
+      "textureHostLabel": {
+        "type": "Label",
+        "width": 120,
+        "height": 24,
         "size": {
           "stretch": 1,
-          "vertical": "expanding"
+          "horizontal": "expanding",
+          "minWidth": 40
+        },
+        "props": {
+          "text": "纹理子视图：中央页签 (default.textureview)",
+          "tone": "muted"
         }
+      },
+      "followTimelineCheck": {
+        "type": "CheckBox",
+        "width": 68,
+        "height": 24,
+        "size": {
+          "fixedWidth": 68
+        },
+        "props": {
+          "text": "跟随帧",
+          "value": true
+        }
+      },
+      "followTextureCheck": {
+        "type": "CheckBox",
+        "width": 68,
+        "height": 24,
+        "size": {
+          "fixedWidth": 68
+        },
+        "props": {
+          "text": "同步UV",
+          "value": true
+        }
+      },
+      "floatTextureBtn": {
+        "type": "Button",
+        "width": 64,
+        "height": 24,
+        "size": {
+          "fixedWidth": 64
+        },
+        "props": {
+          "text": "浮动窗",
+          "variant": "secondary"
+        }
+      },
+      "canvasHost": {
+        "type": "External",
+        "width": 768,
+        "height": 482,
+        "size": {
+          "stretch": 1,
+          "vertical": "expanding",
+          "minHeight": 80
+        },
+        "contextMenu": [
+          {
+            "id": "ctxResetZoom",
+            "text": "重置画布缩放 (100%)",
+            "emit": "resetCanvasZoom"
+          },
+          {
+            "id": "ctxClearCanvas",
+            "text": "清空当前帧画布",
+            "emit": "clearCurrentFrame"
+          }
+        ]
       },
       "inspectorDock": {
         "type": "Dock",
         "dockArea": "right",
-        "width": 260,
-        "height": 580,
+        "width": 264,
+        "height": 554,
         "headerHeight": 26,
-        "title": "检查器",
+        "title": "工具选项与检查器",
         "layout": {
           "kind": "vbox",
-          "padding": 10,
-          "gap": 8
+          "padding": 4,
+          "gap": 2
         },
         "children": [
+          "toolOptHeader",
+          "toolOptionsForm",
+          "inspectorSep1",
           "inspectorTabs",
           "inspectorStack",
           "colorPanelToggleBtn",
           "colorPanel"
         ]
       },
+      "toolOptHeader": {
+        "type": "Label",
+        "width": 256,
+        "height": 16,
+        "props": {
+          "text": "工具选项 (Tool Options)",
+          "tone": "title"
+        }
+      },
+      "toolOptionsForm": {
+        "type": "DataForm",
+        "width": 256,
+        "height": 82,
+        "props": {
+          "schema": {},
+          "values": {},
+          "emptyText": "当前工具无附加选项"
+        }
+      },
+      "inspectorSep1": {
+        "type": "Separator",
+        "width": 256,
+        "height": 2,
+        "props": {
+          "orientation": "horizontal"
+        }
+      },
       "inspectorTabs": {
         "type": "Grid",
-        "width": 240,
-        "height": 32,
+        "width": 256,
+        "height": 22,
         "layout": {
           "kind": "grid",
-          "columns": 2,
-          "gap": 6,
+          "columns": 3,
+          "gap": 4,
           "columnStretch": [
+            1,
             1,
             1
           ],
@@ -387,6 +1039,7 @@
         },
         "children": [
           "tabPropsBtn",
+          "tabHistoryBtn",
           "tabExportBtn"
         ]
       },
@@ -394,19 +1047,30 @@
         "type": "Button",
         "row": 0,
         "column": 0,
-        "width": 117,
-        "height": 32,
+        "width": 82,
+        "height": 22,
         "props": {
           "text": "图层属性",
           "variant": "primary"
         }
       },
-      "tabExportBtn": {
+      "tabHistoryBtn": {
         "type": "Button",
         "row": 0,
         "column": 1,
-        "width": 117,
-        "height": 32,
+        "width": 82,
+        "height": 22,
+        "props": {
+          "text": "历史记录",
+          "variant": "secondary"
+        }
+      },
+      "tabExportBtn": {
+        "type": "Button",
+        "row": 0,
+        "column": 2,
+        "width": 82,
+        "height": 22,
         "props": {
           "text": "渲染导出",
           "variant": "secondary"
@@ -414,11 +1078,12 @@
       },
       "inspectorStack": {
         "type": "Stack",
-        "width": 240,
-        "height": 494,
+        "width": 256,
+        "height": 180,
         "size": {
-          "stretch": 1,
-          "vertical": "expanding"
+          "stretch": 2,
+          "vertical": "expanding",
+          "minHeight": 86
         },
         "layout": {
           "kind": "stack",
@@ -429,18 +1094,19 @@
         },
         "children": [
           "layerPropsPage",
-          "exportPage"
+          "exportPage",
+          "historyPage"
         ]
       },
       "layerPropsPage": {
         "type": "Form",
-        "width": 240,
-        "height": 494,
+        "width": 256,
+        "height": 180,
         "layout": {
           "kind": "form",
-          "padding": 4,
-          "gap": 8,
-          "labelWidth": 76
+          "padding": 0,
+          "gap": 1,
+          "labelWidth": 68
         },
         "children": [
           "blendLabel",
@@ -453,8 +1119,8 @@
       },
       "blendLabel": {
         "type": "Label",
-        "width": 76,
-        "height": 30,
+        "width": 68,
+        "height": 20,
         "props": {
           "text": "混合模式",
           "tone": "muted"
@@ -462,17 +1128,17 @@
       },
       "blendCombo": {
         "type": "ComboBox",
-        "width": 148,
-        "height": 30,
+        "width": 168,
+        "height": 20,
         "props": {
-          "options": "Normal,Multiply,Screen",
+          "options": "Normal,Multiply,Screen,Overlay",
           "value": "Normal"
         }
       },
       "opacityLabel": {
         "type": "Label",
-        "width": 76,
-        "height": 30,
+        "width": 68,
+        "height": 20,
         "props": {
           "text": "不透明度",
           "tone": "muted"
@@ -480,8 +1146,8 @@
       },
       "opacitySpin": {
         "type": "SpinBox",
-        "width": 148,
-        "height": 30,
+        "width": 168,
+        "height": 20,
         "props": {
           "min": 0,
           "max": 100,
@@ -491,8 +1157,8 @@
       },
       "lockLabel": {
         "type": "Label",
-        "width": 76,
-        "height": 30,
+        "width": 68,
+        "height": 20,
         "props": {
           "text": "锁定编辑",
           "tone": "muted"
@@ -500,8 +1166,8 @@
       },
       "lockLayerCheck": {
         "type": "CheckBox",
-        "width": 148,
-        "height": 30,
+        "width": 168,
+        "height": 20,
         "props": {
           "text": "锁定当前图层",
           "value": false
@@ -509,12 +1175,12 @@
       },
       "exportPage": {
         "type": "VBox",
-        "width": 240,
-        "height": 494,
+        "width": 256,
+        "height": 180,
         "layout": {
           "kind": "vbox",
-          "padding": 4,
-          "gap": 8
+          "padding": 0,
+          "gap": 2
         },
         "children": [
           "exportHintLabel",
@@ -524,8 +1190,8 @@
       },
       "exportHintLabel": {
         "type": "Label",
-        "width": 232,
-        "height": 28,
+        "width": 256,
+        "height": 18,
         "props": {
           "text": "导出当前动画镜头片段",
           "tone": "normal"
@@ -533,8 +1199,8 @@
       },
       "exportBtn": {
         "type": "Button",
-        "width": 232,
-        "height": 32,
+        "width": 256,
+        "height": 22,
         "props": {
           "text": "开始导出",
           "variant": "primary"
@@ -542,17 +1208,88 @@
       },
       "exportResultLabel": {
         "type": "Label",
-        "width": 232,
-        "height": 28,
+        "width": 256,
+        "height": 18,
         "props": {
           "text": "尚未导出",
           "tone": "muted"
         }
       },
+      "historyPage": {
+        "type": "VBox",
+        "width": 256,
+        "height": 180,
+        "layout": {
+          "kind": "vbox",
+          "padding": 0,
+          "gap": 2
+        },
+        "children": [
+          "historyToolbar",
+          "historyList"
+        ]
+      },
+      "historyToolbar": {
+        "type": "HBox",
+        "width": 256,
+        "height": 22,
+        "layout": {
+          "kind": "hbox",
+          "padding": 0,
+          "gap": 4
+        },
+        "children": [
+          "undoBtn",
+          "redoBtn",
+          "clearHistoryBtn"
+        ]
+      },
+      "undoBtn": {
+        "type": "Button",
+        "width": 82,
+        "height": 22,
+        "props": {
+          "text": "撤销",
+          "variant": "secondary"
+        }
+      },
+      "redoBtn": {
+        "type": "Button",
+        "width": 82,
+        "height": 22,
+        "props": {
+          "text": "重做",
+          "variant": "secondary"
+        }
+      },
+      "clearHistoryBtn": {
+        "type": "Button",
+        "width": 84,
+        "height": 22,
+        "props": {
+          "text": "清空历史",
+          "variant": "danger"
+        }
+      },
+      "historyList": {
+        "type": "List",
+        "width": 256,
+        "height": 150,
+        "size": {
+          "stretch": 1,
+          "vertical": "expanding",
+          "minHeight": 38
+        },
+        "props": {
+          "items": [],
+          "value": 2,
+          "mutedFrom": -1
+        }
+      },
       "colorPanelToggleBtn": {
         "type": "StateButton",
-        "width": 240,
-        "height": 34,
+        "width": 256,
+        "height": 22,
         "props": {
           "text": "收起调色盘",
           "selected": true
@@ -560,12 +1297,18 @@
       },
       "colorPanel": {
         "type": "VBox",
-        "width": 240,
-        "height": 154,
+        "width": 256,
+        "height": 96,
+        "size": {
+          "stretch": 1,
+          "vertical": "expanding",
+          "minHeight": 42,
+          "maxHeight": 96
+        },
         "layout": {
           "kind": "vbox",
-          "padding": 6,
-          "gap": 6
+          "padding": 2,
+          "gap": 2
         },
         "children": [
           "colorPickerCanvas",
@@ -574,8 +1317,13 @@
       },
       "colorPickerCanvas": {
         "type": "ColorPicker",
-        "width": 228,
-        "height": 112,
+        "width": 252,
+        "height": 78,
+        "size": {
+          "stretch": 1,
+          "vertical": "expanding",
+          "minHeight": 24
+        },
         "props": {
           "hue": 210,
           "saturation": 78,
@@ -585,8 +1333,8 @@
       },
       "colorHexLabel": {
         "type": "Label",
-        "width": 228,
-        "height": 24,
+        "width": 252,
+        "height": 12,
         "props": {
           "text": "当前颜色：#3394eb",
           "tone": "muted"
@@ -596,29 +1344,73 @@
         "type": "Dock",
         "dockArea": "bottom",
         "width": 1280,
-        "height": 96,
+        "height": 132,
         "headerHeight": 26,
         "title": "时间轴",
         "layout": {
-          "kind": "hbox",
+          "kind": "vbox",
           "padding": [
-            10,
+            6,
             12,
-            10,
+            6,
             12
           ],
-          "gap": 10
+          "gap": 6
         },
         "children": [
+          "timelineTransportFlow",
+          "timelineTrackRow"
+        ]
+      },
+      "timelineTransportFlow": {
+        "type": "Flow",
+        "width": 1256,
+        "height": 28,
+        "size": {
+          "horizontal": "expanding"
+        },
+        "layout": {
+          "kind": "flow",
+          "padding": 0,
+          "columnGap": 6,
+          "rowGap": 4
+        },
+        "children": [
+          "playToggleBtn",
           "prevFrameBtn",
           "nextFrameBtn",
+          "addFrameBtn",
+          "addHoldFrameBtn",
+          "duplicateFrameBtn",
+          "moveFrameBackBtn",
+          "removeFrameBtn",
+          "loopToggleBtn",
+          "onionToggleBtn",
+          "onionLinesCheck",
+          "onionFillsCheck",
+          "onionAmCheck",
+          "onionGuideCheck",
+          "fpsSelectCombo",
+          "frameSlider",
           "frameInfoLabel"
         ]
       },
+      "playToggleBtn": {
+        "type": "Button",
+        "width": 68,
+        "height": 28,
+        "props": {
+          "text": "播放",
+          "variant": "primary",
+          "icon": "play",
+          "checkable": true,
+          "checked": false
+        }
+      },
       "prevFrameBtn": {
         "type": "Button",
-        "width": 76,
-        "height": 32,
+        "width": 58,
+        "height": 28,
         "props": {
           "text": "上一帧",
           "variant": "secondary"
@@ -626,24 +1418,197 @@
       },
       "nextFrameBtn": {
         "type": "Button",
-        "width": 76,
-        "height": 32,
+        "width": 58,
+        "height": 28,
         "props": {
           "text": "下一帧",
           "variant": "secondary"
         }
       },
+      "addFrameBtn": {
+        "type": "Button",
+        "width": 68,
+        "height": 28,
+        "props": {
+          "text": "+关键帧",
+          "variant": "secondary"
+        }
+      },
+      "addHoldFrameBtn": {
+        "type": "Button",
+        "width": 68,
+        "height": 28,
+        "props": {
+          "text": "+延长帧",
+          "variant": "secondary"
+        }
+      },
+      "duplicateFrameBtn": {
+        "type": "Button",
+        "width": 60,
+        "height": 28,
+        "props": {
+          "text": "复制帧",
+          "variant": "secondary"
+        }
+      },
+      "moveFrameBackBtn": {
+        "type": "Button",
+        "width": 60,
+        "height": 28,
+        "props": {
+          "text": "帧前移",
+          "variant": "secondary"
+        }
+      },
+      "removeFrameBtn": {
+        "type": "Button",
+        "width": 62,
+        "height": 28,
+        "props": {
+          "text": "-删除帧",
+          "variant": "secondary"
+        }
+      },
+      "loopToggleBtn": {
+        "type": "Button",
+        "width": 62,
+        "height": 28,
+        "props": {
+          "text": "循环",
+          "variant": "secondary",
+          "checkable": true,
+          "checked": true
+        }
+      },
+      "onionToggleBtn": {
+        "type": "Button",
+        "width": 62,
+        "height": 28,
+        "props": {
+          "text": "洋葱皮",
+          "variant": "secondary",
+          "checkable": true,
+          "checked": false
+        }
+      },
+      "onionLinesCheck": {
+        "type": "CheckBox",
+        "width": 52,
+        "height": 28,
+        "props": {
+          "text": "线稿",
+          "value": true
+        }
+      },
+      "onionFillsCheck": {
+        "type": "CheckBox",
+        "width": 52,
+        "height": 28,
+        "props": {
+          "text": "填充",
+          "value": true
+        }
+      },
+      "onionAmCheck": {
+        "type": "CheckBox",
+        "width": 52,
+        "height": 28,
+        "props": {
+          "text": "映射",
+          "value": false
+        }
+      },
+      "onionGuideCheck": {
+        "type": "CheckBox",
+        "width": 52,
+        "height": 28,
+        "props": {
+          "text": "辅助",
+          "value": false
+        }
+      },
+      "fpsSelectCombo": {
+        "type": "ComboBox",
+        "width": 82,
+        "height": 28,
+        "props": {
+          "options": "12 fps,24 fps,30 fps",
+          "value": "24 fps"
+        }
+      },
+      "frameSlider": {
+        "type": "Slider",
+        "width": 112,
+        "height": 28,
+        "props": {
+          "min": 1,
+          "max": 24,
+          "step": 1,
+          "value": 1
+        }
+      },
       "frameInfoLabel": {
         "type": "Label",
-        "width": 240,
-        "height": 32,
+        "width": 116,
+        "height": 28,
+        "props": {
+          "text": "当前帧：1 / 24",
+          "tone": "normal"
+        }
+      },
+      "timelineTrackRow": {
+        "type": "HBox",
+        "width": 1256,
+        "height": 26,
+        "size": {
+          "horizontal": "expanding",
+          "vertical": "fixed"
+        },
+        "layout": {
+          "kind": "hbox",
+          "padding": 0,
+          "gap": 8
+        },
+        "children": [
+          "timelineTrackLabel",
+          "timelineScrollBar",
+          "timelineOffsetLabel"
+        ]
+      },
+      "timelineTrackLabel": {
+        "type": "Label",
+        "width": 110,
+        "height": 26,
+        "props": {
+          "text": "时间轴视口滚动",
+          "tone": "muted"
+        }
+      },
+      "timelineScrollBar": {
+        "type": "ScrollBar",
+        "width": 600,
+        "height": 26,
         "size": {
           "stretch": 1,
           "horizontal": "expanding"
         },
         "props": {
-          "text": "当前帧：1",
-          "tone": "normal"
+          "min": 0,
+          "max": 100,
+          "step": 5,
+          "pageStep": 20,
+          "value": 0
+        }
+      },
+      "timelineOffsetLabel": {
+        "type": "Label",
+        "width": 120,
+        "height": 26,
+        "props": {
+          "text": "视口偏移：0%",
+          "tone": "muted",
+          "align": "right"
         }
       },
       "statusBar": {
@@ -662,12 +1627,14 @@
         },
         "children": [
           "statusTextLabel",
+          "projectSummaryLabel",
+          "statusClockLabel",
           "statusLayerCountLabel"
         ]
       },
       "statusTextLabel": {
         "type": "Label",
-        "width": 400,
+        "width": 360,
         "height": 28,
         "size": {
           "stretch": 1,
@@ -678,12 +1645,32 @@
           "tone": "muted"
         }
       },
-      "statusLayerCountLabel": {
+      "projectSummaryLabel": {
         "type": "Label",
-        "width": 160,
+        "width": 180,
         "height": 28,
         "props": {
-          "text": "3",
+          "text": "样片镜头 (1920x1080)",
+          "tone": "muted",
+          "align": "right"
+        }
+      },
+      "statusClockLabel": {
+        "type": "Label",
+        "width": 120,
+        "height": 28,
+        "props": {
+          "text": "时钟：0 ms",
+          "tone": "muted",
+          "align": "right"
+        }
+      },
+      "statusLayerCountLabel": {
+        "type": "Label",
+        "width": 100,
+        "height": 28,
+        "props": {
+          "text": "图层数：3",
           "tone": "muted",
           "align": "right"
         }
@@ -880,6 +1867,215 @@
           "text": "创建项目",
           "variant": "primary"
         }
+      },
+      "drawSettingsDialog": {
+        "type": "Dialog",
+        "modal": true,
+        "initialOpen": false,
+        "width": 400,
+        "height": 260,
+        "title": "画笔与压感设置",
+        "layout": {
+          "kind": "vbox",
+          "padding": 16,
+          "gap": 10
+        },
+        "children": [
+          "drawSettingsForm",
+          "drawDialogSep",
+          "drawSettingsButtonBox"
+        ]
+      },
+      "drawSettingsForm": {
+        "type": "Form",
+        "width": 368,
+        "height": 168,
+        "size": {
+          "stretch": 1,
+          "vertical": "expanding"
+        },
+        "layout": {
+          "kind": "form",
+          "padding": 0,
+          "gap": 8,
+          "labelWidth": 88
+        },
+        "children": [
+          "pressureCurveLabel",
+          "pressureCurveCombo",
+          "minRadiusLabel",
+          "minRadiusSpin",
+          "tiltSensLabel",
+          "tiltSensitivitySlider",
+          "antiAliasLabel",
+          "antiAliasCheck"
+        ]
+      },
+      "pressureCurveLabel": {
+        "type": "Label",
+        "width": 88,
+        "height": 30,
+        "props": {
+          "text": "压感曲线",
+          "tone": "muted"
+        }
+      },
+      "pressureCurveCombo": {
+        "type": "ComboBox",
+        "width": 272,
+        "height": 30,
+        "props": {
+          "options": "Linear,SoftS,HardCurve",
+          "value": "Linear"
+        }
+      },
+      "minRadiusLabel": {
+        "type": "Label",
+        "width": 88,
+        "height": 30,
+        "props": {
+          "text": "最小笔尖",
+          "tone": "muted"
+        }
+      },
+      "minRadiusSpin": {
+        "type": "SpinBox",
+        "width": 272,
+        "height": 30,
+        "props": {
+          "min": 0,
+          "max": 100,
+          "step": 5,
+          "value": 15
+        }
+      },
+      "tiltSensLabel": {
+        "type": "Label",
+        "width": 88,
+        "height": 30,
+        "props": {
+          "text": "倾角灵敏度",
+          "tone": "muted"
+        }
+      },
+      "tiltSensitivitySlider": {
+        "type": "Slider",
+        "width": 272,
+        "height": 30,
+        "props": {
+          "min": 0,
+          "max": 100,
+          "step": 5,
+          "value": 60
+        }
+      },
+      "antiAliasLabel": {
+        "type": "Label",
+        "width": 88,
+        "height": 30,
+        "props": {
+          "text": "边缘抗锯齿",
+          "tone": "muted"
+        }
+      },
+      "antiAliasCheck": {
+        "type": "CheckBox",
+        "width": 272,
+        "height": 30,
+        "props": {
+          "text": "开启笔触抗锯齿",
+          "value": true
+        }
+      },
+      "drawDialogSep": {
+        "type": "Separator",
+        "width": 368,
+        "height": 6,
+        "props": {
+          "orientation": "horizontal"
+        }
+      },
+      "drawSettingsButtonBox": {
+        "type": "DialogButtonBox",
+        "width": 368,
+        "height": 34,
+        "props": {
+          "buttons": "ok,cancel",
+          "okText": "应用设置",
+          "cancelText": "取消"
+        }
+      },
+      "textureFloatDialog": {
+        "type": "Dialog",
+        "modal": false,
+        "initialOpen": false,
+        "width": 360,
+        "height": 220,
+        "title": "纹理子视图 (Texture FloatBox)",
+        "layout": {
+          "kind": "vbox",
+          "padding": 14,
+          "gap": 10
+        },
+        "children": [
+          "textureFloatInfoLabel",
+          "textureFloatActionsRow",
+          "closeTextureFloatBtn"
+        ]
+      },
+      "textureFloatInfoLabel": {
+        "type": "Label",
+        "width": 332,
+        "height": 60,
+        "size": {
+          "stretch": 1,
+          "vertical": "expanding"
+        },
+        "props": {
+          "text": "当前纹理子视图处于独立浮动窗口 (FloatBox)",
+          "tone": "normal"
+        }
+      },
+      "textureFloatActionsRow": {
+        "type": "HBox",
+        "width": 332,
+        "height": 32,
+        "layout": {
+          "kind": "hbox",
+          "padding": 0,
+          "gap": 8
+        },
+        "children": [
+          "dockTextureToTabBtn",
+          "embedTextureBtn"
+        ]
+      },
+      "dockTextureToTabBtn": {
+        "type": "Button",
+        "width": 162,
+        "height": 32,
+        "props": {
+          "text": "归还至中央 Texture 页",
+          "variant": "primary"
+        }
+      },
+      "embedTextureBtn": {
+        "type": "Button",
+        "width": 162,
+        "height": 32,
+        "props": {
+          "text": "嵌入工具面板槽位",
+          "variant": "secondary"
+        }
+      },
+      "closeTextureFloatBtn": {
+        "type": "Button",
+        "width": 332,
+        "height": 30,
+        "props": {
+          "text": "关闭浮动视图",
+          "variant": "secondary"
+        }
       }
     }
   },
@@ -903,6 +2099,10 @@
           "type": "number",
           "initial": 24
         },
+        "fpsLabel": {
+          "type": "string",
+          "initial": "24 fps"
+        },
         "transparent": {
           "type": "boolean",
           "initial": true
@@ -910,15 +2110,75 @@
         "activeTool": {
           "type": "enum",
           "values": [
+            "arrow",
             "brush",
             "eraser",
-            "fill"
+            "fill",
+            "shape",
+            "select",
+            "move",
+            "eyedropper",
+            "h_center_line",
+            "v_center_line",
+            "mapping_area",
+            "additional_line",
+            "auto_mapping_2"
           ],
           "initial": "brush"
+        },
+        "toolsLocked": {
+          "type": "boolean",
+          "initial": false
+        },
+        "workspaceTab": {
+          "type": "number",
+          "initial": 0
+        },
+        "zoom": {
+          "type": "number",
+          "initial": 100
         },
         "currentFrame": {
           "type": "number",
           "initial": 1
+        },
+        "totalFrames": {
+          "type": "number",
+          "initial": 24
+        },
+        "playing": {
+          "type": "boolean",
+          "initial": false
+        },
+        "loopPlay": {
+          "type": "boolean",
+          "initial": true
+        },
+        "onionSkin": {
+          "type": "boolean",
+          "initial": false
+        },
+        "timelineScroll": {
+          "type": "number",
+          "initial": 0
+        },
+        "theme": {
+          "type": "enum",
+          "values": [
+            "dark",
+            "graphite",
+            "light"
+          ],
+          "initial": "dark"
+        },
+        "stabilizer": {
+          "type": "enum",
+          "values": [
+            "off",
+            "med",
+            "high"
+          ],
+          "initial": "med"
         },
         "statusMessage": {
           "type": "string",
@@ -927,6 +2187,157 @@
         "exportResult": {
           "type": "string",
           "initial": "尚未导出"
+        }
+      },
+      "forcePad": {
+        "fx": {
+          "type": "number",
+          "initial": 0
+        },
+        "fy": {
+          "type": "number",
+          "initial": 0
+        },
+        "pressure": {
+          "type": "number",
+          "initial": 50
+        }
+      },
+      "textureView": {
+        "hostMode": {
+          "type": "enum",
+          "values": [
+            "tab",
+            "embedded",
+            "floating"
+          ],
+          "initial": "tab"
+        },
+        "fileName": {
+          "type": "string",
+          "initial": "default.textureview"
+        },
+        "followTimeline": {
+          "type": "boolean",
+          "initial": true
+        },
+        "followTexture": {
+          "type": "boolean",
+          "initial": true
+        }
+      },
+      "timeline": {
+        "holdFrames": {
+          "type": "number",
+          "initial": 0
+        },
+        "onionLines": {
+          "type": "boolean",
+          "initial": true
+        },
+        "onionFills": {
+          "type": "boolean",
+          "initial": true
+        },
+        "onionAm": {
+          "type": "boolean",
+          "initial": false
+        },
+        "onionGuide": {
+          "type": "boolean",
+          "initial": false
+        }
+      },
+      "toolOptions": {
+        "schema": {
+          "type": "object",
+          "initial": {
+            "row_spacing": 4,
+            "column_spacing": 6,
+            "controls": [
+              {
+                "name": "color",
+                "type": "button",
+                "title": "Black",
+                "hook": "color",
+                "value": "black",
+                "row": 0,
+                "column": 0,
+                "state": {
+                  "color": "black"
+                }
+              },
+              {
+                "name": "color",
+                "type": "button",
+                "title": "Blue",
+                "hook": "color",
+                "value": "blue",
+                "row": 0,
+                "column": 1,
+                "state": {
+                  "color": "blue"
+                }
+              },
+              {
+                "name": "color",
+                "type": "button",
+                "title": "Green",
+                "hook": "color",
+                "value": "green",
+                "row": 0,
+                "column": 2,
+                "state": {
+                  "color": "green"
+                }
+              },
+              {
+                "name": "smooth",
+                "type": "slider",
+                "title": "Smooth",
+                "hook": "smooth",
+                "min": 0,
+                "max": 100,
+                "value": 50,
+                "row": 1,
+                "start_column": 0,
+                "end_column": 2
+              },
+              {
+                "name": "pen_width",
+                "type": "slider",
+                "title": "Width",
+                "hook": "pen_width",
+                "min": 1,
+                "max": 50,
+                "value": 5,
+                "row": 2,
+                "start_column": 0,
+                "end_column": 2
+              },
+              {
+                "name": "openAdvBrush",
+                "type": "subwindow",
+                "title": "压感曲线...",
+                "hook": "openDrawSettings",
+                "row": 3,
+                "start_column": 0,
+                "end_column": 2
+              }
+            ]
+          }
+        },
+        "values": {
+          "type": "object",
+          "initial": {
+            "color": "black",
+            "smooth": 50,
+            "pen_width": 5
+          }
+        },
+        "lastHook": {
+          "type": "string",
+          "initial": "switch:brush"
         }
       },
       "layer": {
@@ -949,24 +2360,43 @@
         }
       },
       "layers": {
+        "viewTab": {
+          "type": "number",
+          "initial": 0
+        },
         "items": {
           "type": "array",
           "initial": [
             {
-              "id": 1,
-              "name": "背景层",
+              "id": "grp_char",
+              "name": "角色图层组",
+              "kind": "group",
+              "isGroup": true,
+              "depth": 0,
+              "collapsed": false,
+              "checked": true,
               "visible": true,
               "locked": false
             },
             {
-              "id": 2,
+              "id": "lyr_line",
               "name": "人物线稿",
+              "kind": "Vector",
+              "isGroup": false,
+              "depth": 1,
+              "collapsed": false,
+              "checked": true,
               "visible": true,
               "locked": false
             },
             {
-              "id": 3,
-              "name": "高光层",
+              "id": "lyr_bg",
+              "name": "远景背景层",
+              "kind": "Raster",
+              "isGroup": false,
+              "depth": 0,
+              "collapsed": false,
+              "checked": true,
               "visible": true,
               "locked": false
             }
@@ -975,6 +2405,74 @@
         "selectedIndex": {
           "type": "number",
           "initial": 0
+        },
+        "nextId": {
+          "type": "number",
+          "initial": 4
+        }
+      },
+      "assets": {
+        "items": {
+          "type": "array",
+          "initial": [
+            {
+              "id": 1,
+              "name": "角色设定草图.png",
+              "badge": "PNG"
+            },
+            {
+              "id": 2,
+              "name": "水彩纸纹理_01.tex",
+              "badge": "TEX"
+            },
+            {
+              "id": 3,
+              "name": "森林背景远景.png",
+              "badge": "PNG"
+            }
+          ]
+        },
+        "selectedIndex": {
+          "type": "number",
+          "initial": 0
+        },
+        "nextId": {
+          "type": "number",
+          "initial": 4
+        },
+        "note": {
+          "type": "string",
+          "initial": "主角全身三视图参考，用于第 1-12 帧原画对位。"
+        }
+      },
+      "history": {
+        "items": {
+          "type": "array",
+          "initial": [
+            {
+              "id": 1,
+              "name": "初始化画布 (1920x1080)",
+              "badge": "#1"
+            },
+            {
+              "id": 2,
+              "name": "导入角色线稿层",
+              "badge": "#2"
+            },
+            {
+              "id": 3,
+              "name": "绘制第 1 帧关键帧",
+              "badge": "#3"
+            }
+          ]
+        },
+        "selectedIndex": {
+          "type": "number",
+          "initial": 2
+        },
+        "mutedFrom": {
+          "type": "number",
+          "initial": -1
         },
         "nextId": {
           "type": "number",
@@ -1032,6 +2530,24 @@
           "type": "boolean",
           "initial": true
         }
+      },
+      "drawSettings": {
+        "pressureCurve": {
+          "type": "string",
+          "initial": "Linear"
+        },
+        "minRadius": {
+          "type": "number",
+          "initial": 15
+        },
+        "tiltSensitivity": {
+          "type": "number",
+          "initial": 60
+        },
+        "antiAlias": {
+          "type": "boolean",
+          "initial": true
+        }
       }
     },
     "conditions": {
@@ -1047,6 +2563,18 @@
         "type": "symbol",
         "expr": "layers.selectedIndex >= 0 and layers.selectedIndex < layers.items.length - 1"
       },
+      "canRemoveAsset": {
+        "type": "symbol",
+        "expr": "assets.items.length > 1 and assets.selectedIndex >= 0"
+      },
+      "canRemoveFrame": {
+        "type": "symbol",
+        "expr": "project.totalFrames > 1"
+      },
+      "isArrow": {
+        "type": "symbol",
+        "expr": "project.activeTool == \"arrow\""
+      },
       "isBrush": {
         "type": "symbol",
         "expr": "project.activeTool == \"brush\""
@@ -1059,6 +2587,46 @@
         "type": "symbol",
         "expr": "project.activeTool == \"fill\""
       },
+      "isShape": {
+        "type": "symbol",
+        "expr": "project.activeTool == \"shape\""
+      },
+      "isSelect": {
+        "type": "symbol",
+        "expr": "project.activeTool == \"select\""
+      },
+      "isMove": {
+        "type": "symbol",
+        "expr": "project.activeTool == \"move\""
+      },
+      "isEyedropper": {
+        "type": "symbol",
+        "expr": "project.activeTool == \"eyedropper\""
+      },
+      "isHLine": {
+        "type": "symbol",
+        "expr": "project.activeTool == \"h_center_line\""
+      },
+      "isVLine": {
+        "type": "symbol",
+        "expr": "project.activeTool == \"v_center_line\""
+      },
+      "isMapArea": {
+        "type": "symbol",
+        "expr": "project.activeTool == \"mapping_area\""
+      },
+      "isAddLine": {
+        "type": "symbol",
+        "expr": "project.activeTool == \"additional_line\""
+      },
+      "isAutoMap": {
+        "type": "symbol",
+        "expr": "project.activeTool == \"auto_mapping_2\""
+      },
+      "isExtraToolActive": {
+        "type": "symbol",
+        "expr": "isHLine or isVLine or isMapArea or isAddLine or isAutoMap"
+      },
       "isPropsTab": {
         "type": "symbol",
         "expr": "inspector.tabIndex == 0"
@@ -1066,9 +2634,51 @@
       "isExportTab": {
         "type": "symbol",
         "expr": "inspector.tabIndex == 1"
+      },
+      "isHistoryTab": {
+        "type": "symbol",
+        "expr": "inspector.tabIndex == 2"
       }
     },
     "events": {
+      "clock.tick": [
+        {
+          "if": "project.playing",
+          "then": [
+            {
+              "if": "project.currentFrame < project.totalFrames",
+              "then": [
+                {
+                  "set": "project.currentFrame = project.currentFrame + 1"
+                }
+              ],
+              "else": [
+                {
+                  "if": "project.loopPlay",
+                  "then": [
+                    {
+                      "set": "project.currentFrame = 1"
+                    }
+                  ],
+                  "else": [
+                    {
+                      "set": "project.playing = false"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "set": "project.statusMessage = \"播放时钟推进：\" + ms + \" ms（第 \" + project.currentFrame + \" 帧）\""
+            }
+          ],
+          "else": [
+            {
+              "set": "project.statusMessage = \"时钟同步：\" + ms + \" ms\""
+            }
+          ]
+        }
+      ],
       "openNewProject": [
         {
           "set": "newProject.name = \"新动画镜头\""
@@ -1081,6 +2691,388 @@
         },
         {
           "openWindow": "newProjectDialog"
+        }
+      ],
+      "openProjectFile": [
+        {
+          "set": "project.title = \"导入工程_镜头02\""
+        },
+        {
+          "set": "project.statusMessage = \"已打开项目：导入工程_镜头02\""
+        },
+        {
+          "fn": {
+            "name": "recordHistory",
+            "args": {
+              "label": "\"打开项目：导入工程_镜头02\""
+            }
+          }
+        }
+      ],
+      "saveProjectFile": [
+        {
+          "set": "project.statusMessage = \"已保存项目：\" + project.title"
+        },
+        {
+          "fn": {
+            "name": "recordHistory",
+            "args": {
+              "label": "\"保存项目快照\""
+            }
+          }
+        }
+      ],
+      "saveAsProjectFile": [
+        {
+          "set": "project.title = project.title + \"_副本\""
+        },
+        {
+          "set": "project.statusMessage = \"已另存为：\" + project.title"
+        }
+      ],
+      "openTextureFile": [
+        {
+          "set": "textureView.fileName = \"character_uv.textureview\""
+        },
+        {
+          "set": "project.statusMessage = \"已加载纹理视图文件：\" + textureView.fileName"
+        },
+        {
+          "fn": {
+            "name": "recordHistory",
+            "args": {
+              "label": "\"加载纹理视图：character_uv.textureview\""
+            }
+          }
+        }
+      ],
+      "saveTextureFile": [
+        {
+          "set": "project.statusMessage = \"已保存纹理视图文件：\" + textureView.fileName"
+        },
+        {
+          "fn": {
+            "name": "recordHistory",
+            "args": {
+              "label": "\"保存纹理视图：\" + textureView.fileName"
+            }
+          }
+        }
+      ],
+      "toggleTextureFloatWindow": [
+        {
+          "set": "textureView.hostMode = \"floating\""
+        },
+        {
+          "openWindow": "textureFloatDialog"
+        },
+        {
+          "set": "project.statusMessage = \"已弹出独立纹理浮动子视图 (FloatBox)\""
+        }
+      ],
+      "embedTextureInToolOptions": [
+        {
+          "set": "textureView.hostMode = \"embedded\""
+        },
+        {
+          "closeWindow": "textureFloatDialog"
+        },
+        {
+          "set": "project.statusMessage = \"已将纹理子视图嵌入工具选项面板槽位\""
+        }
+      ],
+      "importImageAsset": [
+        {
+          "push": {
+            "to": "assets.items",
+            "item": {
+              "id": "assets.nextId",
+              "name": "\"贴图素材_\" + assets.nextId + \".png\"",
+              "badge": "\"PNG\""
+            }
+          }
+        },
+        {
+          "set": "assets.selectedIndex = assets.items.length - 1"
+        },
+        {
+          "set": "assets.nextId = assets.nextId + 1"
+        },
+        {
+          "set": "project.statusMessage = \"已导入图像素材\""
+        },
+        {
+          "fn": {
+            "name": "recordHistory",
+            "args": {
+              "label": "\"导入外部素材\""
+            }
+          }
+        }
+      ],
+      "triggerExportClip": [
+        {
+          "set": "inspector.tabIndex = 1"
+        },
+        {
+          "call": "exportClip"
+        }
+      ],
+      "toggleOnionSkin": [
+        {
+          "set": "project.onionSkin = not project.onionSkin"
+        },
+        {
+          "set": "project.statusMessage = project.onionSkin ? \"已开启洋葱皮透视\" : \"已关闭洋葱皮透视\""
+        }
+      ],
+      "resetWorkspaceLayout": [
+        {
+          "set": "project.workspaceTab = 0"
+        },
+        {
+          "set": "project.zoom = 100"
+        },
+        {
+          "set": "inspector.tabIndex = 0"
+        },
+        {
+          "set": "textureView.hostMode = \"tab\""
+        },
+        {
+          "closeWindow": "textureFloatDialog"
+        },
+        {
+          "set": "project.statusMessage = \"工作区视图与缩放已重置\""
+        }
+      ],
+      "undoHistory": [
+        {
+          "fn": {
+            "name": "rewindHistory",
+            "args": {
+              "mode": "\"undo\""
+            }
+          }
+        }
+      ],
+      "redoHistory": [
+        {
+          "fn": {
+            "name": "rewindHistory",
+            "args": {
+              "mode": "\"redo\""
+            }
+          }
+        }
+      ],
+      "clearCurrentFrame": [
+        {
+          "set": "project.statusMessage = \"已清空第 \" + project.currentFrame + \" 帧画布内容\""
+        },
+        {
+          "fn": {
+            "name": "recordHistory",
+            "args": {
+              "label": "\"清空第 \" + project.currentFrame + \" 帧\""
+            }
+          }
+        }
+      ],
+      "runAutoColorize": [
+        {
+          "set": "project.statusMessage = \"自动映射：已完成当前帧智能上色\""
+        },
+        {
+          "fn": {
+            "name": "recordHistory",
+            "args": {
+              "label": "\"执行一键自动上色\""
+            }
+          }
+        }
+      ],
+      "runAutoInbetween": [
+        {
+          "set": "project.totalFrames = project.totalFrames + 2"
+        },
+        {
+          "set": "project.statusMessage = \"自动映射：已生成 2 帧补间动画\""
+        },
+        {
+          "fn": {
+            "name": "recordHistory",
+            "args": {
+              "label": "\"生成中间帧补间 (+2)\""
+            }
+          }
+        }
+      ],
+      "syncTextureMapping": [
+        {
+          "set": "project.workspaceTab = 1"
+        },
+        {
+          "set": "textureView.hostMode = \"tab\""
+        },
+        {
+          "set": "project.statusMessage = \"已切换至纹理贴图区并同步 UV 映射\""
+        }
+      ],
+      "openDrawSettings": [
+        {
+          "openWindow": "drawSettingsDialog"
+        }
+      ],
+      "setStabilizerOff": [
+        {
+          "set": "project.stabilizer = \"off\""
+        },
+        {
+          "set": "project.statusMessage = \"抖动修正：关闭 (S0)\""
+        }
+      ],
+      "setStabilizerMed": [
+        {
+          "set": "project.stabilizer = \"med\""
+        },
+        {
+          "set": "project.statusMessage = \"抖动修正：标准 (S5)\""
+        }
+      ],
+      "setStabilizerHigh": [
+        {
+          "set": "project.stabilizer = \"high\""
+        },
+        {
+          "set": "project.statusMessage = \"抖动修正：强力平滑 (S12)\""
+        }
+      ],
+      "setThemeDark": [
+        {
+          "set": "project.theme = \"dark\""
+        },
+        {
+          "set": "project.statusMessage = \"已切换主题：深色创作主题\""
+        }
+      ],
+      "setThemeGraphite": [
+        {
+          "set": "project.theme = \"graphite\""
+        },
+        {
+          "set": "project.statusMessage = \"已切换主题：石墨灰护眼主题\""
+        }
+      ],
+      "setThemeLight": [
+        {
+          "set": "project.theme = \"light\""
+        },
+        {
+          "set": "project.statusMessage = \"已切换主题：明亮浅色主题\""
+        }
+      ],
+      "resetActiveToolOptions": [
+        {
+          "fn": "syncToolOptions"
+        },
+        {
+          "set": "project.statusMessage = \"已重置当前工具默认参数\""
+        }
+      ],
+      "duplicateSelectedLayer": [
+        {
+          "push": {
+            "to": "layers.items",
+            "item": {
+              "id": "\"lyr_copy_\" + layers.nextId",
+              "name": "\"复制图层 \" + layers.nextId",
+              "kind": "\"Vector\"",
+              "isGroup": false,
+              "depth": 0,
+              "collapsed": false,
+              "checked": true,
+              "visible": true,
+              "locked": false
+            }
+          }
+        },
+        {
+          "set": "layers.selectedIndex = layers.items.length - 1"
+        },
+        {
+          "set": "layers.nextId = layers.nextId + 1"
+        },
+        {
+          "set": "project.statusMessage = \"已复制选中图层\""
+        }
+      ],
+      "toggleSelectedLayerLock": [
+        {
+          "set": "layer.locked = not layer.locked"
+        },
+        {
+          "if": "layers.selectedIndex >= 0",
+          "then": [
+            {
+              "set": "layers.items[layers.selectedIndex].locked = layer.locked"
+            }
+          ]
+        },
+        {
+          "set": "project.statusMessage = layer.locked ? \"已锁定当前图层\" : \"已解锁当前图层\""
+        }
+      ],
+      "deleteSelectedLayer": [
+        {
+          "if": "canRemoveLayer",
+          "then": [
+            {
+              "remove": {
+                "from": "layers.items",
+                "index": "layers.selectedIndex"
+              }
+            },
+            {
+              "if": "layers.selectedIndex >= layers.items.length",
+              "then": [
+                {
+                  "set": "layers.selectedIndex = layers.items.length - 1"
+                }
+              ]
+            },
+            {
+              "set": "project.statusMessage = \"已通过右键菜单删除图层\""
+            }
+          ]
+        }
+      ],
+      "dissolveLayerGroup": [
+        {
+          "fn": {
+            "name": "manageLayerGroup",
+            "args": {
+              "mode": "\"dissolve\""
+            }
+          }
+        }
+      ],
+      "deleteLayerGroup": [
+        {
+          "fn": {
+            "name": "manageLayerGroup",
+            "args": {
+              "mode": "\"deleteGroup\""
+            }
+          }
+        }
+      ],
+      "resetCanvasZoom": [
+        {
+          "set": "project.zoom = 100"
+        },
+        {
+          "set": "project.statusMessage = \"画布缩放已重置为 100%\""
         }
       ],
       "layerToggleVisible": {
@@ -1136,6 +3128,9 @@
       }
     },
     "objects": {
+      "toolsDock": {
+        "doc": "docs/window.md#tools-dock"
+      },
       "newProjectBtn": {
         "doc": "docs/window.md#tools-dock",
         "events": {
@@ -1146,14 +3141,59 @@
           ]
         }
       },
+      "toolArrowBtn": {
+        "props": {
+          "variant": "isArrow ? \"primary\" : \"secondary\"",
+          "checked": "isArrow"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "project.activeTool = \"arrow\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：选择 (Arrow)\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"arrow\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：选择 (Arrow)\""
+            }
+          ]
+        }
+      },
       "toolBrushBtn": {
         "props": {
-          "variant": "isBrush ? \"primary\" : \"secondary\""
+          "variant": "isBrush ? \"primary\" : \"secondary\"",
+          "checked": "isBrush"
         },
         "events": {
           "click": [
             {
               "set": "project.activeTool = \"brush\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：画笔\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"brush\""
+            },
+            {
+              "fn": "syncToolOptions"
             },
             {
               "set": "project.statusMessage = \"切换工具：画笔\""
@@ -1163,12 +3203,27 @@
       },
       "toolEraserBtn": {
         "props": {
-          "variant": "isEraser ? \"primary\" : \"secondary\""
+          "variant": "isEraser ? \"primary\" : \"secondary\"",
+          "checked": "isEraser"
         },
         "events": {
           "click": [
             {
               "set": "project.activeTool = \"eraser\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：橡皮\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"eraser\""
+            },
+            {
+              "fn": "syncToolOptions"
             },
             {
               "set": "project.statusMessage = \"切换工具：橡皮\""
@@ -1178,7 +3233,8 @@
       },
       "toolFillBtn": {
         "props": {
-          "variant": "isFill ? \"primary\" : \"secondary\""
+          "variant": "isFill ? \"primary\" : \"secondary\"",
+          "checked": "isFill"
         },
         "events": {
           "click": [
@@ -1186,7 +3242,368 @@
               "set": "project.activeTool = \"fill\""
             },
             {
+              "fn": "syncToolOptions"
+            },
+            {
               "set": "project.statusMessage = \"切换工具：填充\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"fill\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：填充\""
+            }
+          ]
+        }
+      },
+      "toolShapeBtn": {
+        "props": {
+          "variant": "isShape ? \"primary\" : \"secondary\"",
+          "checked": "isShape"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "project.activeTool = \"shape\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：连接 (Connect)\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"shape\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：连接 (Connect)\""
+            }
+          ]
+        }
+      },
+      "toolSelectBtn": {
+        "props": {
+          "variant": "isSelect ? \"primary\" : \"secondary\"",
+          "checked": "isSelect"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "project.activeTool = \"select\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：套索\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"select\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：套索\""
+            }
+          ]
+        }
+      },
+      "toolMoveBtn": {
+        "props": {
+          "variant": "isMove ? \"primary\" : \"secondary\"",
+          "checked": "isMove"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "project.activeTool = \"move\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：变换 (Transfer)\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"move\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：变换 (Transfer)\""
+            }
+          ]
+        }
+      },
+      "toolEyedropperBtn": {
+        "props": {
+          "variant": "isEyedropper ? \"primary\" : \"secondary\"",
+          "checked": "isEyedropper"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "project.activeTool = \"eyedropper\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：吸管\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"eyedropper\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换工具：吸管\""
+            }
+          ]
+        }
+      },
+      "toolHLineBtn": {
+        "props": {
+          "enabled": "not project.toolsLocked",
+          "variant": "isHLine ? \"primary\" : \"secondary\"",
+          "checked": "isHLine"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "project.activeTool = \"h_center_line\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换映射工具：水平中心线 (H Center Line)\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"h_center_line\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换映射工具：水平中心线 (H Center Line)\""
+            }
+          ]
+        }
+      },
+      "toolVLineBtn": {
+        "props": {
+          "enabled": "not project.toolsLocked",
+          "variant": "isVLine ? \"primary\" : \"secondary\"",
+          "checked": "isVLine"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "project.activeTool = \"v_center_line\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换映射工具：垂直中心线 (V Center Line)\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"v_center_line\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换映射工具：垂直中心线 (V Center Line)\""
+            }
+          ]
+        }
+      },
+      "toolMapAreaBtn": {
+        "props": {
+          "enabled": "not project.toolsLocked",
+          "variant": "isMapArea ? \"primary\" : \"secondary\"",
+          "checked": "isMapArea"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "project.activeTool = \"mapping_area\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换映射工具：映射区域 (Mapping Area)\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"mapping_area\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换映射工具：映射区域 (Mapping Area)\""
+            }
+          ]
+        }
+      },
+      "toolAddLineBtn": {
+        "props": {
+          "enabled": "not project.toolsLocked",
+          "variant": "isAddLine ? \"primary\" : \"secondary\"",
+          "checked": "isAddLine"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "project.activeTool = \"additional_line\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换映射工具：辅助引导线 (Additional Line)\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"additional_line\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换映射工具：辅助引导线 (Additional Line)\""
+            }
+          ]
+        }
+      },
+      "toolAutoMapBtn": {
+        "props": {
+          "enabled": "not project.toolsLocked",
+          "variant": "isAutoMap ? \"primary\" : \"secondary\"",
+          "checked": "isAutoMap"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "project.activeTool = \"auto_mapping_2\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换映射工具：自动映射 (Auto Mapping 2)\""
+            }
+          ],
+          "toggle": [
+            {
+              "set": "project.activeTool = \"auto_mapping_2\""
+            },
+            {
+              "fn": "syncToolOptions"
+            },
+            {
+              "set": "project.statusMessage = \"切换映射工具：自动映射 (Auto Mapping 2)\""
+            }
+          ]
+        }
+      },
+      "toolLockPolicyBtn": {
+        "props": {
+          "checked": "project.toolsLocked",
+          "variant": "project.toolsLocked ? \"danger\" : \"secondary\"",
+          "text": "project.toolsLocked ? \"已锁扩展\" : \"工具锁定\""
+        },
+        "events": {
+          "toggle": [
+            {
+              "set": "project.toolsLocked = value"
+            },
+            {
+              "if": "project.toolsLocked and isExtraToolActive",
+              "then": [
+                {
+                  "set": "project.activeTool = \"arrow\""
+                },
+                {
+                  "fn": "syncToolOptions"
+                },
+                {
+                  "set": "project.statusMessage = \"扩展映射工具已锁定，自动回退至选择工具 (Arrow)\""
+                }
+              ],
+              "else": [
+                {
+                  "set": "project.statusMessage = project.toolsLocked ? \"已启用工具锁定策略\" : \"已解除工具锁定策略\""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "forcePadBox": {
+        "doc": "docs/window.md#tools-dock",
+        "props": {
+          "text": "\"压感板 (\" + forcePad.fx + \",\" + forcePad.fy + \")\"",
+          "variant": "forcePad.fx > 0 ? \"primary\" : \"secondary\""
+        },
+        "events": {
+          "click": [
+            {
+              "if": "forcePad.fx >= 70",
+              "then": [
+                {
+                  "set": "forcePad.fx = 0"
+                },
+                {
+                  "set": "forcePad.fy = 0"
+                },
+                {
+                  "set": "forcePad.pressure = 50"
+                }
+              ],
+              "else": [
+                {
+                  "set": "forcePad.fx = forcePad.fx + 35"
+                },
+                {
+                  "set": "forcePad.fy = forcePad.fy + 25"
+                },
+                {
+                  "set": "forcePad.pressure = forcePad.pressure + 20"
+                }
+              ]
+            },
+            {
+              "set": "project.statusMessage = \"压感板向量更新：(\" + forcePad.fx + \", \" + forcePad.fy + \") 压力=\" + forcePad.pressure + \"%\""
             }
           ]
         }
@@ -1199,6 +3616,16 @@
       "layersDock": {
         "doc": "docs/window.md#layers-dock"
       },
+      "layerViewTabBar": {
+        "bind": "layers.viewTab",
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = value == 0 ? \"切换至主视图图层表 (Main Layers)\" : \"切换至子视图图层表 (Child Layers)\""
+            }
+          ]
+        }
+      },
       "addLayerBtn": {
         "events": {
           "click": [
@@ -1206,8 +3633,13 @@
               "push": {
                 "to": "layers.items",
                 "item": {
-                  "id": "layers.nextId",
+                  "id": "\"lyr_\" + layers.nextId",
                   "name": "\"图层 \" + layers.nextId",
+                  "kind": "\"Vector\"",
+                  "isGroup": false,
+                  "depth": 0,
+                  "collapsed": false,
+                  "checked": true,
                   "visible": true,
                   "locked": false
                 }
@@ -1221,6 +3653,37 @@
             },
             {
               "set": "project.statusMessage = \"已新建图层\""
+            }
+          ]
+        }
+      },
+      "addGroupBtn": {
+        "events": {
+          "click": [
+            {
+              "push": {
+                "to": "layers.items",
+                "item": {
+                  "id": "\"grp_\" + layers.nextId",
+                  "name": "\"图层组 \" + layers.nextId",
+                  "kind": "\"group\"",
+                  "isGroup": true,
+                  "depth": 0,
+                  "collapsed": false,
+                  "checked": true,
+                  "visible": true,
+                  "locked": false
+                }
+              }
+            },
+            {
+              "set": "layers.selectedIndex = layers.items.length - 1"
+            },
+            {
+              "set": "layers.nextId = layers.nextId + 1"
+            },
+            {
+              "set": "project.statusMessage = \"已新建图层分组\""
             }
           ]
         }
@@ -1310,11 +3773,65 @@
           ]
         }
       },
+      "unselectLayerBtn": {
+        "events": {
+          "click": [
+            {
+              "set": "layers.selectedIndex = -1"
+            },
+            {
+              "set": "project.statusMessage = \"已取消图层选中状态\""
+            }
+          ]
+        }
+      },
       "layerList": {
+        "doc": "docs/window.md#layers-dock",
         "bind": "layers.selectedIndex",
         "props": {
           "items": "layers.items",
           "value": "layers.selectedIndex"
+        },
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = \"选中图层树节点：\" + value"
+            }
+          ],
+          "toggleCheck": [
+            {
+              "set": "layers.items[index].checked = checked"
+            },
+            {
+              "set": "layers.items[index].visible = checked"
+            },
+            {
+              "set": "project.statusMessage = checked ? \"图层树节点已显示\" : \"图层树节点已隐藏\""
+            }
+          ],
+          "toggleCollapse": [
+            {
+              "set": "layers.items[index].collapsed = collapsed"
+            },
+            {
+              "set": "project.statusMessage = collapsed ? \"图层组已折叠\" : \"图层组已展开\""
+            }
+          ],
+          "reorder": [
+            {
+              "move": {
+                "in": "layers.items",
+                "from": "from",
+                "to": "to"
+              }
+            },
+            {
+              "set": "layers.selectedIndex = to"
+            },
+            {
+              "set": "project.statusMessage = \"图层树已重排：\" + from + \" → \" + to"
+            }
+          ]
         }
       },
       "layerVisibleLabel": {
@@ -1335,17 +3852,181 @@
           ]
         }
       },
+      "addAssetBtn": {
+        "doc": "docs/window.md#assets-panel",
+        "events": {
+          "click": [
+            {
+              "emit": "importImageAsset"
+            }
+          ]
+        }
+      },
+      "assetToLayerBtn": {
+        "doc": "docs/window.md#assets-panel",
+        "events": {
+          "click": [
+            {
+              "fn": {
+                "name": "manageLayerGroup",
+                "args": {
+                  "mode": "\"assetToLayer\""
+                }
+              }
+            }
+          ]
+        }
+      },
+      "removeAssetBtn": {
+        "props": {
+          "enabled": "canRemoveAsset"
+        },
+        "events": {
+          "click": [
+            {
+              "if": "canRemoveAsset",
+              "then": [
+                {
+                  "remove": {
+                    "from": "assets.items",
+                    "index": "assets.selectedIndex"
+                  }
+                },
+                {
+                  "if": "assets.selectedIndex >= assets.items.length",
+                  "then": [
+                    {
+                      "set": "assets.selectedIndex = assets.items.length - 1"
+                    }
+                  ]
+                },
+                {
+                  "set": "project.statusMessage = \"已移除选中素材\""
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "unselectAssetBtn": {
+        "events": {
+          "click": [
+            {
+              "set": "assets.selectedIndex = -1"
+            },
+            {
+              "set": "project.statusMessage = \"已取消素材选中状态\""
+            }
+          ]
+        }
+      },
+      "assetList": {
+        "doc": "docs/window.md#assets-panel",
+        "bind": "assets.selectedIndex",
+        "props": {
+          "items": "assets.items",
+          "value": "assets.selectedIndex"
+        },
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = \"已切换素材项：\" + value"
+            }
+          ],
+          "reorder": [
+            {
+              "move": {
+                "in": "assets.items",
+                "from": "from",
+                "to": "to"
+              }
+            },
+            {
+              "set": "assets.selectedIndex = to"
+            },
+            {
+              "set": "project.statusMessage = \"素材列表已重排：\" + from + \" → \" + to"
+            }
+          ]
+        }
+      },
+      "assetNoteInput": {
+        "doc": "docs/window.md#assets-panel",
+        "bind": "assets.note",
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = \"已更新素材备注\""
+            }
+          ]
+        }
+      },
       "centralArea": {
         "doc": "docs/window.md#central-area"
       },
+      "workspaceTabBar": {
+        "doc": "docs/window.md#central-area",
+        "bind": "project.workspaceTab",
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = value == 0 ? \"已切换至绘图区 (Drawing)\" : \"已切换至纹理贴图区 (Texture)\""
+            }
+          ]
+        }
+      },
       "canvasTitleLabel": {
         "props": {
-          "text": "\"画布：\" + project.title"
+          "text": "(project.workspaceTab == 0 ? \"画布：\" : \"纹理贴图：\") + project.title + \" (\" + project.zoom + \"%)\""
+        }
+      },
+      "zoomSlider": {
+        "bind": "project.zoom",
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = \"画布缩放：\" + project.zoom + \"%\""
+            }
+          ]
         }
       },
       "activeToolLabel": {
         "props": {
-          "text": "isBrush ? \"当前工具：画笔\" : (isEraser ? \"当前工具：橡皮\" : \"当前工具：填充\")"
+          "text": "\"工具：\" + project.activeTool"
+        }
+      },
+      "textureHostLabel": {
+        "props": {
+          "text": "\"纹理子视图：\" + (textureView.hostMode == \"floating\" ? \"独立浮窗\" : (textureView.hostMode == \"embedded\" ? \"嵌入工具栏\" : \"中央页签\")) + \" (\" + textureView.fileName + \")\""
+        }
+      },
+      "followTimelineCheck": {
+        "bind": "textureView.followTimeline",
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = textureView.followTimeline ? \"已开启时间轴纹理跟随\" : \"已关闭时间轴纹理跟随\""
+            }
+          ]
+        }
+      },
+      "followTextureCheck": {
+        "bind": "textureView.followTexture",
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = textureView.followTexture ? \"已开启纹理 UV 实时同步\" : \"已关闭纹理 UV 实时同步\""
+            }
+          ]
+        }
+      },
+      "floatTextureBtn": {
+        "events": {
+          "click": [
+            {
+              "emit": "toggleTextureFloatWindow"
+            }
+          ]
         }
       },
       "canvasHost": {
@@ -1353,6 +4034,44 @@
       },
       "inspectorDock": {
         "doc": "docs/window.md#inspector-dock"
+      },
+      "toolOptionsForm": {
+        "doc": "docs/window.md#tool-options-form",
+        "props": {
+          "schema": "toolOptions.schema",
+          "values": "toolOptions.values"
+        },
+        "events": {
+          "change": [
+            {
+              "fn": "applyToolOption"
+            },
+            {
+              "if": "hook == \"openDrawSettings\"",
+              "then": [
+                {
+                  "openWindow": "drawSettingsDialog"
+                }
+              ]
+            },
+            {
+              "if": "hook == \"toggleTextureHost\"",
+              "then": [
+                {
+                  "emit": "embedTextureInToolOptions"
+                }
+              ]
+            },
+            {
+              "fn": {
+                "name": "recordHistory",
+                "args": {
+                  "label": "\"调整工具参数：\" + name"
+                }
+              }
+            }
+          ]
+        }
       },
       "tabPropsBtn": {
         "props": {
@@ -1362,6 +4081,18 @@
           "click": [
             {
               "set": "inspector.tabIndex = 0"
+            }
+          ]
+        }
+      },
+      "tabHistoryBtn": {
+        "props": {
+          "variant": "isHistoryTab ? \"primary\" : \"secondary\""
+        },
+        "events": {
+          "click": [
+            {
+              "set": "inspector.tabIndex = 2"
             }
           ]
         }
@@ -1394,7 +4125,12 @@
         "events": {
           "change": [
             {
-              "set": "layers.items[layers.selectedIndex].locked = layer.locked"
+              "if": "layers.selectedIndex >= 0",
+              "then": [
+                {
+                  "set": "layers.items[layers.selectedIndex].locked = layer.locked"
+                }
+              ]
             }
           ]
         }
@@ -1411,6 +4147,63 @@
       "exportResultLabel": {
         "props": {
           "text": "project.exportResult"
+        }
+      },
+      "undoBtn": {
+        "doc": "docs/window.md#history-panel",
+        "events": {
+          "click": [
+            {
+              "emit": "undoHistory"
+            }
+          ]
+        }
+      },
+      "redoBtn": {
+        "doc": "docs/window.md#history-panel",
+        "events": {
+          "click": [
+            {
+              "emit": "redoHistory"
+            }
+          ]
+        }
+      },
+      "clearHistoryBtn": {
+        "doc": "docs/window.md#history-panel",
+        "events": {
+          "click": [
+            {
+              "fn": {
+                "name": "rewindHistory",
+                "args": {
+                  "mode": "\"clear\""
+                }
+              }
+            }
+          ]
+        }
+      },
+      "historyList": {
+        "doc": "docs/window.md#history-panel",
+        "bind": "history.selectedIndex",
+        "props": {
+          "items": "history.items",
+          "value": "history.selectedIndex",
+          "mutedFrom": "history.mutedFrom"
+        },
+        "events": {
+          "change": [
+            {
+              "fn": {
+                "name": "rewindHistory",
+                "args": {
+                  "mode": "\"select\"",
+                  "index": "value"
+                }
+              }
+            }
+          ]
         }
       },
       "colorPanelToggleBtn": {
@@ -1464,6 +4257,23 @@
       "timelineDock": {
         "doc": "docs/window.md#timeline-dock"
       },
+      "playToggleBtn": {
+        "props": {
+          "checked": "project.playing",
+          "text": "project.playing ? \"暂停\" : \"播放\"",
+          "variant": "project.playing ? \"danger\" : \"primary\""
+        },
+        "events": {
+          "toggle": [
+            {
+              "set": "project.playing = value"
+            },
+            {
+              "set": "project.statusMessage = project.playing ? \"开始播放时间轴\" : \"已暂停时间轴播放\""
+            }
+          ]
+        }
+      },
       "prevFrameBtn": {
         "props": {
           "enabled": "project.currentFrame > 1"
@@ -1485,7 +4295,242 @@
         "events": {
           "click": [
             {
+              "if": "project.currentFrame >= project.totalFrames",
+              "then": [
+                {
+                  "set": "project.totalFrames = project.currentFrame + 1"
+                }
+              ]
+            },
+            {
               "set": "project.currentFrame = project.currentFrame + 1"
+            }
+          ]
+        }
+      },
+      "addFrameBtn": {
+        "events": {
+          "click": [
+            {
+              "set": "project.totalFrames = project.totalFrames + 1"
+            },
+            {
+              "set": "project.currentFrame = project.totalFrames"
+            },
+            {
+              "set": "project.statusMessage = \"已新增关键帧：第 \" + project.currentFrame + \" 帧\""
+            },
+            {
+              "fn": {
+                "name": "recordHistory",
+                "args": {
+                  "label": "\"新增第 \" + project.currentFrame + \" 帧\""
+                }
+              }
+            }
+          ]
+        }
+      },
+      "addHoldFrameBtn": {
+        "events": {
+          "click": [
+            {
+              "set": "project.totalFrames = project.totalFrames + 1"
+            },
+            {
+              "set": "timeline.holdFrames = timeline.holdFrames + 1"
+            },
+            {
+              "set": "project.currentFrame = project.totalFrames"
+            },
+            {
+              "set": "project.statusMessage = \"已插入延长帧 (Hold)：第 \" + project.currentFrame + \" 帧（共 \" + timeline.holdFrames + \" 延长帧）\""
+            },
+            {
+              "fn": {
+                "name": "recordHistory",
+                "args": {
+                  "label": "\"插入延长帧 #\" + project.currentFrame"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "duplicateFrameBtn": {
+        "events": {
+          "click": [
+            {
+              "set": "project.totalFrames = project.totalFrames + 1"
+            },
+            {
+              "set": "project.currentFrame = project.currentFrame + 1"
+            },
+            {
+              "set": "project.statusMessage = \"已复制当前帧至第 \" + project.currentFrame + \" 帧\""
+            },
+            {
+              "fn": {
+                "name": "recordHistory",
+                "args": {
+                  "label": "\"复制帧至 #\" + project.currentFrame"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "moveFrameBackBtn": {
+        "props": {
+          "enabled": "project.currentFrame > 1"
+        },
+        "events": {
+          "click": [
+            {
+              "if": "project.currentFrame > 1",
+              "then": [
+                {
+                  "set": "project.currentFrame = project.currentFrame - 1"
+                },
+                {
+                  "set": "project.statusMessage = \"已将帧前移至位置 #\" + project.currentFrame"
+                },
+                {
+                  "fn": {
+                    "name": "recordHistory",
+                    "args": {
+                      "label": "\"前移帧至 #\" + project.currentFrame"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "removeFrameBtn": {
+        "props": {
+          "enabled": "canRemoveFrame"
+        },
+        "events": {
+          "click": [
+            {
+              "if": "canRemoveFrame",
+              "then": [
+                {
+                  "set": "project.totalFrames = project.totalFrames - 1"
+                },
+                {
+                  "if": "project.currentFrame > project.totalFrames",
+                  "then": [
+                    {
+                      "set": "project.currentFrame = project.totalFrames"
+                    }
+                  ]
+                },
+                {
+                  "set": "project.statusMessage = \"已删除末尾帧，当前总帧数：\" + project.totalFrames"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "loopToggleBtn": {
+        "props": {
+          "checked": "project.loopPlay",
+          "variant": "project.loopPlay ? \"primary\" : \"secondary\""
+        },
+        "events": {
+          "toggle": [
+            {
+              "set": "project.loopPlay = value"
+            },
+            {
+              "set": "project.statusMessage = project.loopPlay ? \"已开启循环播放\" : \"已关闭循环播放\""
+            }
+          ]
+        }
+      },
+      "onionToggleBtn": {
+        "props": {
+          "checked": "project.onionSkin",
+          "variant": "project.onionSkin ? \"primary\" : \"secondary\""
+        },
+        "events": {
+          "toggle": [
+            {
+              "set": "project.onionSkin = value"
+            },
+            {
+              "set": "project.statusMessage = project.onionSkin ? \"已开启洋葱皮透视\" : \"已关闭洋葱皮透视\""
+            }
+          ]
+        }
+      },
+      "onionLinesCheck": {
+        "bind": "timeline.onionLines",
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = timeline.onionLines ? \"洋葱皮过滤：显示线稿层\" : \"洋葱皮过滤：隐藏线稿层\""
+            }
+          ]
+        }
+      },
+      "onionFillsCheck": {
+        "bind": "timeline.onionFills",
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = timeline.onionFills ? \"洋葱皮过滤：显示填充层\" : \"洋葱皮过滤：隐藏填充层\""
+            }
+          ]
+        }
+      },
+      "onionAmCheck": {
+        "bind": "timeline.onionAm",
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = timeline.onionAm ? \"洋葱皮过滤：显示自动映射层\" : \"洋葱皮过滤：隐藏自动映射层\""
+            }
+          ]
+        }
+      },
+      "onionGuideCheck": {
+        "bind": "timeline.onionGuide",
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = timeline.onionGuide ? \"洋葱皮过滤：显示辅助线\" : \"洋葱皮过滤：隐藏辅助线\""
+            }
+          ]
+        }
+      },
+      "fpsSelectCombo": {
+        "bind": "project.fpsLabel",
+        "events": {
+          "change": [
+            {
+              "set": "project.fps = value == \"12 fps\" ? 12 : (value == \"30 fps\" ? 30 : 24)"
+            },
+            {
+              "set": "project.statusMessage = \"帧率已切换为 \" + project.fps + \" fps\""
+            }
+          ]
+        }
+      },
+      "frameSlider": {
+        "bind": "project.currentFrame",
+        "props": {
+          "max": "project.totalFrames",
+          "value": "project.currentFrame"
+        },
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = \"时间轴定位至第 \" + project.currentFrame + \" 帧\""
             }
           ]
         }
@@ -1495,9 +4540,29 @@
           "text": "\"当前帧：\" + project.currentFrame + \" / \" + project.fps"
         }
       },
+      "timelineScrollBar": {
+        "bind": "project.timelineScroll",
+        "events": {
+          "change": [
+            {
+              "set": "project.statusMessage = \"时间轴视口滚动：\" + project.timelineScroll + \"%\""
+            }
+          ]
+        }
+      },
+      "timelineOffsetLabel": {
+        "props": {
+          "text": "\"视口偏移：\" + project.timelineScroll + \"%\""
+        }
+      },
       "statusTextLabel": {
         "props": {
           "text": "project.statusMessage"
+        }
+      },
+      "statusClockLabel": {
+        "props": {
+          "text": "\"时钟：\" + clock + \" ms\""
         }
       },
       "statusLayerCountLabel": {
@@ -1568,6 +4633,99 @@
             }
           ]
         }
+      },
+      "drawSettingsDialog": {
+        "doc": "docs/window.md#draw-settings-dialog"
+      },
+      "pressureCurveCombo": {
+        "bind": "drawSettings.pressureCurve"
+      },
+      "minRadiusSpin": {
+        "bind": "drawSettings.minRadius"
+      },
+      "tiltSensitivitySlider": {
+        "bind": "drawSettings.tiltSensitivity"
+      },
+      "antiAliasCheck": {
+        "bind": "drawSettings.antiAlias"
+      },
+      "drawSettingsButtonBox": {
+        "events": {
+          "accept": [
+            {
+              "closeWindow": "drawSettingsDialog"
+            },
+            {
+              "set": "project.statusMessage = \"已应用压感设置：\" + drawSettings.pressureCurve + \"（最小笔尖 \" + drawSettings.minRadius + \"%）\""
+            },
+            {
+              "fn": {
+                "name": "recordHistory",
+                "args": {
+                  "label": "\"更新压感曲线：\" + drawSettings.pressureCurve"
+                }
+              }
+            }
+          ],
+          "reject": [
+            {
+              "closeWindow": "drawSettingsDialog"
+            },
+            {
+              "set": "project.statusMessage = \"已取消画笔压感设置\""
+            }
+          ]
+        }
+      },
+      "textureFloatDialog": {
+        "doc": "docs/window.md#central-area"
+      },
+      "textureFloatInfoLabel": {
+        "props": {
+          "text": "\"浮动纹理子视图 (\" + textureView.fileName + \") — 同步UV=\" + (textureView.followTexture ? \"开启\" : \"关闭\")"
+        }
+      },
+      "dockTextureToTabBtn": {
+        "events": {
+          "click": [
+            {
+              "set": "textureView.hostMode = \"tab\""
+            },
+            {
+              "set": "project.workspaceTab = 1"
+            },
+            {
+              "closeWindow": "textureFloatDialog"
+            },
+            {
+              "set": "project.statusMessage = \"已将纹理子视图归还至中央 Texture 页签\""
+            }
+          ]
+        }
+      },
+      "embedTextureBtn": {
+        "events": {
+          "click": [
+            {
+              "emit": "embedTextureInToolOptions"
+            }
+          ]
+        }
+      },
+      "closeTextureFloatBtn": {
+        "events": {
+          "click": [
+            {
+              "closeWindow": "textureFloatDialog"
+            },
+            {
+              "set": "textureView.hostMode = \"tab\""
+            },
+            {
+              "set": "project.statusMessage = \"已关闭纹理浮动窗口\""
+            }
+          ]
+        }
       }
     }
   },
@@ -1614,7 +4772,7 @@
     "Button": {
       "type": "Button",
       "label": "按钮",
-      "description": "标准按钮，支持主次样式与可勾选状态",
+      "description": "标准按钮，支持图标、主次样式与可勾选状态",
       "defaultSize": {
         "width": 100,
         "height": 32
@@ -1625,6 +4783,11 @@
         "text": {
           "type": "string",
           "default": "按钮",
+          "logic": true
+        },
+        "icon": {
+          "type": "string",
+          "default": "",
           "logic": true
         },
         "variant": {
@@ -1655,6 +4818,7 @@
         "widget": "QPushButton",
         "props": {
           "text": "text",
+          "icon": "vfIcon",
           "variant": "vfVariant",
           "checkable": "checkable",
           "checked": "checked"
@@ -1713,6 +4877,58 @@
         }
       }
     },
+    "TextArea": {
+      "type": "TextArea",
+      "label": "多行文本",
+      "description": "多行文本编辑框，支持占位提示、只读和双向绑定字符串状态",
+      "defaultSize": {
+        "width": 220,
+        "height": 100
+      },
+      "entry": "index.js",
+      "style": "style.css",
+      "props": {
+        "placeholder": {
+          "type": "string",
+          "default": "",
+          "logic": true
+        },
+        "value": {
+          "type": "string",
+          "default": "",
+          "logic": true
+        },
+        "readOnly": {
+          "type": "boolean",
+          "default": false,
+          "logic": true
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "logic": true
+        }
+      },
+      "bind": "string",
+      "events": [
+        "change"
+      ],
+      "children": false,
+      "qt": {
+        "widget": "QPlainTextEdit",
+        "props": {
+          "placeholder": "placeholderText",
+          "value": "plainText",
+          "readOnly": "readOnly"
+        },
+        "events": {
+          "change": {
+            "signal": "textChanged",
+            "type": "string"
+          }
+        }
+      }
+    },
     "SpinBox": {
       "type": "SpinBox",
       "label": "数字框",
@@ -1763,6 +4979,133 @@
           "max": "maximum",
           "step": "singleStep",
           "suffix": "suffix",
+          "value": "value"
+        },
+        "events": {
+          "change": {
+            "signal": "valueChanged",
+            "type": "number"
+          }
+        }
+      }
+    },
+    "Slider": {
+      "type": "Slider",
+      "label": "滑条",
+      "description": "数值滑条，支持最小最大值、步长、方向和双向绑定数字状态",
+      "defaultSize": {
+        "width": 160,
+        "height": 24
+      },
+      "entry": "index.js",
+      "style": "style.css",
+      "props": {
+        "min": {
+          "type": "number",
+          "default": 0,
+          "logic": true
+        },
+        "max": {
+          "type": "number",
+          "default": 100,
+          "logic": true
+        },
+        "step": {
+          "type": "number",
+          "default": 1
+        },
+        "orientation": {
+          "type": "string",
+          "default": "horizontal"
+        },
+        "value": {
+          "type": "number",
+          "default": 0,
+          "logic": true
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "logic": true
+        }
+      },
+      "bind": "number",
+      "events": [
+        "change"
+      ],
+      "children": false,
+      "qt": {
+        "widget": "QSlider",
+        "props": {
+          "min": "minimum",
+          "max": "maximum",
+          "step": "singleStep",
+          "orientation": "vfOrientation",
+          "value": "value"
+        },
+        "events": {
+          "change": {
+            "signal": "valueChanged",
+            "type": "number"
+          }
+        }
+      }
+    },
+    "ScrollBar": {
+      "type": "ScrollBar",
+      "label": "滚动条",
+      "description": "水平或垂直滚动条，支持范围、步长和双向绑定数字状态",
+      "defaultSize": {
+        "width": 160,
+        "height": 16
+      },
+      "entry": "index.js",
+      "style": "style.css",
+      "props": {
+        "min": {
+          "type": "number",
+          "default": 0
+        },
+        "max": {
+          "type": "number",
+          "default": 100
+        },
+        "step": {
+          "type": "number",
+          "default": 1
+        },
+        "pageStep": {
+          "type": "number",
+          "default": 10
+        },
+        "orientation": {
+          "type": "string",
+          "default": "horizontal"
+        },
+        "value": {
+          "type": "number",
+          "default": 0,
+          "logic": true
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "logic": true
+        }
+      },
+      "bind": "number",
+      "events": [
+        "change"
+      ],
+      "children": false,
+      "qt": {
+        "widget": "QScrollBar",
+        "props": {
+          "min": "minimum",
+          "max": "maximum",
+          "step": "singleStep",
+          "pageStep": "pageStep",
+          "orientation": "vfOrientation",
           "value": "value"
         },
         "events": {
@@ -1865,10 +5208,56 @@
         }
       }
     },
+    "TabBar": {
+      "type": "TabBar",
+      "label": "页签栏",
+      "description": "页签切换栏，tabs 用逗号分隔各页签名，支持双向绑定当前页签序号",
+      "defaultSize": {
+        "width": 220,
+        "height": 28
+      },
+      "entry": "index.js",
+      "style": "style.css",
+      "props": {
+        "tabs": {
+          "type": "string",
+          "default": "Tab 1,Tab 2",
+          "logic": true
+        },
+        "value": {
+          "type": "number",
+          "default": 0,
+          "logic": true
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "logic": true
+        }
+      },
+      "bind": "number",
+      "events": [
+        "change"
+      ],
+      "children": false,
+      "qt": {
+        "widget": "QTabBar",
+        "props": {
+          "tabs": "vfTabs",
+          "value": "currentIndex"
+        },
+        "events": {
+          "change": {
+            "signal": "currentChanged",
+            "type": "number"
+          }
+        }
+      }
+    },
     "List": {
       "type": "List",
       "label": "列表",
-      "description": "行列表，绑定数组状态 items，支持选中行",
+      "description": "行列表，绑定数组状态 items，支持选中行与拖动重排",
       "defaultSize": {
         "width": 220,
         "height": 180
@@ -1890,6 +5279,15 @@
           "type": "string",
           "default": "暂无内容"
         },
+        "draggable": {
+          "type": "boolean",
+          "default": false
+        },
+        "mutedFrom": {
+          "type": "number",
+          "default": -1,
+          "logic": true
+        },
         "enabled": {
           "type": "boolean",
           "default": true,
@@ -1899,7 +5297,8 @@
       "bind": "number",
       "events": [
         "change",
-        "select"
+        "select",
+        "reorder"
       ],
       "children": false,
       "qt": {
@@ -1907,6 +5306,81 @@
         "props": {
           "items": "vfItems",
           "value": "currentRow",
+          "emptyText": "vfEmptyText",
+          "draggable": "vfDraggable",
+          "mutedFrom": "vfMutedFrom"
+        },
+        "events": {
+          "change": {
+            "signal": "currentRowChanged",
+            "type": "number"
+          },
+          "select": {
+            "signal": "currentRowChanged",
+            "type": "number"
+          },
+          "reorder": {
+            "signal": "itemReordered",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Tree": {
+      "type": "Tree",
+      "label": "树",
+      "description": "层级树控件，支持分组展开折叠、勾选框、选中行与拖动重排",
+      "defaultSize": {
+        "width": 220,
+        "height": 180
+      },
+      "entry": "index.js",
+      "style": "style.css",
+      "props": {
+        "items": {
+          "type": "array",
+          "default": [],
+          "logic": true
+        },
+        "value": {
+          "type": "number",
+          "default": 0,
+          "logic": true
+        },
+        "checkable": {
+          "type": "boolean",
+          "default": true
+        },
+        "draggable": {
+          "type": "boolean",
+          "default": true
+        },
+        "emptyText": {
+          "type": "string",
+          "default": "暂无内容"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "logic": true
+        }
+      },
+      "bind": "number",
+      "events": [
+        "change",
+        "select",
+        "toggleCheck",
+        "toggleCollapse",
+        "reorder"
+      ],
+      "children": false,
+      "qt": {
+        "widget": "QTreeWidget",
+        "props": {
+          "items": "vfItems",
+          "value": "currentRow",
+          "checkable": "vfCheckable",
+          "draggable": "vfDraggable",
           "emptyText": "vfEmptyText"
         },
         "events": {
@@ -1917,6 +5391,72 @@
           "select": {
             "signal": "currentRowChanged",
             "type": "number"
+          },
+          "toggleCheck": {
+            "signal": "itemCheckToggled",
+            "type": "string"
+          },
+          "toggleCollapse": {
+            "signal": "itemCollapseToggled",
+            "type": "string"
+          },
+          "reorder": {
+            "signal": "itemReordered",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "DialogButtonBox": {
+      "type": "DialogButtonBox",
+      "label": "对话框按钮组",
+      "description": "对话框底部的标准确认与取消按钮组",
+      "defaultSize": {
+        "width": 220,
+        "height": 32
+      },
+      "entry": "index.js",
+      "style": "style.css",
+      "props": {
+        "buttons": {
+          "type": "string",
+          "default": "OK,Cancel",
+          "logic": true
+        },
+        "okText": {
+          "type": "string",
+          "default": "OK",
+          "logic": true
+        },
+        "cancelText": {
+          "type": "string",
+          "default": "Cancel",
+          "logic": true
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "logic": true
+        }
+      },
+      "events": [
+        "accept",
+        "reject"
+      ],
+      "children": false,
+      "qt": {
+        "widget": "QDialogButtonBox",
+        "props": {
+          "buttons": "vfButtons",
+          "okText": "vfOkText",
+          "cancelText": "vfCancelText"
+        },
+        "events": {
+          "accept": {
+            "signal": "accepted"
+          },
+          "reject": {
+            "signal": "rejected"
           }
         }
       }
@@ -1946,6 +5486,56 @@
         "set": {
           "frameShape": 4,
           "frameShadow": 48
+        }
+      }
+    },
+    "DataForm": {
+      "type": "DataForm",
+      "label": "数据生成表单",
+      "description": "由结构化数据（各字段名、类型、范围、行列、显示条件）动态生成控件网格并向外发出修改事件",
+      "defaultSize": {
+        "width": 220,
+        "height": 180
+      },
+      "entry": "index.js",
+      "style": "style.css",
+      "props": {
+        "schema": {
+          "type": "object",
+          "default": {},
+          "logic": true
+        },
+        "values": {
+          "type": "object",
+          "default": {},
+          "logic": true
+        },
+        "emptyText": {
+          "type": "string",
+          "default": "当前工具无可调选项"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "logic": true
+        }
+      },
+      "events": [
+        "change"
+      ],
+      "children": false,
+      "qt": {
+        "widget": "QFrame",
+        "props": {
+          "schema": "vfSchema",
+          "values": "vfValues",
+          "emptyText": "vfEmptyText"
+        },
+        "events": {
+          "change": {
+            "signal": "fieldChanged",
+            "type": "string"
+          }
         }
       }
     },
@@ -2035,7 +5625,12 @@
     }
   },
   "functions": {
-    "syncPresetDimensions": "// 根据新建项目对话框里选择的画幅预设，返回对应的画布宽高和帧率。\nexport default function syncPresetDimensions(state) {\n  const preset = state.newProject?.preset ?? \"1080p\";\n  if (preset === \"720p\") {\n    return {\n      \"newProject.width\": 1280,\n      \"newProject.height\": 720,\n      \"newProject.fps\": 24,\n    };\n  }\n  if (preset === \"Square\") {\n    return {\n      \"newProject.width\": 1080,\n      \"newProject.height\": 1080,\n      \"newProject.fps\": 30,\n    };\n  }\n  return {\n    \"newProject.width\": 1920,\n    \"newProject.height\": 1080,\n    \"newProject.fps\": 24,\n  };\n}\n"
+    "applyToolOption": "// 处理工具选项面板（DataForm）字段变化，更新参数字典并同步状态栏摘要。\nexport default function applyToolOption(state, args) {\n  const fieldName = String(args?.name ?? \"\");\n  const fieldVal = args?.value ?? null;\n  const hook = String(args?.hook ?? fieldName);\n  const prevValues = state.toolOptions?.values ?? {};\n  const nextValues = Object.assign({}, prevValues);\n  if (fieldName) {\n    nextValues[fieldName] = fieldVal;\n  }\n  return {\n    \"toolOptions.values\": nextValues,\n    \"toolOptions.lastHook\": hook,\n    \"project.statusMessage\": \"工具参数更新：\" + fieldName + \" = \" + String(fieldVal),\n  };\n}\n",
+    "manageLayerGroup": "// 处理图层面板中的图层分组操作（解组保留图层、删除分组及成员、素材转图层）。\nexport default function manageLayerGroup(state, args) {\n  const mode = String(args?.mode ?? \"\");\n  const rawItems = Array.isArray(state.layers?.items) ? state.layers.items.slice() : [];\n  const sel = Number(state.layers?.selectedIndex ?? 0);\n  const nextId = Number(state.layers?.nextId ?? rawItems.length + 1);\n\n  if (mode === \"assetToLayer\") {\n    const assets = Array.isArray(state.assets?.items) ? state.assets.items : [];\n    const assetIdx = Number(state.assets?.selectedIndex ?? 0);\n    const asset = assets[assetIdx] ?? assets[0] ?? { id: 1, name: \"默认素材.png\" };\n    const newLayer = {\n      id: \"lyr_asset_\" + nextId,\n      name: \"素材层：\" + String(asset.name ?? \"素材\"),\n      kind: \"Asset\",\n      isGroup: false,\n      depth: 0,\n      collapsed: false,\n      checked: true,\n      visible: true,\n      locked: false,\n    };\n    rawItems.push(newLayer);\n    return {\n      \"layers.items\": rawItems,\n      \"layers.selectedIndex\": rawItems.length - 1,\n      \"layers.nextId\": nextId + 1,\n      \"project.statusMessage\": \"已将素材转为图层：\" + newLayer.name,\n    };\n  }\n\n  let groupIdx = -1;\n  if (sel >= 0 && sel < rawItems.length && rawItems[sel]?.isGroup) {\n    groupIdx = sel;\n  } else if (sel >= 0 && sel < rawItems.length && Number(rawItems[sel]?.depth ?? 0) > 0) {\n    for (let i = sel - 1; i >= 0; i--) {\n      if (rawItems[i]?.isGroup) {\n        groupIdx = i;\n        break;\n      }\n    }\n  }\n  if (groupIdx < 0) {\n    groupIdx = rawItems.findIndex((it) => Boolean(it?.isGroup));\n  }\n  if (groupIdx < 0) {\n    return {\n      \"project.statusMessage\": \"当前没有可操作的图层组\",\n    };\n  }\n\n  const groupDepth = Number(rawItems[groupIdx]?.depth ?? 0);\n  const groupName = String(rawItems[groupIdx]?.name ?? \"图层组\");\n  let endChildIdx = groupIdx + 1;\n  while (endChildIdx < rawItems.length && Number(rawItems[endChildIdx]?.depth ?? 0) > groupDepth) {\n    endChildIdx++;\n  }\n\n  if (mode === \"dissolve\") {\n    const updated = [];\n    for (let i = 0; i < rawItems.length; i++) {\n      if (i === groupIdx) continue;\n      const item = Object.assign({}, rawItems[i]);\n      if (i > groupIdx && i < endChildIdx) {\n        item.depth = Math.max(0, Number(item.depth ?? 1) - 1);\n      }\n      updated.push(item);\n    }\n    const nextSel = Math.min(groupIdx, Math.max(0, updated.length - 1));\n    return {\n      \"layers.items\": updated,\n      \"layers.selectedIndex\": nextSel,\n      \"project.statusMessage\": \"已解组并保留成员图层：\" + groupName,\n    };\n  }\n\n  if (mode === \"deleteGroup\") {\n    const updated = rawItems.filter((_, i) => i < groupIdx || i >= endChildIdx);\n    if (updated.length === 0) {\n      updated.push({\n        id: \"lyr_default\",\n        name: \"默认背景层\",\n        kind: \"Raster\",\n        isGroup: false,\n        depth: 0,\n        collapsed: false,\n        checked: true,\n        visible: true,\n        locked: false,\n      });\n    }\n    const nextSel = Math.min(groupIdx, Math.max(0, updated.length - 1));\n    return {\n      \"layers.items\": updated,\n      \"layers.selectedIndex\": nextSel,\n      \"project.statusMessage\": \"已删除图层组及成员：\" + groupName,\n    };\n  }\n\n  return {};\n}\n",
+    "recordHistory": "// 记录一条新的历史操作步骤；若当前处于回退状态（mutedFrom >= 0），先截断被撤销的后续分支。\nexport default function recordHistory(state, args) {\n  const rawItems = Array.isArray(state.history?.items) ? state.history.items : [];\n  const mutedFrom = Number(state.history?.mutedFrom ?? -1);\n  const nextId = Number(state.history?.nextId ?? rawItems.length + 1);\n  const label = String(args?.label ?? \"画布操作\");\n  const base = mutedFrom >= 0 && mutedFrom < rawItems.length ? rawItems.slice(0, mutedFrom) : rawItems.slice();\n  base.push({\n    id: nextId,\n    name: label,\n    badge: \"#\" + nextId,\n  });\n  return {\n    \"history.items\": base,\n    \"history.selectedIndex\": base.length - 1,\n    \"history.mutedFrom\": -1,\n    \"history.nextId\": nextId + 1,\n  };\n}\n",
+    "rewindHistory": "// 在历史面板中执行撤销、重做或点击某条历史记录回溯，并同步 mutedFrom 置灰分界线。\nexport default function rewindHistory(state, args) {\n  const items = Array.isArray(state.history?.items) ? state.history.items : [];\n  if (items.length === 0) return {};\n  const cur = Number(state.history?.selectedIndex ?? items.length - 1);\n  const mode = String(args?.mode ?? \"select\");\n  if (mode === \"clear\") {\n    return {\n      \"history.items\": [{ id: 1, name: \"初始化画布 (1920x1080)\", badge: \"#1\" }],\n      \"history.selectedIndex\": 0,\n      \"history.mutedFrom\": -1,\n      \"history.nextId\": 2,\n      \"project.statusMessage\": \"已清空历史记录\",\n    };\n  }\n  let target = cur;\n  if (mode === \"undo\") {\n    target = Math.max(0, cur - 1);\n  } else if (mode === \"redo\") {\n    target = Math.min(items.length - 1, cur + 1);\n  } else {\n    const rawIdx = Number(args?.index ?? args?.value ?? cur);\n    if (Number.isInteger(rawIdx) && rawIdx >= 0 && rawIdx < items.length) {\n      target = rawIdx;\n    }\n  }\n  const mutedFrom = target < items.length - 1 ? target + 1 : -1;\n  const entryName = items[target]?.name ?? (\"步骤 \" + (target + 1));\n  return {\n    \"history.selectedIndex\": target,\n    \"history.mutedFrom\": mutedFrom,\n    \"project.statusMessage\": \"历史回溯：\" + entryName,\n  };\n}\n",
+    "syncPresetDimensions": "// 根据新建项目对话框里选择的画幅预设，返回对应的画布宽高和帧率。\nexport default function syncPresetDimensions(state) {\n  const preset = state.newProject?.preset ?? \"1080p\";\n  if (preset === \"720p\") {\n    return {\n      \"newProject.width\": 1280,\n      \"newProject.height\": 720,\n      \"newProject.fps\": 24,\n    };\n  }\n  if (preset === \"Square\") {\n    return {\n      \"newProject.width\": 1080,\n      \"newProject.height\": 1080,\n      \"newProject.fps\": 30,\n    };\n  }\n  return {\n    \"newProject.width\": 1920,\n    \"newProject.height\": 1080,\n    \"newProject.fps\": 24,\n  };\n}\n",
+    "syncToolOptions": "// 根据当前激活的工具类型，返回工具选项面板（DataForm）的表单结构 schema 与默认参数值 values。\n// 严格对齐 animean/childrenpanel/tool_controls/*.json 与 animean/pyfile/toolcontrol.py 的 options_for_tool_json / options_for_extra_tool_json。\n\nfunction automappingControls(withStrokeSliders) {\n  const controls = [\n    {\n      name: \"fold_split\",\n      type: \"check\",\n      title: \"Front/Back Split\",\n      hook: \"fold_split\",\n      value: \"on\",\n      row: 0,\n      start_column: 0,\n      end_column: 2,\n    },\n    {\n      name: \"fold_seal\",\n      type: \"check\",\n      title: \"Crease Line\",\n      hook: \"fold_seal\",\n      value: \"on\",\n      row: 1,\n      start_column: 0,\n      end_column: 2,\n      visible_when: { name: \"fold_split\", values: [\"on\"] },\n    },\n    {\n      name: \"bridge_topology\",\n      type: \"check\",\n      title: \"补全拓扑\",\n      hook: \"bridge_topology\",\n      value: \"off\",\n      row: 2,\n      start_column: 0,\n      end_column: 2,\n    },\n    {\n      name: \"bridge_tension\",\n      type: \"slider\",\n      title: \"Bridge k (% |AB|)\",\n      hook: \"bridge_tension\",\n      min: 5,\n      max: 100,\n      value: 33,\n      row: 3,\n      start_column: 0,\n      end_column: 2,\n      visible_when: { name: \"bridge_topology\", values: [\"on\"] },\n    },\n  ];\n  let row = 4;\n  if (withStrokeSliders) {\n    controls.push(\n      { name: \"smooth\", type: \"slider\", title: \"Stabilizer\", hook: \"smooth\", min: 0, max: 100, value: 50, row: row, start_column: 0, end_column: 2 },\n      { name: \"pen_width\", type: \"slider\", title: \"Width\", hook: \"pen_width\", min: 1, max: 50, value: 5, row: row + 1, start_column: 0, end_column: 2 },\n    );\n    row += 2;\n  }\n  controls.push({\n    name: \"texture_view\",\n    type: \"subwindow\",\n    title: \"Texture\",\n    hook: \"toggleTextureHost\",\n    row: row,\n    start_column: 0,\n    end_column: 2,\n  });\n  return {\n    row_spacing: 4,\n    column_spacing: 6,\n    controls,\n  };\n}\n\nconst SCHEMAS = {\n  arrow: {\n    row_spacing: 4,\n    column_spacing: 6,\n    controls: [\n      {\n        name: \"edit_mode\",\n        type: \"list\",\n        title: \"Edit Mode\",\n        hook: \"edit_mode\",\n        value: \"default\",\n        row: 0,\n        start_column: 0,\n        end_column: 2,\n        options: [\n          { title: \"Default\", value: \"default\" },\n          { title: \"Artist\", value: \"artist\" },\n          { title: \"Debug\", value: \"debug\" },\n        ],\n      },\n    ],\n  },\n  brush: {\n    row_spacing: 4,\n    column_spacing: 6,\n    controls: [\n      { name: \"color\", type: \"button\", title: \"Black\", hook: \"color\", value: \"black\", row: 0, column: 0, state: { color: \"black\" } },\n      { name: \"color\", type: \"button\", title: \"Blue\", hook: \"color\", value: \"blue\", row: 0, column: 1, state: { color: \"blue\" } },\n      { name: \"color\", type: \"button\", title: \"Green\", hook: \"color\", value: \"green\", row: 0, column: 2, state: { color: \"green\" } },\n      { name: \"smooth\", type: \"slider\", title: \"Smooth\", hook: \"smooth\", min: 0, max: 100, value: 50, row: 1, start_column: 0, end_column: 2 },\n      { name: \"pen_width\", type: \"slider\", title: \"Width\", hook: \"pen_width\", min: 1, max: 50, value: 5, row: 2, start_column: 0, end_column: 2 },\n      { name: \"openAdvBrush\", type: \"subwindow\", title: \"压感曲线...\", hook: \"openDrawSettings\", row: 3, start_column: 0, end_column: 2 },\n    ],\n  },\n  eraser: {\n    row_spacing: 4,\n    column_spacing: 6,\n    controls: [\n      {\n        name: \"eraser_mode\",\n        type: \"list\",\n        title: \"Eraser Mode\",\n        hook: \"eraser_mode\",\n        value: \"area\",\n        row: 0,\n        start_column: 0,\n        end_column: 2,\n        options: [\n          { title: \"LineMode\", value: \"line\" },\n          { title: \"AreaMode\", value: \"area\" },\n          { title: \"CutMode\", value: \"cut\" },\n        ],\n      },\n    ],\n  },\n  fill: {\n    row_spacing: 4,\n    column_spacing: 6,\n    controls: [\n      { name: \"color\", type: \"button\", title: \"Black\", hook: \"color\", value: \"black\", row: 0, column: 0, state: { color: \"black\" } },\n      { name: \"color\", type: \"button\", title: \"Blue\", hook: \"color\", value: \"blue\", row: 0, column: 1, state: { color: \"blue\" } },\n      { name: \"color\", type: \"button\", title: \"Green\", hook: \"color\", value: \"green\", row: 0, column: 2, state: { color: \"green\" } },\n      {\n        name: \"fill_scope\",\n        type: \"list\",\n        title: \"Fill Scope\",\n        hook: \"fill_scope\",\n        value: \"current\",\n        row: 1,\n        start_column: 0,\n        end_column: 2,\n        options: [\n          { title: \"ALL\", value: \"all\" },\n          { title: \"Current\", value: \"current\" },\n        ],\n      },\n    ],\n  },\n  shape: {\n    row_spacing: 4,\n    column_spacing: 6,\n    controls: [\n      {\n        name: \"connect_auto_snap\",\n        type: \"check\",\n        title: \"Auto Snap\",\n        hook: \"connect_auto_snap\",\n        value: \"on\",\n        row: 0,\n        start_column: 0,\n        end_column: 2,\n      },\n      {\n        name: \"connect_mode\",\n        type: \"list\",\n        title: \"Connect Mode\",\n        hook: \"connect_mode\",\n        value: \"poly\",\n        row: 1,\n        start_column: 0,\n        end_column: 2,\n        options: [\n          { title: \"PolyMode\", value: \"poly\" },\n          { title: \"CurveMode\", value: \"curve\" },\n          { title: \"SmoothMode\", value: \"smooth\" },\n        ],\n      },\n      {\n        name: \"connect_smooth\",\n        type: \"slider\",\n        title: \"Smooth\",\n        hook: \"connect_smooth\",\n        min: 0,\n        max: 100,\n        value: 50,\n        row: 2,\n        start_column: 0,\n        end_column: 2,\n        visible_when: { name: \"connect_mode\", values: [\"smooth\"] },\n      },\n      {\n        name: \"connect_auto_accept\",\n        type: \"check\",\n        title: \"Auto Accept\",\n        hook: \"connect_auto_accept\",\n        value: \"off\",\n        row: 3,\n        start_column: 0,\n        end_column: 2,\n      },\n    ],\n  },\n  select: {\n    row_spacing: 4,\n    column_spacing: 6,\n    controls: [\n      {\n        name: \"select_mode\",\n        type: \"list\",\n        title: \"Lasso Mode\",\n        hook: \"select_mode\",\n        value: \"free\",\n        row: 0,\n        start_column: 0,\n        end_column: 2,\n        options: [\n          { title: \"FreeLasso\", value: \"free\" },\n          { title: \"PolyLasso\", value: \"poly\" },\n          { title: \"RectSelect\", value: \"rect\" },\n        ],\n      },\n      { name: \"feather_px\", type: \"slider\", title: \"Feather\", hook: \"feather_px\", min: 0, max: 50, value: 0, row: 1, start_column: 0, end_column: 2 },\n    ],\n  },\n  move: {\n    row_spacing: 4,\n    column_spacing: 6,\n    controls: [\n      {\n        name: \"transfer_constrain\",\n        type: \"list\",\n        title: \"Alt / Ctrl / Shift\",\n        hook: \"transfer_constrain\",\n        value: \"on\",\n        row: 0,\n        start_column: 0,\n        end_column: 2,\n        options: [\n          { title: \"Keep ratio / lock axis\", value: \"on\" },\n          { title: \"No constraint\", value: \"off\" },\n        ],\n      },\n    ],\n  },\n  eyedropper: {\n    row_spacing: 4,\n    column_spacing: 6,\n    controls: [\n      {\n        name: \"palette_color\",\n        type: \"palette\",\n        title: \"Palette\",\n        hook: \"palette_color\",\n        value: \"#111827\",\n        swatches: [\"#111827\", \"#2563eb\", \"#16a34a\", \"#dc2626\", \"#f59e0b\"],\n        row: 0,\n        start_column: 0,\n        end_column: 2,\n      },\n      {\n        name: \"sample_source\",\n        type: \"list\",\n        title: \"Sample Source\",\n        hook: \"sample_source\",\n        value: \"all\",\n        row: 1,\n        start_column: 0,\n        end_column: 2,\n        options: [\n          { title: \"AllLayers\", value: \"all\" },\n          { title: \"CurrentLayer\", value: \"current\" },\n        ],\n      },\n    ],\n  },\n  h_center_line: automappingControls(true),\n  v_center_line: automappingControls(true),\n  additional_line: automappingControls(true),\n  mapping_area: automappingControls(false),\n  auto_mapping_2: automappingControls(false),\n};\n\nexport default function syncToolOptions(state) {\n  const tool = state.project?.activeTool ?? \"brush\";\n  const schema = SCHEMAS[tool] ?? SCHEMAS.brush;\n  const values = {};\n  for (const ctrl of schema.controls) {\n    if (ctrl.value !== undefined && values[ctrl.name] === undefined) {\n      values[ctrl.name] = ctrl.value;\n    }\n  }\n  return {\n    \"toolOptions.schema\": schema,\n    \"toolOptions.values\": values,\n    \"toolOptions.lastHook\": \"switch:\" + tool,\n  };\n}\n"
   },
   "actionSources": {
     "exportClip": "// 导出当前动画镜头片段（支持同步或异步返回 Promise）。\nexport default async function exportClip(input) {\n  const title = input?.title ?? \"未命名镜头\";\n  const count = input?.layerCount ?? 0;\n  return {\n    outputPath: `exports/${title}.mp4`,\n    summary: `已导出 ${title}（${count} 个图层）`,\n  };\n}\n"

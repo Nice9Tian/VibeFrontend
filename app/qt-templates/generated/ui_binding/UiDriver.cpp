@@ -8,17 +8,27 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
+#include <QDialogButtonBox>
+#include <QDropEvent>
 #include <QEnterEvent>
 #include <QEventLoop>
+#include <QFrame>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMimeData>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollBar>
+#include <QSlider>
 #include <QSpinBox>
+#include <QTabBar>
+#include <QTextCursor>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QWidget>
 
 namespace vf {
@@ -89,7 +99,7 @@ QStringList compare(Ui &ui)
 QStringList runSteps(Ui &ui, const QStringList &steps)
 {
     QStringList output;
-    waitMs(100);
+    QApplication::processEvents();
     for (const QString &raw : steps) {
         const QString step = raw.trimmed();
         if (step.isEmpty())
@@ -102,12 +112,170 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             continue;
         }
         if (verb == QLatin1String("layout")) {
-            QApplication::processEvents();
             output.append(QStringLiteral("layout ") + ui.layoutDump());
             continue;
         }
-        if (verb == QLatin1String("check")) {
+        if (verb == QLatin1String("check") && id.isEmpty()) {
             output += compare(ui);
+            continue;
+        }
+        if (verb == QLatin1String("check")) {
+            const int row = step.section(QLatin1Char(':'), 2, 2).toInt();
+            const QString rawBool = step.section(QLatin1Char(':'), 3, 3);
+            const bool checked = (rawBool == QLatin1String("1") || rawBool == QLatin1String("true") || rawBool == QLatin1String("on"));
+            bool handledViaWidget = false;
+            if (auto *tree = ui.window()->findChild<QTreeWidget *>(id)) {
+                for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                    QTreeWidgetItem *it = tree->topLevelItem(i);
+                    if (it->data(0, Qt::UserRole).toInt() == row && (it->flags() & Qt::ItemIsUserCheckable)) {
+                        const Qt::CheckState targetState = checked ? Qt::Checked : Qt::Unchecked;
+                        if (it->checkState(0) != targetState) {
+                            it->setCheckState(0, targetState);
+                            handledViaWidget = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (!handledViaWidget)
+                ui.toggleTreeCheck(id, row, checked);
+            QApplication::processEvents();
+            continue;
+        }
+        if (verb == QLatin1String("collapse")) {
+            const int row = step.section(QLatin1Char(':'), 2, 2).toInt();
+            const QString rawBool = step.section(QLatin1Char(':'), 3, 3);
+            const bool collapsed = (rawBool == QLatin1String("1") || rawBool == QLatin1String("true"));
+            bool handledViaWidget = false;
+            if (auto *tree = ui.window()->findChild<QTreeWidget *>(id)) {
+                for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                    QTreeWidgetItem *it = tree->topLevelItem(i);
+                    if (it->data(0, Qt::UserRole).toInt() == row && it->data(0, Qt::UserRole + 3).toBool()) {
+                        if (it->data(0, Qt::UserRole + 4).toBool() != collapsed) {
+                            emit tree->itemDoubleClicked(it, 0);
+                            handledViaWidget = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (!handledViaWidget)
+                ui.toggleTreeCollapse(id, row, collapsed);
+            QApplication::processEvents();
+            continue;
+        }
+        if (verb == QLatin1String("drag") || verb == QLatin1String("reorder")) {
+            const int from = step.section(QLatin1Char(':'), 2, 2).toInt();
+            const int to = step.section(QLatin1Char(':'), 3, 3).toInt();
+            bool handledViaDrop = false;
+            if (auto *tree = ui.window()->findChild<QTreeWidget *>(id)) {
+                QTreeWidgetItem *fromItem = nullptr;
+                QTreeWidgetItem *toItem = nullptr;
+                for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                    QTreeWidgetItem *it = tree->topLevelItem(i);
+                    const int r = it->data(0, Qt::UserRole).toInt();
+                    if (r == from) fromItem = it;
+                    if (r == to) toItem = it;
+                }
+                if (fromItem && toItem && tree->viewport()) {
+                    QMimeData mime;
+                    mime.setProperty("vfDragFromRow", from);
+                    mime.setProperty("vfDragToRow", to);
+                    const QPointF dropPos = tree->visualItemRect(toItem).center();
+                    QDropEvent dropEv(dropPos, Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+                    QApplication::sendEvent(tree->viewport(), &dropEv);
+                    if (!dropEv.isAccepted())
+                        static_cast<QObject &>(ui).eventFilter(tree->viewport(), &dropEv);
+                    handledViaDrop = dropEv.isAccepted();
+                }
+            } else if (auto *list = ui.window()->findChild<QListWidget *>(id)) {
+                if (from >= 0 && from < list->count() && to >= 0 && to < list->count() && list->viewport()) {
+                    QMimeData mime;
+                    mime.setProperty("vfDragFromRow", from);
+                    mime.setProperty("vfDragToRow", to);
+                    const QPointF dropPos = list->visualItemRect(list->item(to)).center();
+                    QDropEvent dropEv(dropPos, Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+                    QApplication::sendEvent(list->viewport(), &dropEv);
+                    if (!dropEv.isAccepted())
+                        static_cast<QObject &>(ui).eventFilter(list->viewport(), &dropEv);
+                    handledViaDrop = dropEv.isAccepted();
+                }
+            }
+            if (!handledViaDrop)
+                ui.reorderControl(id, from, to);
+            QApplication::processEvents();
+            continue;
+        }
+        if (verb == QLatin1String("form")) {
+            const QString fieldName = step.section(QLatin1Char(':'), 2, 2);
+            const QString rawVal = step.section(QLatin1Char(':'), 3);
+            bool handledViaWidget = false;
+            if (auto *frame = ui.window()->findChild<QFrame *>(id)) {
+                const QList<QWidget *> cells = frame->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+                for (QWidget *cell : cells) {
+                    if (cell->property("vfFieldName").toString() != fieldName || cell->isHidden())
+                        continue;
+                    const QList<QWidget *> inner = cell->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+                    for (QWidget *w : inner) {
+                        const QString role = w->property("vfInputRole").toString();
+                        if (role == QLatin1String("slider")) {
+                            if (auto *slider = qobject_cast<QSlider *>(w)) {
+                                const int targetV = qBound(slider->minimum(), rawVal.toInt(), slider->maximum());
+                                if (slider->value() != targetV) {
+                                    slider->setValue(targetV);
+                                    handledViaWidget = true;
+                                }
+                            }
+                        } else if (role == QLatin1String("combo")) {
+                            if (auto *combo = qobject_cast<QComboBox *>(w)) {
+                                int idx = combo->findData(rawVal);
+                                if (idx < 0)
+                                    idx = combo->findText(rawVal);
+                                if (idx >= 0 && combo->currentIndex() != idx) {
+                                    combo->setCurrentIndex(idx);
+                                    handledViaWidget = true;
+                                }
+                            }
+                        } else if (role == QLatin1String("check")) {
+                            if (auto *cb = qobject_cast<QCheckBox *>(w)) {
+                                const QString s = rawVal.trimmed().toLower();
+                                const bool targetB = (s == QLatin1String("on") || s == QLatin1String("true") || s == QLatin1String("1"));
+                                if (cb->isChecked() != targetB) {
+                                    cb->setChecked(targetB);
+                                    handledViaWidget = true;
+                                }
+                            }
+                        } else if (role == QLatin1String("swatch")) {
+                            if (auto *swBtn = qobject_cast<QPushButton *>(w)) {
+                                if (swBtn->property("vfSwatchColor").toString() == rawVal) {
+                                    swBtn->click();
+                                    handledViaWidget = true;
+                                    break;
+                                }
+                            }
+                        } else if (role == QLatin1String("button") || role == QLatin1String("subwindow")) {
+                            if (auto *btn = qobject_cast<QPushButton *>(w)) {
+                                const QString btnVal = btn->property("vfBtnValue").toString();
+                                if (btnVal.isEmpty() || btnVal == rawVal || rawVal == QLatin1String("true") || rawVal == QLatin1String("1")) {
+                                    btn->click();
+                                    handledViaWidget = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (handledViaWidget)
+                        break;
+                }
+            }
+            if (!handledViaWidget)
+                ui.setDataFormField(id, fieldName, rawVal);
+            QApplication::processEvents();
+            continue;
+        }
+        if (verb == QLatin1String("clock")) {
+            ui.setClock(id.toInt());
+            QApplication::processEvents();
             continue;
         }
         if (verb == QLatin1String("wait")) {
@@ -117,12 +285,8 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
         if (verb == QLatin1String("resize")) {
             const int w = id.section(QLatin1Char('x'), 0, 0).toInt();
             const int h = id.section(QLatin1Char('x'), 1, 1).toInt();
-            if (w > 0 && h > 0) {
+            if (w > 0 && h > 0)
                 ui.window()->resize(w, h);
-                QApplication::processEvents();
-                waitMs(30);
-                QApplication::processEvents();
-            }
             continue;
         }
         if (verb == QLatin1String("request")) {
@@ -158,8 +322,18 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             output.append(QStringLiteral("error 找不到控件 %1（步骤 %2）").arg(id, step));
             continue;
         }
+        if (verb == QLatin1String("accept")) {
+            if (auto *dbb = qobject_cast<QDialogButtonBox *>(widget))
+                emit dbb->accepted();
+            else if (auto *dlg = qobject_cast<QDialog *>(widget))
+                dlg->accept();
+            QApplication::processEvents();
+            continue;
+        }
         if (verb == QLatin1String("close") || verb == QLatin1String("reject")) {
-            if (auto *dlg = qobject_cast<QDialog *>(widget))
+            if (auto *dbb = qobject_cast<QDialogButtonBox *>(widget))
+                emit dbb->rejected();
+            else if (auto *dlg = qobject_cast<QDialog *>(widget))
                 dlg->reject();
             else
                 widget->close();
@@ -190,6 +364,8 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
         } else if (verb == QLatin1String("type")) {
             const QString text = step.section(QLatin1Char(':'), 2);
             widget->setFocus();
+            if (auto *area = qobject_cast<QPlainTextEdit *>(widget))
+                area->moveCursor(QTextCursor::End);
             for (const QChar ch : text) {
                 QKeyEvent press(QEvent::KeyPress, 0, Qt::NoModifier, QString(ch));
                 QApplication::sendEvent(widget, &press);
@@ -200,6 +376,13 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             const QString rawVal = step.section(QLatin1Char(':'), 2);
             if (auto *spin = qobject_cast<QSpinBox *>(widget)) {
                 spin->setValue(rawVal.toInt());
+            } else if (auto *slider = qobject_cast<QSlider *>(widget)) {
+                slider->setValue(rawVal.toInt());
+            } else if (auto *bar = qobject_cast<QScrollBar *>(widget)) {
+                bar->setValue(rawVal.toInt());
+            } else if (auto *area = qobject_cast<QPlainTextEdit *>(widget)) {
+                if (area->toPlainText() != rawVal)
+                    area->setPlainText(rawVal);
             } else if (auto *edit = qobject_cast<QLineEdit *>(widget)) {
                 edit->setText(rawVal);
                 emit edit->textEdited(rawVal);
@@ -227,6 +410,34 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                 const int row = rawVal.toInt(&ok);
                 if (ok && row >= 0 && row < list->count())
                     list->setCurrentRow(row);
+            } else if (auto *tabs = qobject_cast<QTabBar *>(widget)) {
+                int idx = -1;
+                for (int i = 0; i < tabs->count(); ++i) {
+                    if (tabs->tabText(i) == rawVal) {
+                        idx = i;
+                        break;
+                    }
+                }
+                if (idx < 0) {
+                    bool ok = false;
+                    const int n = rawVal.toInt(&ok);
+                    if (ok && n >= 0 && n < tabs->count())
+                        idx = n;
+                }
+                if (idx >= 0)
+                    tabs->setCurrentIndex(idx);
+            } else if (auto *tree = qobject_cast<QTreeWidget *>(widget)) {
+                bool ok = false;
+                const int row = rawVal.toInt(&ok);
+                if (ok) {
+                    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                        QTreeWidgetItem *it = tree->topLevelItem(i);
+                        if (it->data(0, Qt::UserRole).toInt() == row && !it->isHidden()) {
+                            tree->setCurrentItem(it);
+                            break;
+                        }
+                    }
+                }
             }
         } else if (verb == QLatin1String("toggle")) {
             if (auto *cb = qobject_cast<QCheckBox *>(widget)) {

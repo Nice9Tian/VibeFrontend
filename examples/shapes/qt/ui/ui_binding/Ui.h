@@ -35,9 +35,15 @@ public:
     // 每个可见控件此刻相对于所属窗口的位置和大小。一行 JSON，供排版比较脚本核对。
     QString layoutDump() const;
 
-    // 供自动化测试驱动触发请求事件或切换动作模拟方式
+    // 供自动化测试驱动触发请求事件、切换动作模拟方式、拨动预览时钟与驱动复合控件事件
     void triggerRequest(const QString &name, const QString &jsonArgs = QString());
     void setActionSimulation(const QString &name, const QString &mode, int delayMs = 0);
+    void setClock(int ms);
+    int clock() const;
+    void reorderControl(const QString &id, int from, int to);
+    void toggleTreeCheck(const QString &id, int row, bool checked);
+    void toggleTreeCollapse(const QString &id, int row, bool collapsed);
+    void setDataFormField(const QString &id, const QString &fieldName, const QString &rawValue);
 
     // ---- BusinessInterface ----
     // 这个设计项目没有业务管的状态，也没有外部容器

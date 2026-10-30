@@ -653,16 +653,26 @@ function runLayerPanelSuite(project: Project) {
     });
     const dockBox = boxes.get("layersDock");
     const listBox = boxes.get("layerList");
+    const rawItems = runtime.getState("layers.items");
+    const items = Array.isArray(rawItems) ? (rawItems as Array<Record<string, unknown>>) : [];
+    const listViewProps = runtime.view("layerList").props;
+    const listViewItems = Array.isArray(listViewProps.items) ? listViewProps.items : [];
+    const rawPad = project.scene.nodes.layersDock.layout?.padding ?? 0;
+    const dockPadding = Array.isArray(rawPad) ? rawPad[1] + rawPad[3] : rawPad * 2;
     return {
       tag,
       layerVisible: runtime.getState("layer.visible"),
       selectedIndex: runtime.getState("layers.selectedIndex"),
       nextId: runtime.getState("layers.nextId"),
-      items: runtime.getState("layers.items"),
+      itemCount: items.length,
+      itemLockedFlags: items.map((it) => Boolean(it.locked)),
+      itemVisibleFlags: items.map((it) => Boolean(it.visible)),
       statusMessage: runtime.getState("project.statusMessage"),
       views: {
         layersDockVis: runtime.view("layersDock").visible,
-        layerListProps: runtime.view("layerList").props,
+        layerListValue: listViewProps.value,
+        layerListCount: listViewItems.length,
+        layerListEnabled: listViewProps.enabled,
         addBtnEnabled: runtime.view("addLayerBtn").enabled,
         removeBtnEnabled: runtime.view("removeLayerBtn").enabled,
         upBtnEnabled: runtime.view("moveLayerUpBtn").enabled,
@@ -671,9 +681,9 @@ function runLayerPanelSuite(project: Project) {
         toggleBtnProps: runtime.view("toggleVisibleBtn").props,
       },
       geometry: {
-        dockWidth: dockBox?.width,
-        listWidth: listBox?.width,
-        listExpanding: (listBox?.height ?? 0) > 350,
+        listFillsDockWidth: (listBox?.width ?? 0) === (dockBox?.width ?? 0) - dockPadding,
+        listExpanding:
+          project.scene.nodes.layerList.size?.vertical === "expanding" && (listBox?.height ?? 0) > 100,
       },
     };
   };

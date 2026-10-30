@@ -1,7 +1,7 @@
 // 导出成 Qt 时，随设计项目变化的那些文字：两个接口层的头文件、界面绑定层里的生成部分、接口清单。
 // 固定不变的文件在 app/qt-templates/ 里，是普通的 C++ 和 CMake 文件；其中写着 //@VF:名字@ 的行由这里生成的内容替换。
 import type { Value } from "../expr.ts";
-import { normalizeStateImageSlice, paddingOf, STATE_IMAGE_KEYS, type DockArea, type LayoutSpec } from "../model.ts";
+import { normalizeStateImageSlice, paddingOf, STATE_IMAGE_KEYS, type DockArea, type LayoutSpec, type MenuItemSpec } from "../model.ts";
 import type { BusinessState, ControlPlan, EffectSlot, EventParam, InterfaceSummary, WindowPlan } from "./qt.ts";
 
 export interface Context {
@@ -68,6 +68,15 @@ function stateTypes(state: BusinessState): { param: string; result: string; conv
       text: "列表（QVariantList）",
     };
   }
+  if (state.type === "object") {
+    return {
+      param: "const QVariantMap &value",
+      result: "QVariantMap",
+      convert: "toVariant().toMap()",
+      toJs: "d->engine.toScriptValue(value)",
+      text: "对象（QVariantMap）",
+    };
+  }
   if (state.type === "enum") {
     return {
       param: "const QString &value",
@@ -97,7 +106,7 @@ export function businessInterfaceHeader(context: Context): string {
   const requests = context.summary.requests ?? [];
   const actions = context.summary.actions ?? [];
   const needVariantList = states.some((s) => s.type === "array");
-  const needVariantMap = actions.length > 0;
+  const needVariantMap = actions.length > 0 || states.some((s) => s.type === "object");
   const lines: string[] = [
     `// 业务接口层。${GENERATED_NOTE}`,
     "//",
@@ -328,21 +337,61 @@ function usesExtendedLayout(context: Context): boolean {
   return (
     window.partitioned ||
     Boolean(window.layout) ||
-    controls.some((c) => Boolean(c.layout) || c.kind === "dock" || c.kind === "dialog")
+    controls.some(
+      (c) =>
+        Boolean(c.layout) ||
+        c.kind === "dock" ||
+        c.kind === "dialog" ||
+        (c.contextMenu?.length ?? 0) > 0 ||
+        (c.popupMenu?.length ?? 0) > 0,
+    )
   );
 }
 
 /** Ui.cpp 用到的、模板里没有包含的 Qt 控件类 */
 export function includes(context: Context): string {
-  const already = new Set(["QFrame", "QLabel", "QMainWindow", "QWidget", "QComboBox", "QDialog", "QDockWidget", "QListWidget", "QMenu", "QMenuBar", "QStatusBar", "QVBoxLayout", "VfGraphicWidget", "StateImageWidget", "PaintEffectWidget"]);
+  const already = new Set([
+    "QAbstractSlider",
+    "QActionGroup",
+    "QCheckBox",
+    "QComboBox",
+    "QDialog",
+    "QDialogButtonBox",
+    "QDockWidget",
+    "QFrame",
+    "QGridLayout",
+    "QHBoxLayout",
+    "QHeaderView",
+    "QIcon",
+    "QKeySequence",
+    "QLabel",
+    "QLayout",
+    "QLineEdit",
+    "QListWidget",
+    "QMainWindow",
+    "QMenu",
+    "QMenuBar",
+    "QPainter",
+    "QPixmap",
+    "QPlainTextEdit",
+    "QPushButton",
+    "QScrollBar",
+    "QSizePolicy",
+    "QSlider",
+    "QSpinBox",
+    "QStatusBar",
+    "QTabBar",
+    "QTreeWidget",
+    "QTreeWidgetItem",
+    "QVBoxLayout",
+    "QWidget",
+    "VfGraphicWidget",
+    "StateImageWidget",
+    "PaintEffectWidget",
+  ]);
   const classes = new Set<string>();
   for (const control of context.controls) {
     if (!already.has(control.qtClass)) classes.add(control.qtClass);
-  }
-  if (usesExtendedLayout(context)) {
-    classes.add("QHBoxLayout");
-    classes.add("QGridLayout");
-    classes.add("QSizePolicy");
   }
   const lines = [...classes].sort().map((name) => `#include <${name}>`);
   return lines.length > 0 ? lines.join("\n") : "// （这个设计项目没有用到别的 Qt 控件类）";
@@ -379,11 +428,74 @@ function qtDockArea(area: DockArea | undefined): string {
   return "Qt::LeftDockWidgetArea";
 }
 
+function emitMenuItems(lines: string[], parentMenuVar: string, items: MenuItemSpec[], groupVars: Set<string>): void {
+  for (const item of items) {
+    if (item.kind === "separator") {
+      lines.push(`    ${parentMenuVar}->addSeparator();`);
+      continue;
+    }
+    if (item.items && item.items.length > 0) {
+      const subVar = `sub_${sanitize(item.id)}`;
+      lines.push(`    auto *${subVar} = ${parentMenuVar}->addMenu(${qstr(item.text)});`);
+      lines.push(`    addMenuAction(${qstr(item.id)}, ${subVar}->menuAction());`);
+      emitMenuItems(lines, subVar, item.items, groupVars);
+      continue;
+    }
+    const aVar = `act_${sanitize(item.id)}`;
+    lines.push(`    auto *${aVar} = ${parentMenuVar}->addAction(${qstr(item.text)});`);
+    const isRadio = item.kind === "radio" || Boolean(item.group);
+    const isCheck = isRadio || item.kind === "check" || Boolean(item.checkable) || Boolean(item.dock);
+    if (isCheck) lines.push(`    ${aVar}->setCheckable(true);`);
+    if (item.checked !== undefined) lines.push(`    ${aVar}->setChecked(${item.checked ? "true" : "false"});`);
+    if (item.shortcut) lines.push(`    ${aVar}->setShortcut(QKeySequence(${qstr(item.shortcut)}));`);
+    if (item.group) {
+      const gVar = `grp_${sanitize(item.group)}`;
+      if (!groupVars.has(gVar)) {
+        groupVars.add(gVar);
+        lines.push(`    auto *${gVar} = new QActionGroup(&window);`);
+        lines.push(`    ${gVar}->setExclusive(true);`);
+      }
+      lines.push(`    ${gVar}->addAction(${aVar});`);
+    }
+    lines.push(`    addMenuAction(${qstr(item.id)}, ${aVar});`);
+  }
+}
+
+function emitControlEventConnections(lines: string[], control: ControlPlan, v: string): void {
+  for (const event of control.events) {
+    if (
+      event.signal === "itemReordered" ||
+      event.signal === "itemCheckToggled" ||
+      event.signal === "itemCollapseToggled" ||
+      event.signal === "fieldChanged" ||
+      (control.qtClass === "QTreeWidget" && event.signal === "currentRowChanged")
+    ) {
+      continue;
+    }
+    if (control.qtClass === "QPlainTextEdit" && event.signal === "textChanged") {
+      lines.push(
+        `    QObject::connect(${v}, &QPlainTextEdit::textChanged, q, [this, ${v}] {`,
+        `        dispatch(${qstr(control.id)}, ${qstr(event.event)}, ${v}->toPlainText());`,
+        "    });",
+      );
+      continue;
+    }
+    const param = event.type === "string" ? "const QString &value" : event.type === "number" ? "double value" : event.type === "boolean" ? "bool value" : "";
+    const value = param ? ", value" : "";
+    lines.push(
+      `    QObject::connect(${v}, &${control.qtClass}::${event.signal}, q, [this](${param}) {`,
+      `        dispatch(${qstr(control.id)}, ${qstr(event.event)}${value});`,
+      "    });",
+    );
+  }
+}
+
 function emitLayoutForContainer(
   lines: string[],
   containerVar: string,
   layout: LayoutSpec,
   children: ControlPlan[],
+  ownerPlan?: ControlPlan,
 ): void {
   const [padTop, padRight, padBottom, padLeft] = paddingOf(layout);
   for (const c of children) {
@@ -391,6 +503,30 @@ function emitLayoutForContainer(
   }
   children = children.filter((c) => c.kind !== "line");
   const layVar = `lay_${sanitize(containerVar)}`;
+
+  if (layout.kind === "flow" || (layout.kind === "hbox" && layout.wrap)) {
+    const colGap = layout.columnGap ?? layout.gap ?? 0;
+    const rowGap = layout.rowGap ?? layout.gap ?? 0;
+    const minContainerH = ownerPlan
+      ? Math.round(ownerPlan.size?.minHeight ?? (ownerPlan.kind === "dock" ? prefHeightPlan(ownerPlan) : 0))
+      : 0;
+    const maxContainerH = ownerPlan && ownerPlan.size?.maxHeight !== undefined ? Math.round(ownerPlan.size.maxHeight) : 1000000;
+    const autoHeight = ownerPlan ? !(ownerPlan.size?.fixedHeight !== undefined || ownerPlan.size?.vertical === "fixed") : true;
+    lines.push(
+      `    auto *${layVar} = new VfFlowLayout(${containerVar}, ${padLeft}, ${padTop}, ${padRight}, ${padBottom}, ${colGap}, ${rowGap}, ${minContainerH}, ${maxContainerH}, ${autoHeight ? "true" : "false"});`,
+    );
+    for (const c of children) {
+      const cv = c.variable;
+      const prefW = clampWidthPlan(c, prefWidthPlan(c));
+      const prefH = clampHeightPlan(c, prefHeightPlan(c));
+      const minW = Math.round(c.size?.minWidth ?? 0);
+      const maxW = c.size?.maxWidth !== undefined ? Math.round(c.size.maxWidth) : 1000000;
+      const hFixed = c.size?.fixedWidth !== undefined || c.size?.horizontal === "fixed";
+      const stretch = hFixed ? 0 : (c.size?.stretch ?? (c.size?.horizontal === "expanding" ? 1 : 0));
+      lines.push(`    ${layVar}->addFlowWidget(${cv}, ${prefW}, ${prefH}, ${minW}, ${maxW}, ${stretch});`);
+    }
+    return;
+  }
 
   if (layout.kind === "vbox") {
     const gap = layout.gap ?? layout.rowGap ?? 0;
@@ -405,6 +541,11 @@ function emitLayoutForContainer(
       const stretch = c.size?.stretch ?? (c.size?.vertical === "expanding" ? 1 : 0);
       if (stretch > 0) anyStretch = true;
       const hFixed = c.size?.fixedWidth !== undefined || c.size?.horizontal === "fixed";
+      const hPolicy = hFixed
+        ? "QSizePolicy::Fixed"
+        : c.size?.horizontal === "expanding"
+          ? "QSizePolicy::Expanding"
+          : "QSizePolicy::Ignored";
       if (hFixed) {
         lines.push(`    ${cv}->setFixedWidth(${prefWidthPlan(c)});`);
       } else {
@@ -415,14 +556,25 @@ function emitLayoutForContainer(
         lines.push(`    ${cv}->setMinimumHeight(${Math.round(c.size?.minHeight ?? 0)});`);
         if (c.size?.maxHeight !== undefined) lines.push(`    ${cv}->setMaximumHeight(${Math.round(c.size.maxHeight)});`);
         lines.push(
-          `    ${cv}->setSizePolicy(${hFixed ? "QSizePolicy::Fixed" : "QSizePolicy::Ignored"}, QSizePolicy::Ignored);`,
+          `    ${cv}->setSizePolicy(${hPolicy}, QSizePolicy::Ignored);`,
           `    ${layVar}->addWidget(${cv}, ${stretch}${hFixed ? ", Qt::AlignLeft" : ""});`,
+        );
+      } else if (
+        (c.layout?.kind === "flow" || (c.layout?.kind === "hbox" && c.layout?.wrap)) &&
+        c.size?.fixedHeight === undefined &&
+        c.size?.vertical !== "fixed"
+      ) {
+        if (c.size?.minHeight !== undefined) lines.push(`    ${cv}->setMinimumHeight(${Math.round(c.size.minHeight)});`);
+        if (c.size?.maxHeight !== undefined) lines.push(`    ${cv}->setMaximumHeight(${Math.round(c.size.maxHeight)});`);
+        lines.push(
+          `    ${cv}->setSizePolicy(${hFixed ? "QSizePolicy::Fixed" : "QSizePolicy::Expanding"}, QSizePolicy::Preferred);`,
+          `    ${layVar}->addWidget(${cv}, 0${hFixed ? ", Qt::AlignLeft" : ""});`,
         );
       } else {
         const bh = clampHeightPlan(c, prefHeightPlan(c));
         lines.push(
           `    ${cv}->setFixedHeight(${bh});`,
-          `    ${cv}->setSizePolicy(${hFixed ? "QSizePolicy::Fixed" : "QSizePolicy::Ignored"}, QSizePolicy::Fixed);`,
+          `    ${cv}->setSizePolicy(${hPolicy}, QSizePolicy::Fixed);`,
           `    ${layVar}->addWidget(${cv}, 0${hFixed ? ", Qt::AlignLeft" : ""});`,
         );
       }
@@ -677,23 +829,16 @@ function buildFunction(context: Context): string[] {
       if (props || effect) args.push(props ? `{ ${props} }` : "{}");
       if (effect) args.push(effect);
       lines.push(`    add(${args.join(", ")});`);
-      for (const event of control.events) {
-        const param = event.type === "string" ? "const QString &value" : event.type === "number" ? "double value" : event.type === "boolean" ? "bool value" : "";
-        const value = param ? ", value" : "";
-        lines.push(
-          `    QObject::connect(${v}, &${control.qtClass}::${event.signal}, q, [this](${param}) {`,
-          `        dispatch(${qstr(control.id)}, ${qstr(event.event)}${value});`,
-          "    });",
-        );
-      }
+      emitControlEventConnections(lines, control, v);
     }
     lines.push("}");
     return lines;
   }
 
-  // 带主窗口分区、停靠面板、对话框或五种排版的界面
+  // 带主窗口分区、停靠面板、对话框或排版的界面
   const byId = new Map<string, ControlPlan>();
   for (const c of controls) byId.set(c.id, c);
+  const groupVars = new Set<string>();
 
   const lines: string[] = [
     "// 控件树、分区、停靠面板和排版。每个控件的对象名就是它在设计项目里的 ID。",
@@ -731,13 +876,7 @@ function buildFunction(context: Context): string[] {
     for (const menu of window.menuBar.menus) {
       const mVar = `menu_${sanitize(menu.id)}`;
       lines.push(`    auto *${mVar} = menuBar->addMenu(${qstr(menu.title)});`);
-      for (const item of menu.items ?? []) {
-        const aVar = `act_${sanitize(item.id)}`;
-        lines.push(`    auto *${aVar} = ${mVar}->addAction(${qstr(item.text)});`);
-        if (item.checkable || item.dock) lines.push(`    ${aVar}->setCheckable(true);`);
-        if (item.checked !== undefined) lines.push(`    ${aVar}->setChecked(${item.checked ? "true" : "false"});`);
-        lines.push(`    addMenuAction(${qstr(item.id)}, ${aVar});`);
-      }
+      emitMenuItems(lines, mVar, menu.items ?? [], groupVars);
     }
   }
 
@@ -818,6 +957,17 @@ function buildFunction(context: Context): string[] {
           `    addExternal(${qstr(control.id)}, ${v}, ${qstr(control.placeholder ?? "")});`,
           `    ${v}->setFrameShape(QFrame::NoFrame);`,
         );
+        if (control.contextMenu && control.contextMenu.length > 0) {
+          const ctxVar = `ctx_${v}`;
+          lines.push(`    auto *${ctxVar} = new QMenu(${v});`);
+          emitMenuItems(lines, ctxVar, control.contextMenu, groupVars);
+          lines.push(
+            `    ${v}->setContextMenuPolicy(Qt::CustomContextMenu);`,
+            `    QObject::connect(${v}, &QWidget::customContextMenuRequested, q, [${v}, ${ctxVar}](const QPoint &pos) {`,
+            `        ${ctxVar}->popup(${v}->mapToGlobal(pos));`,
+            "    });",
+          );
+        }
         continue;
       }
       if (control.kind === "container") {
@@ -847,15 +997,24 @@ function buildFunction(context: Context): string[] {
         "    });",
       );
     }
-    for (const event of control.events) {
-      const param = event.type === "string" ? "const QString &value" : event.type === "number" ? "double value" : event.type === "boolean" ? "bool value" : "";
-      const value = param ? ", value" : "";
+    if (control.contextMenu && control.contextMenu.length > 0) {
+      const ctxVar = `ctx_${v}`;
+      lines.push(`    auto *${ctxVar} = new QMenu(${v});`);
+      emitMenuItems(lines, ctxVar, control.contextMenu, groupVars);
       lines.push(
-        `    QObject::connect(${v}, &${control.qtClass}::${event.signal}, q, [this](${param}) {`,
-        `        dispatch(${qstr(control.id)}, ${qstr(event.event)}${value});`,
+        `    ${v}->setContextMenuPolicy(Qt::CustomContextMenu);`,
+        `    QObject::connect(${v}, &QWidget::customContextMenuRequested, q, [${v}, ${ctxVar}](const QPoint &pos) {`,
+        `        ${ctxVar}->popup(${v}->mapToGlobal(pos));`,
         "    });",
       );
     }
+    if (control.popupMenu && control.popupMenu.length > 0) {
+      const popVar = `pop_${v}`;
+      lines.push(`    auto *${popVar} = new QMenu(${v});`);
+      emitMenuItems(lines, popVar, control.popupMenu, groupVars);
+      lines.push(`    addPopupMenu(${v}, ${popVar});`);
+    }
+    emitControlEventConnections(lines, control, v);
   }
 
   // 为根窗口（非分区模式）和各容器挂载排版或设置子控件几何位置
@@ -878,7 +1037,7 @@ function buildFunction(context: Context): string[] {
     if (childPlans.length === 0) continue;
     if (control.layout) {
       lines.push("", `    // ${control.id} 的排版（${control.layout.kind}）`);
-      emitLayoutForContainer(lines, control.bodyVariable, control.layout, childPlans);
+      emitLayoutForContainer(lines, control.bodyVariable, control.layout, childPlans, control);
     } else {
       for (const c of childPlans) {
         lines.push(`    ${c.variable}->setGeometry(${c.x}, ${c.y}, ${c.width}, ${c.height});`);

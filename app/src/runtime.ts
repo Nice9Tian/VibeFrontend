@@ -3,6 +3,7 @@
 import { evalExpr, parseAssignment, parseExpr, type Expr, type Value } from "./expr.ts";
 import {
   allConditions,
+  allMenuItems,
   allStateLeaves,
   allWindowIds,
   businessEvent,
@@ -127,6 +128,7 @@ function defaultFor(leaf: StateLeaf): Value {
   if (leaf.type === "boolean") return false;
   if (leaf.type === "enum") return leaf.values?.[0] ?? "";
   if (leaf.type === "array") return [];
+  if (leaf.type === "object") return {};
   return "";
 }
 
@@ -157,6 +159,8 @@ interface Batch {
   windows: Map<string, { open: boolean; modal: boolean }>;
   /** 停靠面板开关覆盖（当面板未通过 props.visible 绑定状态时使用） */
   docks: Map<string, boolean>;
+  /** 菜单项未绑定状态时的勾选覆盖 */
+  menuChecked: Map<string, boolean>;
   lines: string[];
   /** 这一批里 emit 的业务事件，等这批生效之后再处理 */
   pending: PendingBusinessEvent[];
@@ -177,6 +181,10 @@ export class Runtime {
   private windows = new Map<string, { open: boolean; modal: boolean }>();
   /** 停靠面板未绑定状态时的显隐开关 */
   private docks = new Map<string, boolean>();
+  /** 菜单项未绑定状态时的勾选开关 */
+  private menuChecked = new Map<string, boolean>();
+  /** 预览时钟当前毫秒数 */
+  private clockMs = 0;
   /** 动作模拟设置 */
   private actionSims = new Map<string, ActionSimConfig>();
   /** 正在进行中的异步动作集合 */
@@ -216,6 +224,11 @@ export class Runtime {
     for (const [id, n] of Object.entries(this.project.scene.nodes)) {
       if (n.type === "Dock") this.docks.set(id, n.props?.visible !== false);
     }
+    this.menuChecked.clear();
+    for (const { item } of allMenuItems(this.project.scene)) {
+      if (item.checked !== undefined) this.menuChecked.set(item.id, Boolean(item.checked));
+    }
+    this.clockMs = 0;
     for (const [name, def] of Object.entries(this.project.logic.actions ?? {})) {
       if (!this.actionSims.has(name)) {
         this.actionSims.set(name, {
@@ -286,6 +299,8 @@ export class Runtime {
       }
     }
     if (state.has(path)) return state.get(path)!;
+    if (path === "clock" || path === "clock.ms") return this.clockMs;
+    if (path === "clock.sec") return Math.floor(this.clockMs / 1000);
     // 支持读取数组或字符串状态的 .length 等尾部属性，例如 layers.items.length
     const parts = path.split(".");
     for (let i = parts.length - 1; i >= 1; i--) {
@@ -400,6 +415,34 @@ export class Runtime {
     return false;
   }
 
+  getClock(): number {
+    return this.clockMs;
+  }
+
+  setClock(ms: number): void {
+    const next = Math.max(0, Math.round(Number(ms) || 0));
+    const prev = this.clockMs;
+    this.clockMs = next;
+    const tickSteps = globalSteps(this.project.logic, "clock.tick");
+    this.runBatch(`预览时钟 ${prev}ms → ${next}ms`, false, false, (batch) => {
+      if (batch.work.has("clock")) batch.work.set("clock", next);
+      if (batch.work.has("clock.ms")) batch.work.set("clock.ms", next);
+      batch.lines.push(`clock: ${prev}ms → ${next}ms`);
+      if (tickSteps) {
+        this.runSteps(tickSteps, batch, 0, {
+          value: next,
+          $value: next,
+          param: { ms: next, prevMs: prev, deltaMs: next - prev },
+          $event: { ms: next, prevMs: prev, deltaMs: next - prev },
+          ms: next,
+          prevMs: prev,
+          deltaMs: next - prev,
+        });
+      }
+    });
+    this.hooks.onChange();
+  }
+
   stateSnapshot(): Array<[string, Value]> {
     return [...this.state].map(([k, v]) => [k, cloneValue(v)]);
   }
@@ -416,7 +459,7 @@ export class Runtime {
       const object = this.project.logic.objects?.[id];
       const props: Record<string, Value> = {
         text: menuItem.text,
-        checked: menuItem.dock ? this.view(menuItem.dock).visible : Boolean(menuItem.checked ?? false),
+        checked: menuItem.dock ? this.view(menuItem.dock).visible : (this.menuChecked.get(id) ?? Boolean(menuItem.checked ?? false)),
         enabled: true,
       };
       let visible = true;
@@ -544,8 +587,23 @@ export class Runtime {
         return;
       }
       this.runBatch(`${nodeId}.${event}`, false, false, (batch) => {
+        let nextChecked = Boolean(view.props.checked);
+        if (menuItem.group || menuItem.kind === "radio") {
+          nextChecked = true;
+          batch.menuChecked.set(nodeId, true);
+          if (menuItem.group) {
+            for (const { item } of allMenuItems(scene)) {
+              if (item.group === menuItem.group && item.id !== nodeId) {
+                batch.menuChecked.set(item.id, false);
+              }
+            }
+          }
+        } else if ((menuItem.checkable || menuItem.kind === "check") && !menuItem.dock) {
+          nextChecked = !nextChecked;
+          batch.menuChecked.set(nodeId, nextChecked);
+        }
         if (steps) {
-          this.runSteps(steps, batch, 0, this.scopeForValue(value));
+          this.runSteps(steps, batch, 0, this.scopeForValue(value !== undefined ? value : nextChecked));
         } else if (menuItem.emit) {
           this.runSteps([{ emit: menuItem.emit }], batch, 0, {});
         } else if (menuItem.dock) {
@@ -608,9 +666,9 @@ export class Runtime {
         return;
       }
       const node = scene.nodes[nodeId];
-      if (node?.type === "SpinBox" && event === "change" && typeof value === "number" && Number.isFinite(value)) {
+      if ((node?.type === "SpinBox" || node?.type === "Slider" || node?.type === "ScrollBar") && event === "change" && typeof value === "number" && Number.isFinite(value)) {
         const min = Number(view.props.min ?? 0);
-        const max = Number(view.props.max ?? 9999);
+        const max = Number(view.props.max ?? (node.type === "SpinBox" ? 9999 : 100));
         value = Math.max(min, Math.min(max, value));
       } else if (node?.type === "ComboBox" && event === "change" && typeof value === "string") {
         const options = String(view.props.options ?? "")
@@ -618,7 +676,7 @@ export class Runtime {
           .map((s) => s.trim())
           .filter(Boolean);
         if (!options.includes(value)) return;
-      } else if (node?.type === "List" && (event === "change" || event === "select") && typeof value === "number") {
+      } else if ((node?.type === "List" || node?.type === "Tree") && (event === "change" || event === "select") && typeof value === "number") {
         const items = Array.isArray(view.props.items) ? view.props.items : [];
         if (!Number.isInteger(value) || value < 0 || value >= items.length) return;
       }
@@ -634,7 +692,7 @@ export class Runtime {
 
   private scopeForValue(value?: Value): Record<string, Value> {
     if (value === undefined) return {};
-    const scope: Record<string, Value> = { value };
+    const scope: Record<string, Value> = { value, $value: value, $event: value };
     if (typeof value === "object" && value !== null && !Array.isArray(value)) {
       scope.param = value;
       for (const [k, v] of Object.entries(value)) scope[k] = v;
@@ -726,8 +784,9 @@ export class Runtime {
     const windows = new Map<string, { open: boolean; modal: boolean }>();
     for (const [k, v] of this.windows) windows.set(k, { ...v });
     const docks = new Map<string, boolean>(this.docks);
+    const menuChecked = new Map<string, boolean>(this.menuChecked);
 
-    const batch: Batch = { work, windows, docks, lines: [], pending: [], calls: [], simulating };
+    const batch: Batch = { work, windows, docks, menuChecked, lines: [], pending: [], calls: [], simulating };
     body(batch);
 
     let changed = false;
@@ -747,10 +806,14 @@ export class Runtime {
     for (const [id, next] of batch.docks) {
       if (this.docks.get(id) !== next) changed = true;
     }
+    for (const [id, next] of batch.menuChecked) {
+      if (this.menuChecked.get(id) !== next) changed = true;
+    }
 
     this.state = batch.work;
     this.windows = batch.windows;
     this.docks = batch.docks;
+    this.menuChecked = batch.menuChecked;
     if (batch.lines.length > 0 || !quietWhenEmpty) {
       if (batch.lines.length === 0) batch.lines.push("（没有状态变化）");
       this.hooks.onLog({ title, lines: batch.lines });
@@ -933,7 +996,7 @@ export class Runtime {
   }
 
   private buildStateObject(work: Map<string, Value>): Record<string, unknown> {
-    const obj: Record<string, unknown> = {};
+    const obj: Record<string, unknown> = { clock: this.clockMs };
     for (const [path, val] of work) {
       const cloned = cloneValue(val);
       obj[path] = cloned;
@@ -1042,7 +1105,7 @@ export class Runtime {
           if (!source) {
             batch.lines.push(`错误：找不到函数“${spec.name}”`);
           } else {
-            const evalArgs: Record<string, Value> = {};
+            const evalArgs: Record<string, Value> = { ...scope };
             for (const [k, v] of Object.entries(spec.args ?? {})) {
               evalArgs[k] = this.evaluateStructured(v, batch.work, scope);
             }
@@ -1124,6 +1187,7 @@ export class Runtime {
   private accepts(leaf: StateLeaf, value: Value): boolean {
     if (leaf.type === "enum") return typeof value === "string" && (leaf.values ?? []).includes(value);
     if (leaf.type === "array") return Array.isArray(value);
+    if (leaf.type === "object") return typeof value === "object" && value !== null && !Array.isArray(value);
     return typeof value === leaf.type;
   }
 

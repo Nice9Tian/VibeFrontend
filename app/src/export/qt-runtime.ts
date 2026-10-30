@@ -192,6 +192,15 @@ export function closeWindow(id: string): OutgoingEvent[] {
   return take();
 }
 
+export function setClock(ms: number): OutgoingEvent[] {
+  runtime.setClock(ms);
+  return take();
+}
+
+export function getClock(): number {
+  return runtime.getClock();
+}
+
 export function setActionSim(name: string, mode: ActionSimMode, delayMs?: number): void {
   runtime.setActionSimulation(name, {
     mode,
