@@ -334,7 +334,7 @@ function usesExtendedLayout(context: Context): boolean {
 
 /** Ui.cpp 用到的、模板里没有包含的 Qt 控件类 */
 export function includes(context: Context): string {
-  const already = new Set(["QFrame", "QLabel", "QMainWindow", "QWidget", "QComboBox", "QDialog", "QDockWidget", "QListWidget", "QMenu", "QMenuBar", "QStatusBar", "QVBoxLayout", "StateImageWidget", "PaintEffectWidget"]);
+  const already = new Set(["QFrame", "QLabel", "QMainWindow", "QWidget", "QComboBox", "QDialog", "QDockWidget", "QListWidget", "QMenu", "QMenuBar", "QStatusBar", "QVBoxLayout", "VfGraphicWidget", "StateImageWidget", "PaintEffectWidget"]);
   const classes = new Set<string>();
   for (const control of context.controls) {
     if (!already.has(control.qtClass)) classes.add(control.qtClass);
@@ -386,6 +386,10 @@ function emitLayoutForContainer(
   children: ControlPlan[],
 ): void {
   const [padTop, padRight, padBottom, padLeft] = paddingOf(layout);
+  for (const c of children) {
+    if (c.kind === "line") lines.push(`    ${c.variable}->setGeometry(${c.x}, ${c.y}, ${c.width}, ${c.height});`);
+  }
+  children = children.filter((c) => c.kind !== "line");
   const layVar = `lay_${sanitize(containerVar)}`;
 
   if (layout.kind === "vbox") {
@@ -651,7 +655,7 @@ function buildFunction(context: Context): string[] {
     for (const control of controls) {
       const v = control.variable;
       const label =
-        control.kind === "external" ? "外部容器" : control.kind === "container" ? "容器" : control.kind === "placeholder" ? `${control.type}（占位）` : control.type;
+        control.kind === "external" ? "外部容器" : control.kind === "container" ? "容器" : control.kind === "shape" ? "基础图形" : control.kind === "line" ? "线条" : control.kind === "placeholder" ? `${control.type}（占位）` : control.type;
       lines.push("", `    // ${control.id}：${label}`, `    auto *${v} = new ${control.qtClass}(${control.parentVariable});`);
       lines.push(`    ${v}->setGeometry(${control.x}, ${control.y}, ${control.width}, ${control.height});`);
       if (control.kind === "external") {
@@ -787,7 +791,11 @@ function buildFunction(context: Context): string[] {
             ? "容器"
             : control.kind === "placeholder"
               ? `${control.type}（占位）`
-              : control.type;
+              : control.kind === "shape"
+                ? "基础图形"
+                : control.kind === "line"
+                  ? "线条"
+                  : control.type;
       lines.push("", `    // ${control.id}：${label}`, `    auto *${v} = new ${control.qtClass}(${control.parentVariable});`);
       if (control.isCentral) {
         lines.push(`    window.setCentralWidget(${v});`);

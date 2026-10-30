@@ -534,7 +534,9 @@ export function check(project: Project): Problem[] {
     if (node.dockArea && !["left", "right", "top", "bottom"].includes(node.dockArea)) {
       error(`停靠面板 ${id}：dockArea 应为 left、right、top、bottom 之一，现在是“${node.dockArea}”`, id);
     }
-    if (node.rotation) hint(`控件 ${id} 设置了旋转（${node.rotation}°），导出成 Qt 时暂不处理旋转`, id);
+    if (node.rotation && (node.type !== "Shape" || childIds.length > 0)) {
+      hint(`控件 ${id} 设置了旋转（${node.rotation}°），导出成 Qt 时暂不处理旋转`, id);
+    }
     if (node.type === "External") {
       if (childIds.length) error(`外部容器 ${id} 不能包含子节点，里面的控件由业务提供`, id);
       continue;

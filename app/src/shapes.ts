@@ -882,3 +882,267 @@ export function presetById(id: string): ShapePreset | undefined {
 /** 预设里只有样式的那几项：存为预设、记住上次用的样式时只取这些。 */
 export const SHAPE_STYLE_KEYS = ["fill", "stroke", "strokeWidth", "strokeStyle", "radius", "opacity", "textColor", "fontSize", "fontWeight", "textAlign", "sides", "points", "ratio"];
 export const LINE_STYLE_KEYS = ["route", "stroke", "strokeWidth", "strokeStyle", "startCap", "endCap", "opacity", "textColor", "fontSize"];
+
+// ---------- 纯数学 SVG 路径采样（供命令行与导出 Qt 时不依赖浏览器测量轮廓与中点） ----------
+
+interface PathSeg {
+  a: Point;
+  b: Point;
+  len: number;
+}
+
+function vecAngle(ux: number, uy: number, vx: number, vy: number): number {
+  const dot = ux * vx + uy * vy;
+  const len = Math.hypot(ux, uy) * Math.hypot(vx, vy);
+  if (len <= 0) return 0;
+  const cos = Math.max(-1, Math.min(1, dot / len));
+  const ang = Math.acos(cos);
+  return ux * vy - uy * vx < 0 ? -ang : ang;
+}
+
+function linearizeSvgPath(d: string): PathSeg[] {
+  const tokens = d.match(/[MLHVCSQTAZmlhvcsqtaz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/g);
+  if (!tokens || tokens.length === 0) return [];
+  const segs: PathSeg[] = [];
+  const addSeg = (x0: number, y0: number, x1: number, y1: number) => {
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    if (len > 1e-6) segs.push({ a: { x: x0, y: y0 }, b: { x: x1, y: y1 }, len });
+  };
+
+  let idx = 0;
+  let cmd = "M";
+  let curX = 0;
+  let curY = 0;
+  let startX = 0;
+  let startY = 0;
+  let prevQx = 0;
+  let prevQy = 0;
+  let lastCmd = "";
+
+  const hasNum = (): boolean => idx < tokens.length && !/^[A-Za-z]$/.test(tokens[idx]);
+  const nextNum = (): number => (idx < tokens.length ? Number(tokens[idx++]) : 0);
+
+  while (idx < tokens.length) {
+    if (/^[A-Za-z]$/.test(tokens[idx])) {
+      cmd = tokens[idx++];
+    }
+    const upper = cmd.toUpperCase();
+    if (upper === "M") {
+      const x = nextNum();
+      const y = nextNum();
+      curX = startX = x;
+      curY = startY = y;
+      lastCmd = "M";
+      cmd = "L";
+      continue;
+    }
+    if (upper === "L") {
+      const x = nextNum();
+      const y = nextNum();
+      addSeg(curX, curY, x, y);
+      curX = x;
+      curY = y;
+      lastCmd = "L";
+      continue;
+    }
+    if (upper === "H") {
+      const x = nextNum();
+      addSeg(curX, curY, x, curY);
+      curX = x;
+      lastCmd = "H";
+      continue;
+    }
+    if (upper === "V") {
+      const y = nextNum();
+      addSeg(curX, curY, curX, y);
+      curY = y;
+      lastCmd = "V";
+      continue;
+    }
+    if (upper === "Q") {
+      const x1 = nextNum();
+      const y1 = nextNum();
+      const x = nextNum();
+      const y = nextNum();
+      const x0 = curX;
+      const y0 = curY;
+      const steps = 16;
+      let px = x0;
+      let py = y0;
+      for (let s = 1; s <= steps; s++) {
+        const t = s / steps;
+        const mt = 1 - t;
+        const nx = mt * mt * x0 + 2 * mt * t * x1 + t * t * x;
+        const ny = mt * mt * y0 + 2 * mt * t * y1 + t * t * y;
+        addSeg(px, py, nx, ny);
+        px = nx;
+        py = ny;
+      }
+      prevQx = x1;
+      prevQy = y1;
+      curX = x;
+      curY = y;
+      lastCmd = "Q";
+      continue;
+    }
+    if (upper === "T") {
+      const x = nextNum();
+      const y = nextNum();
+      const x1 = lastCmd === "Q" || lastCmd === "T" ? 2 * curX - prevQx : curX;
+      const y1 = lastCmd === "Q" || lastCmd === "T" ? 2 * curY - prevQy : curY;
+      const x0 = curX;
+      const y0 = curY;
+      const steps = 16;
+      let px = x0;
+      let py = y0;
+      for (let s = 1; s <= steps; s++) {
+        const t = s / steps;
+        const mt = 1 - t;
+        const nx = mt * mt * x0 + 2 * mt * t * x1 + t * t * x;
+        const ny = mt * mt * y0 + 2 * mt * t * y1 + t * t * y;
+        addSeg(px, py, nx, ny);
+        px = nx;
+        py = ny;
+      }
+      prevQx = x1;
+      prevQy = y1;
+      curX = x;
+      curY = y;
+      lastCmd = "T";
+      continue;
+    }
+    if (upper === "C") {
+      const x1 = nextNum();
+      const y1 = nextNum();
+      const x2 = nextNum();
+      const y2 = nextNum();
+      const x = nextNum();
+      const y = nextNum();
+      const x0 = curX;
+      const y0 = curY;
+      const steps = 20;
+      let px = x0;
+      let py = y0;
+      for (let s = 1; s <= steps; s++) {
+        const t = s / steps;
+        const mt = 1 - t;
+        const nx = mt * mt * mt * x0 + 3 * mt * mt * t * x1 + 3 * mt * t * t * x2 + t * t * t * x;
+        const ny = mt * mt * mt * y0 + 3 * mt * mt * t * y1 + 3 * mt * t * t * y2 + t * t * t * y;
+        addSeg(px, py, nx, ny);
+        px = nx;
+        py = ny;
+      }
+      curX = x;
+      curY = y;
+      lastCmd = "C";
+      continue;
+    }
+    if (upper === "A") {
+      let rx = Math.abs(nextNum());
+      let ry = Math.abs(nextNum());
+      const phi = (nextNum() * Math.PI) / 180;
+      const largeArc = nextNum() !== 0;
+      const sweep = nextNum() !== 0;
+      const x = nextNum();
+      const y = nextNum();
+      const x1 = curX;
+      const y1 = curY;
+      if (Math.hypot(x - x1, y - y1) > 1e-6) {
+        if (rx <= 1e-6 || ry <= 1e-6) {
+          addSeg(x1, y1, x, y);
+        } else {
+          const cosPhi = Math.cos(phi);
+          const sinPhi = Math.sin(phi);
+          const dx2 = (x1 - x) / 2;
+          const dy2 = (y1 - y) / 2;
+          const x1p = cosPhi * dx2 + sinPhi * dy2;
+          const y1p = -sinPhi * dx2 + cosPhi * dy2;
+          const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+          if (lambda > 1) {
+            const s = Math.sqrt(lambda);
+            rx *= s;
+            ry *= s;
+          }
+          const rx2 = rx * rx;
+          const ry2 = ry * ry;
+          const x1p2 = x1p * x1p;
+          const y1p2 = y1p * y1p;
+          const numVal = Math.max(0, rx2 * ry2 - rx2 * y1p2 - ry2 * x1p2);
+          const denVal = rx2 * y1p2 + ry2 * x1p2;
+          const factor = (largeArc === sweep ? -1 : 1) * (denVal > 0 ? Math.sqrt(numVal / denVal) : 0);
+          const cxp = factor * ((rx * y1p) / ry);
+          const cyp = factor * (-(ry * x1p) / rx);
+          const cx = cosPhi * cxp - sinPhi * cyp + (x1 + x) / 2;
+          const cy = sinPhi * cxp + cosPhi * cyp + (y1 + y) / 2;
+          const theta1 = vecAngle(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry);
+          let dTheta = vecAngle((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
+          if (!sweep && dTheta > 0) dTheta -= Math.PI * 2;
+          if (sweep && dTheta < 0) dTheta += Math.PI * 2;
+          const steps = Math.max(16, Math.ceil(Math.abs(dTheta) / (Math.PI / 24)));
+          let px = x1;
+          let py = y1;
+          for (let s = 1; s <= steps; s++) {
+            const ang = theta1 + (dTheta * s) / steps;
+            const nx = s === steps ? x : cx + cosPhi * rx * Math.cos(ang) - sinPhi * ry * Math.sin(ang);
+            const ny = s === steps ? y : cy + sinPhi * rx * Math.cos(ang) + cosPhi * ry * Math.sin(ang);
+            addSeg(px, py, nx, ny);
+            px = nx;
+            py = ny;
+          }
+        }
+      }
+      curX = x;
+      curY = y;
+      lastCmd = "A";
+      continue;
+    }
+    if (upper === "Z") {
+      addSeg(curX, curY, startX, startY);
+      curX = startX;
+      curY = startY;
+      lastCmd = "Z";
+      continue;
+    }
+    if (hasNum()) nextNum();
+  }
+  return segs;
+}
+
+function pointAtSegLength(segs: PathSeg[], targetDist: number): Point {
+  if (segs.length === 0) return { x: 0, y: 0 };
+  if (targetDist <= 0) return { ...segs[0].a };
+  let acc = 0;
+  for (const seg of segs) {
+    if (acc + seg.len >= targetDist) {
+      const t = seg.len > 0 ? (targetDist - acc) / seg.len : 0;
+      return {
+        x: seg.a.x + (seg.b.x - seg.a.x) * t,
+        y: seg.a.y + (seg.b.y - seg.a.y) * t,
+      };
+    }
+    acc += seg.len;
+  }
+  return { ...segs[segs.length - 1].b };
+}
+
+/** 按弧长均匀采样 SVG 路径上的点（不依赖浏览器 DOM）。 */
+export function sampleSvgPath(d: string, count?: number): Point[] {
+  const segs = linearizeSvgPath(d);
+  if (segs.length === 0) return [];
+  const total = segs.reduce((sum, s) => sum + s.len, 0);
+  const n = count ?? Math.max(32, Math.min(800, Math.round(total / 2)));
+  const points: Point[] = [];
+  for (let i = 0; i < n; i++) {
+    points.push(pointAtSegLength(segs, (total * i) / n));
+  }
+  return points;
+}
+
+/** 计算 SVG 路径弧长中点坐标（不依赖浏览器 DOM）。 */
+export function svgPathMidpoint(d: string, fallback: Point): Point {
+  const segs = linearizeSvgPath(d);
+  if (segs.length === 0) return fallback;
+  const total = segs.reduce((sum, s) => sum + s.len, 0);
+  if (total <= 0) return fallback;
+  return pointAtSegLength(segs, total / 2);
+}

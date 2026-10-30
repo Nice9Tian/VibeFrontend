@@ -9,6 +9,7 @@ import {
   shapeGeometry,
   shapeTextBox,
   shortenEnd,
+  svgPathMidpoint,
   type Endpoint,
   type LineGeometry,
   type Point,
@@ -178,8 +179,8 @@ export function paintLine(body: HTMLElement, layout: LineLayout, origin: { x: nu
   if (labelText) {
     // 文字放在路径长度一半的地方
     body.replaceChildren(root);
-    const total = main.getTotalLength();
-    const mid = total > 0 ? main.getPointAtLength(total / 2) : { x: (first.x + last.x) / 2, y: (first.y + last.y) / 2 };
+    void main;
+    const mid = svgPathMidpoint(pathFromPoints(route, points), { x: (first.x + last.x) / 2, y: (first.y + last.y) / 2 });
     const label = document.createElement("div");
     label.className = "vf-line-label";
     label.textContent = labelText;

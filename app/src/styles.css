@@ -1866,6 +1866,128 @@ body.standalone-preview #stage-space > #stage-frame {
   border-radius: 6px;
 }
 
+#stage-iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: transparent;
+}
+
+/* ---------- 导出成 Qt 弹窗 ---------- */
+
+.export-qt-body {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+
+.export-qt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.export-qt-row label {
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.export-qt-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+}
+
+.export-qt-row button {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.export-qt-row button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.export-qt-notice {
+  padding: 8px 10px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+}
+
+.export-qt-notice.warn {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.export-qt-notice.error {
+  border-color: var(--error);
+  background: #fdecec;
+  color: var(--error);
+}
+
+.export-qt-notice.success {
+  border-color: #16a34a;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.export-qt-section {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fcfcfd;
+}
+
+.export-qt-section h4 {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.export-qt-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.export-qt-list li.error {
+  color: var(--error);
+}
+
+.export-qt-list li.hint {
+  color: var(--hint);
+}
+
+.vf-modal-footer button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.vf-modal-footer button.primary:hover {
+  background: #1d4ed8;
+  color: #fff;
+}
+
 body.standalone-preview #stage {
   border-radius: 6px;
 }

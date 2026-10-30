@@ -257,6 +257,1236 @@ var VF = (function(exports) {
 		},
 		children: false
 	};
+	const SHAPE_KINDS = [
+		{
+			id: "rectangle",
+			label: "矩形",
+			group: "basic"
+		},
+		{
+			id: "ellipse",
+			label: "椭圆",
+			group: "basic",
+			textInset: [.15, .15]
+		},
+		{
+			id: "diamond",
+			label: "菱形",
+			group: "basic",
+			textInset: [.25, .25]
+		},
+		{
+			id: "triangle",
+			label: "三角形",
+			group: "basic",
+			textInset: [.25, .35]
+		},
+		{
+			id: "triangleDown",
+			label: "倒三角",
+			group: "basic",
+			textInset: [.25, .1]
+		},
+		{
+			id: "polygon",
+			label: "多边形",
+			group: "basic",
+			textInset: [.2, .2]
+		},
+		{
+			id: "star",
+			label: "星形",
+			group: "basic",
+			textInset: [.3, .3]
+		},
+		{
+			id: "plus",
+			label: "十字",
+			group: "basic",
+			textInset: [.33, .33]
+		},
+		{
+			id: "arrowRight",
+			label: "右箭头",
+			group: "basic",
+			textInset: [.05, .28]
+		},
+		{
+			id: "arrowLeft",
+			label: "左箭头",
+			group: "basic",
+			textInset: [.05, .28]
+		},
+		{
+			id: "arrowBoth",
+			label: "双向箭头",
+			group: "basic",
+			textInset: [.2, .28]
+		},
+		{
+			id: "chevron",
+			label: "折角箭头",
+			group: "basic",
+			textInset: [.2, .1]
+		},
+		{
+			id: "speechBubble",
+			label: "对话气泡",
+			group: "basic",
+			textInset: [.06, .08]
+		},
+		{
+			id: "cloud",
+			label: "云",
+			group: "basic",
+			textInset: [.18, .22]
+		},
+		{
+			id: "hexagon",
+			label: "六边形",
+			group: "flowchart",
+			textInset: [.2, .05]
+		},
+		{
+			id: "parallelogram",
+			label: "平行四边形",
+			group: "flowchart",
+			textInset: [.2, .05]
+		},
+		{
+			id: "parallelogramLeft",
+			label: "左倾平行四边形",
+			group: "flowchart",
+			textInset: [.2, .05]
+		},
+		{
+			id: "trapezoid",
+			label: "梯形",
+			group: "flowchart",
+			textInset: [.2, .05]
+		},
+		{
+			id: "manualInput",
+			label: "手动输入",
+			group: "flowchart",
+			textInset: [.05, .2]
+		},
+		{
+			id: "cylinder",
+			label: "圆柱（数据库）",
+			group: "flowchart",
+			textInset: [.05, .25]
+		},
+		{
+			id: "cylinderHorizontal",
+			label: "横向圆柱",
+			group: "flowchart",
+			textInset: [.2, .05]
+		},
+		{
+			id: "document",
+			label: "文档",
+			group: "flowchart",
+			textInset: [.05, .1]
+		},
+		{
+			id: "multiDocument",
+			label: "多文档",
+			group: "flowchart",
+			textInset: [.06, .15]
+		},
+		{
+			id: "predefinedProcess",
+			label: "预定义处理",
+			group: "flowchart",
+			textInset: [.14, .05]
+		},
+		{
+			id: "internalStorage",
+			label: "内部存储",
+			group: "flowchart",
+			textInset: [.18, .24]
+		},
+		{
+			id: "file",
+			label: "文件",
+			group: "flowchart",
+			textInset: [.06, .2]
+		},
+		{
+			id: "or",
+			label: "或",
+			group: "flowchart",
+			textInset: [.2, .2]
+		},
+		{
+			id: "summingJunction",
+			label: "求和",
+			group: "flowchart",
+			textInset: [.2, .2]
+		},
+		{
+			id: "text",
+			label: "文字",
+			group: "basic",
+			textInset: [0, 0]
+		}
+	];
+	function shapeKind(id) {
+		var _SHAPE_KINDS$find;
+		return (_SHAPE_KINDS$find = SHAPE_KINDS.find((kind) => kind.id === id)) !== null && _SHAPE_KINDS$find !== void 0 ? _SHAPE_KINDS$find : SHAPE_KINDS[0];
+	}
+	const fmt = (n) => String(Math.round(n * 100) / 100);
+	function polygonPath(points) {
+		return points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${fmt(x)} ${fmt(y)}`).join(" ") + " Z";
+	}
+	function roundedRect(x, y, w, h, r) {
+		const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+		if (radius === 0) return polygonPath([
+			[x, y],
+			[x + w, y],
+			[x + w, y + h],
+			[x, y + h]
+		]);
+		const R = fmt(radius);
+		return [
+			`M${fmt(x + radius)} ${fmt(y)}`,
+			`H${fmt(x + w - radius)}`,
+			`A${R} ${R} 0 0 1 ${fmt(x + w)} ${fmt(y + radius)}`,
+			`V${fmt(y + h - radius)}`,
+			`A${R} ${R} 0 0 1 ${fmt(x + w - radius)} ${fmt(y + h)}`,
+			`H${fmt(x + radius)}`,
+			`A${R} ${R} 0 0 1 ${fmt(x)} ${fmt(y + h - radius)}`,
+			`V${fmt(y + radius)}`,
+			`A${R} ${R} 0 0 1 ${fmt(x + radius)} ${fmt(y)}`,
+			"Z"
+		].join(" ");
+	}
+	function ellipsePath(cx, cy, rx, ry) {
+		return `M${fmt(cx - rx)} ${fmt(cy)} A${fmt(rx)} ${fmt(ry)} 0 1 0 ${fmt(cx + rx)} ${fmt(cy)} A${fmt(rx)} ${fmt(ry)} 0 1 0 ${fmt(cx - rx)} ${fmt(cy)} Z`;
+	}
+	/** 正多边形和星形的顶点，内接于宽高给定的椭圆，第一个顶点朝上。 */
+	function radialPoints(x, y, w, h, count, inner) {
+		const points = [];
+		const steps = inner === null ? count : count * 2;
+		for (let i = 0; i < steps; i++) {
+			const angle = -Math.PI / 2 + i * 2 * Math.PI / steps;
+			const scale = inner !== null && i % 2 === 1 ? inner : 1;
+			points.push([x + w / 2 + Math.cos(angle) * w * scale / 2, y + h / 2 + Math.sin(angle) * h * scale / 2]);
+		}
+		return points;
+	}
+	/** 云的轮廓，在 100×100 的格子里画好，再按实际大小缩放。 */
+	const CLOUD = [
+		[26, 86],
+		[
+			12,
+			86,
+			2,
+			74,
+			6,
+			62
+		],
+		[
+			0,
+			50,
+			10,
+			37,
+			24,
+			39
+		],
+		[
+			24,
+			22,
+			44,
+			12,
+			57,
+			22
+		],
+		[
+			66,
+			8,
+			88,
+			12,
+			90,
+			32
+		],
+		[
+			101,
+			36,
+			103,
+			56,
+			93,
+			64
+		],
+		[
+			100,
+			79,
+			86,
+			89,
+			74,
+			86
+		]
+	];
+	/**
+	* 形状在 w×h 的方框里的轮廓。strokeWidth 用来往里缩半个线宽，描边就不会被方框切掉。
+	* props 里用到 radius（矩形圆角）、sides（多边形边数）、points 和 ratio（星形的角数和内径比例）。
+	*/
+	function shapeGeometry(kind, w, h, strokeWidth, props) {
+		const i = Math.max(0, strokeWidth) / 2;
+		const x = i;
+		const y = i;
+		const W = Math.max(1, w - 2 * i);
+		const H = Math.max(1, h - 2 * i);
+		const num = (key, fallback) => typeof props[key] === "number" ? props[key] : fallback;
+		const details = [];
+		const P = (px, py) => [x + px, y + py];
+		switch (kind) {
+			case "text": return {
+				body: "",
+				details
+			};
+			case "ellipse": return {
+				body: ellipsePath(x + W / 2, y + H / 2, W / 2, H / 2),
+				details
+			};
+			case "diamond": return {
+				body: polygonPath([
+					P(W / 2, 0),
+					P(W, H / 2),
+					P(W / 2, H),
+					P(0, H / 2)
+				]),
+				details
+			};
+			case "triangle": return {
+				body: polygonPath([
+					P(W / 2, 0),
+					P(W, H),
+					P(0, H)
+				]),
+				details
+			};
+			case "triangleDown": return {
+				body: polygonPath([
+					P(0, 0),
+					P(W, 0),
+					P(W / 2, H)
+				]),
+				details
+			};
+			case "polygon": return {
+				body: polygonPath(radialPoints(x, y, W, H, Math.max(3, Math.min(60, Math.round(num("sides", 5)))), null)),
+				details
+			};
+			case "star": return {
+				body: polygonPath(radialPoints(x, y, W, H, Math.max(3, Math.min(60, Math.round(num("points", 5)))), Math.max(.05, Math.min(1, num("ratio", .45))))),
+				details
+			};
+			case "plus": {
+				const t = Math.min(W, H) / 3;
+				const cx = W / 2;
+				const cy = H / 2;
+				return {
+					body: polygonPath([
+						P(cx - t / 2, 0),
+						P(cx + t / 2, 0),
+						P(cx + t / 2, cy - t / 2),
+						P(W, cy - t / 2),
+						P(W, cy + t / 2),
+						P(cx + t / 2, cy + t / 2),
+						P(cx + t / 2, H),
+						P(cx - t / 2, H),
+						P(cx - t / 2, cy + t / 2),
+						P(0, cy + t / 2),
+						P(0, cy - t / 2),
+						P(cx - t / 2, cy - t / 2)
+					]),
+					details
+				};
+			}
+			case "arrowRight":
+			case "arrowLeft": {
+				const head = Math.min(W * .45, H);
+				const pts = [
+					[0, H * .25],
+					[W - head, H * .25],
+					[W - head, 0],
+					[W, H / 2],
+					[W - head, H],
+					[W - head, H * .75],
+					[0, H * .75]
+				];
+				const flip = kind === "arrowLeft";
+				return {
+					body: polygonPath(pts.map(([px, py]) => P(flip ? W - px : px, py))),
+					details
+				};
+			}
+			case "arrowBoth": {
+				const head = Math.min(W * .3, H);
+				return {
+					body: polygonPath([
+						P(0, H / 2),
+						P(head, 0),
+						P(head, H * .25),
+						P(W - head, H * .25),
+						P(W - head, 0),
+						P(W, H / 2),
+						P(W - head, H),
+						P(W - head, H * .75),
+						P(head, H * .75),
+						P(head, H)
+					]),
+					details
+				};
+			}
+			case "chevron": {
+				const d = Math.min(W / 3, H / 2);
+				return {
+					body: polygonPath([
+						P(0, 0),
+						P(W - d, 0),
+						P(W, H / 2),
+						P(W - d, H),
+						P(0, H),
+						P(d, H / 2)
+					]),
+					details
+				};
+			}
+			case "speechBubble": {
+				const bodyH = H * .8;
+				const r = Math.min(12, W / 4, bodyH / 4);
+				const tailX = Math.min(W * .2, W - r - 4);
+				const R = fmt(r);
+				return {
+					body: [
+						`M${fmt(x + r)} ${fmt(y)}`,
+						`H${fmt(x + W - r)}`,
+						`A${R} ${R} 0 0 1 ${fmt(x + W)} ${fmt(y + r)}`,
+						`V${fmt(y + bodyH - r)}`,
+						`A${R} ${R} 0 0 1 ${fmt(x + W - r)} ${fmt(y + bodyH)}`,
+						`H${fmt(x + tailX + W * .12)}`,
+						`L${fmt(x + tailX)} ${fmt(y + H)}`,
+						`L${fmt(x + tailX + W * .02)} ${fmt(y + bodyH)}`,
+						`H${fmt(x + r)}`,
+						`A${R} ${R} 0 0 1 ${fmt(x)} ${fmt(y + bodyH - r)}`,
+						`V${fmt(y + r)}`,
+						`A${R} ${R} 0 0 1 ${fmt(x + r)} ${fmt(y)}`,
+						"Z"
+					].join(" "),
+					details
+				};
+			}
+			case "cloud": {
+				const sx = W / 100;
+				const sy = H / 100;
+				return {
+					body: CLOUD.map((seg, index) => {
+						if (index === 0) return `M${fmt(x + seg[0] * sx)} ${fmt(y + seg[1] * sy)}`;
+						const c = seg;
+						return `C${fmt(x + c[0] * sx)} ${fmt(y + c[1] * sy)} ${fmt(x + c[2] * sx)} ${fmt(y + c[3] * sy)} ${fmt(x + c[4] * sx)} ${fmt(y + c[5] * sy)}`;
+					}).join(" ") + " Z",
+					details
+				};
+			}
+			case "hexagon": {
+				const d = Math.min(W / 4, H / 2);
+				return {
+					body: polygonPath([
+						P(d, 0),
+						P(W - d, 0),
+						P(W, H / 2),
+						P(W - d, H),
+						P(d, H),
+						P(0, H / 2)
+					]),
+					details
+				};
+			}
+			case "parallelogram":
+			case "parallelogramLeft": {
+				const s = Math.min(W * .25, H * .6);
+				const pts = [
+					[s, 0],
+					[W, 0],
+					[W - s, H],
+					[0, H]
+				];
+				const flip = kind === "parallelogramLeft";
+				return {
+					body: polygonPath(pts.map(([px, py]) => P(flip ? W - px : px, py))),
+					details
+				};
+			}
+			case "trapezoid": {
+				const s = Math.min(W * .2, H * .6);
+				return {
+					body: polygonPath([
+						P(s, 0),
+						P(W - s, 0),
+						P(W, H),
+						P(0, H)
+					]),
+					details
+				};
+			}
+			case "manualInput": return {
+				body: polygonPath([
+					P(0, H * .25),
+					P(W, 0),
+					P(W, H),
+					P(0, H)
+				]),
+				details
+			};
+			case "cylinder": {
+				const rx = W / 2;
+				const ry = Math.min(H * .15, W * .25);
+				details.push(`M${fmt(x)} ${fmt(y + ry)} A${fmt(rx)} ${fmt(ry)} 0 0 0 ${fmt(x + W)} ${fmt(y + ry)}`);
+				return {
+					body: `M${fmt(x)} ${fmt(y + ry)} A${fmt(rx)} ${fmt(ry)} 0 0 1 ${fmt(x + W)} ${fmt(y + ry)} V${fmt(y + H - ry)} A${fmt(rx)} ${fmt(ry)} 0 0 1 ${fmt(x)} ${fmt(y + H - ry)} Z`,
+					details
+				};
+			}
+			case "cylinderHorizontal": {
+				const ry = H / 2;
+				const rx = Math.min(W * .15, H * .25);
+				details.push(`M${fmt(x + W - rx)} ${fmt(y)} A${fmt(rx)} ${fmt(ry)} 0 0 0 ${fmt(x + W - rx)} ${fmt(y + H)}`);
+				return {
+					body: `M${fmt(x + rx)} ${fmt(y)} H${fmt(x + W - rx)} A${fmt(rx)} ${fmt(ry)} 0 0 1 ${fmt(x + W - rx)} ${fmt(y + H)} H${fmt(x + rx)} A${fmt(rx)} ${fmt(ry)} 0 0 1 ${fmt(x + rx)} ${fmt(y)} Z`,
+					details
+				};
+			}
+			case "document": {
+				const a = H * .1;
+				return {
+					body: `M${fmt(x)} ${fmt(y)} H${fmt(x + W)} V${fmt(y + H - a)} Q${fmt(x + W * .75)} ${fmt(y + H - 3 * a)} ${fmt(x + W * .5)} ${fmt(y + H - a)} T${fmt(x)} ${fmt(y + H - a)} Z`,
+					details
+				};
+			}
+			case "multiDocument": {
+				const o = Math.min(W, H) * .07;
+				const a = H * .08;
+				const fw = W - 2 * o;
+				const top = y + 2 * o;
+				details.push(`M${fmt(x + o)} ${fmt(top)} V${fmt(y + o)} H${fmt(x + W - o)} V${fmt(y + H - 2 * o - a)}`, `M${fmt(x + 2 * o)} ${fmt(y + o)} V${fmt(y)} H${fmt(x + W)} V${fmt(y + H - 3 * o - a)} H${fmt(x + W - o)}`);
+				return {
+					body: `M${fmt(x)} ${fmt(top)} H${fmt(x + fw)} V${fmt(y + H - a)} Q${fmt(x + fw * .75)} ${fmt(y + H - 3 * a)} ${fmt(x + fw * .5)} ${fmt(y + H - a)} T${fmt(x)} ${fmt(y + H - a)} Z`,
+					details
+				};
+			}
+			case "predefinedProcess": {
+				const d = Math.min(W * .1, 16);
+				details.push(`M${fmt(x + d)} ${fmt(y)} V${fmt(y + H)}`, `M${fmt(x + W - d)} ${fmt(y)} V${fmt(y + H)}`);
+				return {
+					body: roundedRect(x, y, W, H, 0),
+					details
+				};
+			}
+			case "internalStorage": {
+				const dx = Math.min(W * .15, 20);
+				const dy = Math.min(H * .2, 20);
+				details.push(`M${fmt(x + dx)} ${fmt(y)} V${fmt(y + H)}`, `M${fmt(x)} ${fmt(y + dy)} H${fmt(x + W)}`);
+				return {
+					body: roundedRect(x, y, W, H, 0),
+					details
+				};
+			}
+			case "file": {
+				const f = Math.min(W, H) * .22;
+				details.push(`M${fmt(x + W - f)} ${fmt(y)} V${fmt(y + f)} H${fmt(x + W)}`);
+				return {
+					body: polygonPath([
+						P(0, 0),
+						P(W - f, 0),
+						P(W, f),
+						P(W, H),
+						P(0, H)
+					]),
+					details
+				};
+			}
+			case "or":
+				details.push(`M${fmt(x + W / 2)} ${fmt(y)} V${fmt(y + H)}`, `M${fmt(x)} ${fmt(y + H / 2)} H${fmt(x + W)}`);
+				return {
+					body: ellipsePath(x + W / 2, y + H / 2, W / 2, H / 2),
+					details
+				};
+			case "summingJunction": {
+				const c = Math.SQRT1_2;
+				const cx = x + W / 2;
+				const cy = y + H / 2;
+				const ax = W / 2 * c;
+				const ay = H / 2 * c;
+				details.push(`M${fmt(cx - ax)} ${fmt(cy - ay)} L${fmt(cx + ax)} ${fmt(cy + ay)}`, `M${fmt(cx + ax)} ${fmt(cy - ay)} L${fmt(cx - ax)} ${fmt(cy + ay)}`);
+				return {
+					body: ellipsePath(cx, cy, W / 2, H / 2),
+					details
+				};
+			}
+			default: return {
+				body: roundedRect(x, y, W, H, num("radius", 0)),
+				details
+			};
+		}
+	}
+	/** 形状里文字区域的位置（相对于形状的左上角）。 */
+	function shapeTextBox(kind, w, h) {
+		var _shapeKind$textInset;
+		const [ix, iy] = (_shapeKind$textInset = shapeKind(kind).textInset) !== null && _shapeKind$textInset !== void 0 ? _shapeKind$textInset : [.06, .06];
+		const padX = kind === "text" ? 0 : Math.max(6, w * ix);
+		const padY = kind === "text" ? 0 : Math.max(4, h * iy);
+		return {
+			x: padX,
+			y: padY,
+			width: Math.max(0, w - 2 * padX),
+			height: Math.max(0, h - 2 * padY)
+		};
+	}
+	const SIDES = [
+		"top",
+		"right",
+		"bottom",
+		"left"
+	];
+	const SIDE_DIRECTION = {
+		top: {
+			x: 0,
+			y: -1
+		},
+		right: {
+			x: 1,
+			y: 0
+		},
+		bottom: {
+			x: 0,
+			y: 1
+		},
+		left: {
+			x: -1,
+			y: 0
+		}
+	};
+	function sideAnchor(rect, side) {
+		if (side === "top") return {
+			x: rect.x + rect.width / 2,
+			y: rect.y
+		};
+		if (side === "bottom") return {
+			x: rect.x + rect.width / 2,
+			y: rect.y + rect.height
+		};
+		if (side === "left") return {
+			x: rect.x,
+			y: rect.y + rect.height / 2
+		};
+		return {
+			x: rect.x + rect.width,
+			y: rect.y + rect.height / 2
+		};
+	}
+	/** 线挂在一个方框上、另一头在 toward 时，自动选哪一边：朝着另一头的那一边。 */
+	function autoSide(rect, toward) {
+		const dx = (toward.x - (rect.x + rect.width / 2)) / Math.max(1, rect.width);
+		const dy = (toward.y - (rect.y + rect.height / 2)) / Math.max(1, rect.height);
+		if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? "right" : "left";
+		return dy >= 0 ? "bottom" : "top";
+	}
+	function dominantDirection(from, to) {
+		const dx = to.x - from.x;
+		const dy = to.y - from.y;
+		if (Math.abs(dx) >= Math.abs(dy)) return {
+			x: dx >= 0 ? 1 : -1,
+			y: 0
+		};
+		return {
+			x: 0,
+			y: dy >= 0 ? 1 : -1
+		};
+	}
+	function simplify(points) {
+		const result = [];
+		for (const p of points) {
+			const last = result[result.length - 1];
+			if (last && Math.abs(last.x - p.x) < .5 && Math.abs(last.y - p.y) < .5) continue;
+			result.push(p);
+		}
+		for (let k = result.length - 2; k > 0; k--) {
+			const a = result[k - 1];
+			const b = result[k];
+			const c = result[k + 1];
+			if (Math.abs(a.x - b.x) < .5 && Math.abs(b.x - c.x) < .5 || Math.abs(a.y - b.y) < .5 && Math.abs(b.y - c.y) < .5) result.splice(k, 1);
+		}
+		return result;
+	}
+	/** 折线：只走水平和竖直的线段，从起点所在的那一边出去，从终点所在的那一边进来。 */
+	function elbowPoints(start, end) {
+		var _start$direction, _end$direction;
+		const GAP = 20;
+		const S = start.point;
+		const E = end.point;
+		const ds = (_start$direction = start.direction) !== null && _start$direction !== void 0 ? _start$direction : dominantDirection(S, E);
+		const de = (_end$direction = end.direction) !== null && _end$direction !== void 0 ? _end$direction : dominantDirection(E, S);
+		const P1 = {
+			x: S.x + ds.x * GAP,
+			y: S.y + ds.y * GAP
+		};
+		const P2 = {
+			x: E.x + de.x * GAP,
+			y: E.y + de.y * GAP
+		};
+		const startHorizontal = ds.y === 0;
+		const endHorizontal = de.y === 0;
+		let middle;
+		if (startHorizontal && endHorizontal) {
+			let mx = (S.x + E.x) / 2;
+			if (ds.x > 0 && mx < P1.x || ds.x < 0 && mx > P1.x) mx = P1.x;
+			if (de.x > 0 && mx < P2.x || de.x < 0 && mx > P2.x) mx = P2.x;
+			middle = [{
+				x: mx,
+				y: S.y
+			}, {
+				x: mx,
+				y: E.y
+			}];
+		} else if (!startHorizontal && !endHorizontal) {
+			let my = (S.y + E.y) / 2;
+			if (ds.y > 0 && my < P1.y || ds.y < 0 && my > P1.y) my = P1.y;
+			if (de.y > 0 && my < P2.y || de.y < 0 && my > P2.y) my = P2.y;
+			middle = [{
+				x: S.x,
+				y: my
+			}, {
+				x: E.x,
+				y: my
+			}];
+		} else if (startHorizontal) {
+			const direct = {
+				x: E.x,
+				y: S.y
+			};
+			middle = (direct.x - S.x) * ds.x >= GAP && (direct.y - E.y) * de.y >= GAP ? [direct] : [
+				P1,
+				{
+					x: P1.x,
+					y: P2.y
+				},
+				P2
+			];
+		} else {
+			const direct = {
+				x: S.x,
+				y: E.y
+			};
+			middle = (direct.y - S.y) * ds.y >= GAP && (direct.x - E.x) * de.x >= GAP ? [direct] : [
+				P1,
+				{
+					x: P2.x,
+					y: P1.y
+				},
+				P2
+			];
+		}
+		return simplify([
+			S,
+			...middle,
+			E
+		]);
+	}
+	/** 折线手动调整过的拐点，写在 props.bends 里：“x,y;x,y”，相对于线的父节点。 */
+	function parseBends(text) {
+		if (typeof text !== "string" || !text.trim()) return [];
+		const points = [];
+		for (const pair of text.split(";")) {
+			const [x, y] = pair.split(",").map(Number);
+			if (Number.isFinite(x) && Number.isFinite(y)) points.push({
+				x,
+				y
+			});
+		}
+		return points;
+	}
+	/**
+	* 用手动调整过的拐点走折线。两头可能已经移动过，所以先把挨着两头的那个拐点挪一下，
+	* 让第一段和最后一段仍然是水平或竖直的；中间各段保持原样。
+	*/
+	function elbowWithBends(start, end, bends) {
+		const S = start.point;
+		const E = end.point;
+		const inner = bends.map((p) => _objectSpread2({}, p));
+		const align = (p, from, direction, preferHorizontal) => {
+			if (direction ? direction.y === 0 : preferHorizontal) p.y = from.y;
+			else p.x = from.x;
+		};
+		const first = inner[0];
+		const last = inner[inner.length - 1];
+		const nearlyHorizontal = (p, from) => Math.abs(p.y - from.y) <= Math.abs(p.x - from.x);
+		if (inner.length === 1) inner[0] = (start.direction ? start.direction.y === 0 : nearlyHorizontal(first, S)) ? {
+			x: E.x,
+			y: S.y
+		} : {
+			x: S.x,
+			y: E.y
+		};
+		else {
+			align(first, S, start.direction, nearlyHorizontal(first, S));
+			align(last, E, end.direction, nearlyHorizontal(last, E));
+		}
+		return simplify([
+			S,
+			...inner,
+			E
+		]);
+	}
+	function angleOf(from, to) {
+		return Math.atan2(to.y - from.y, to.x - from.x);
+	}
+	/** 曲线通过一组拐点（waypoints = [S, ...bends, E]）：每一段是一条三次贝塞尔曲线，返回 [S, C1, C2, P1, C3, C4, P2, ...]。 */
+	function curvedPoints(start, end, bends) {
+		const S = start.point;
+		const E = end.point;
+		if (bends.length === 0) {
+			var _start$direction2, _end$direction2;
+			const distance = Math.hypot(E.x - S.x, E.y - S.y);
+			const k = Math.max(30, distance * .4);
+			const ds = (_start$direction2 = start.direction) !== null && _start$direction2 !== void 0 ? _start$direction2 : dominantDirection(S, E);
+			const de = (_end$direction2 = end.direction) !== null && _end$direction2 !== void 0 ? _end$direction2 : dominantDirection(E, S);
+			return [
+				S,
+				{
+					x: S.x + ds.x * k,
+					y: S.y + ds.y * k
+				},
+				{
+					x: E.x + de.x * k,
+					y: E.y + de.y * k
+				},
+				E
+			];
+		}
+		const waypoints = [
+			S,
+			...bends,
+			E
+		];
+		const tangents = waypoints.map((p, i) => {
+			if (i === 0) {
+				if (start.direction) return start.direction;
+				const next = waypoints[1];
+				const d = Math.hypot(next.x - p.x, next.y - p.y) || 1;
+				return {
+					x: (next.x - p.x) / d,
+					y: (next.y - p.y) / d
+				};
+			}
+			if (i === waypoints.length - 1) {
+				if (end.direction) return {
+					x: -end.direction.x,
+					y: -end.direction.y
+				};
+				const prev = waypoints[i - 1];
+				const d = Math.hypot(p.x - prev.x, p.y - prev.y) || 1;
+				return {
+					x: (p.x - prev.x) / d,
+					y: (p.y - prev.y) / d
+				};
+			}
+			const prev = waypoints[i - 1];
+			const next = waypoints[i + 1];
+			const d = Math.hypot(next.x - prev.x, next.y - prev.y) || 1;
+			return {
+				x: (next.x - prev.x) / d,
+				y: (next.y - prev.y) / d
+			};
+		});
+		const result = [S];
+		for (let i = 0; i < waypoints.length - 1; i++) {
+			const a = waypoints[i];
+			const b = waypoints[i + 1];
+			const dist = Math.hypot(b.x - a.x, b.y - a.y);
+			const k = Math.max(12, dist * .35);
+			const ta = tangents[i];
+			const tb = tangents[i + 1];
+			const c1 = {
+				x: a.x + ta.x * k,
+				y: a.y + ta.y * k
+			};
+			const c2 = {
+				x: b.x - tb.x * k,
+				y: b.y - tb.y * k
+			};
+			result.push(c1, c2, b);
+		}
+		return result;
+	}
+	/** 线的路径。route 为 straight、elbow 或 curved；都可以带手动调整过的拐点（绝对坐标）。 */
+	function lineGeometry(route, start, end, bends = []) {
+		const S = start.point;
+		const E = end.point;
+		if (route === "curved") {
+			const pts = curvedPoints(start, end, bends);
+			return {
+				path: pathFromPoints("curved", pts),
+				points: pts,
+				startAngle: angleOf(pts[1], pts[0]),
+				endAngle: angleOf(pts[pts.length - 2], pts[pts.length - 1])
+			};
+		}
+		const points = route === "elbow" ? bends.length > 0 ? elbowWithBends(start, end, bends) : elbowPoints(start, end) : [
+			S,
+			...bends,
+			E
+		];
+		const safe = points.length >= 2 ? points : [S, {
+			x: S.x + 1,
+			y: S.y
+		}];
+		return {
+			path: safe.map((p, i) => `${i === 0 ? "M" : "L"}${fmt(p.x)} ${fmt(p.y)}`).join(" "),
+			points: safe,
+			startAngle: angleOf(safe[1], safe[0]),
+			endAngle: angleOf(safe[safe.length - 2], safe[safe.length - 1])
+		};
+	}
+	/** 端头有多长：线要在这里缩回去，免得线头从实心端头里戳出来。 */
+	function capInset(cap, strokeWidth) {
+		const size = 5 + strokeWidth * 2.5;
+		if (cap === "triangle") return size * .85;
+		if (cap === "circle") return size * .6;
+		if (cap === "diamond") return size * 1.1;
+		return 0;
+	}
+	/**
+	* 端头的图形。point 是线的端点，angle 是线在这里的走向（指向外侧）。
+	* 返回 filled 为真的要填色，否则只描边。
+	*/
+	function capShape(cap, point, angle, strokeWidth) {
+		const size = 5 + strokeWidth * 2.5;
+		const ux = Math.cos(angle);
+		const uy = Math.sin(angle);
+		const at = (along, across) => `${fmt(point.x - ux * along - uy * across)} ${fmt(point.y - uy * along + ux * across)}`;
+		switch (cap) {
+			case "arrow": return {
+				path: `M${at(size, size * .6)} L${at(0, 0)} L${at(size, -size * .6)}`,
+				filled: false
+			};
+			case "triangle": return {
+				path: `M${at(0, 0)} L${at(size, size * .55)} L${at(size, -size * .55)} Z`,
+				filled: true
+			};
+			case "circle": {
+				const r = size * .35;
+				const c = {
+					x: point.x - ux * r,
+					y: point.y - uy * r
+				};
+				return {
+					path: ellipsePath(c.x, c.y, r, r),
+					filled: true
+				};
+			}
+			case "diamond": return {
+				path: `M${at(0, 0)} L${at(size * .55, size * .4)} L${at(size * 1.1, 0)} L${at(size * .55, -size * .4)} Z`,
+				filled: true
+			};
+			case "bar": return {
+				path: `M${at(0, size * .6)} L${at(0, -size * .6)}`,
+				filled: false
+			};
+			default: return null;
+		}
+	}
+	/** 把线的一端沿着线往里缩 distance，给实心端头腾地方。只处理直线和折线的端点，曲线也近似用这一段的方向。 */
+	function shortenEnd(points, fromStart, distance) {
+		if (distance <= 0 || points.length < 2) return points;
+		const copy = points.slice();
+		const index = fromStart ? 0 : copy.length - 1;
+		const neighbor = copy[fromStart ? 1 : copy.length - 2];
+		const p = copy[index];
+		const length = Math.hypot(p.x - neighbor.x, p.y - neighbor.y);
+		if (length < 1) return points;
+		const t = Math.min(distance, length - .5) / length;
+		copy[index] = {
+			x: p.x + (neighbor.x - p.x) * t,
+			y: p.y + (neighbor.y - p.y) * t
+		};
+		return copy;
+	}
+	/** 曲线或折线的路径文字，按点重新拼。 */
+	function pathFromPoints(route, points) {
+		if (route === "curved" && points.length >= 4 && (points.length - 1) % 3 === 0) {
+			let d = `M${fmt(points[0].x)} ${fmt(points[0].y)}`;
+			for (let i = 1; i + 2 < points.length; i += 3) {
+				const c1 = points[i];
+				const c2 = points[i + 1];
+				const p = points[i + 2];
+				d += ` C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p.x)} ${fmt(p.y)}`;
+			}
+			return d;
+		}
+		return points.map((p, i) => `${i === 0 ? "M" : "L"}${fmt(p.x)} ${fmt(p.y)}`).join(" ");
+	}
+	function sideDirection(side) {
+		return SIDE_DIRECTION[side];
+	}
+	function vecAngle(ux, uy, vx, vy) {
+		const dot = ux * vx + uy * vy;
+		const len = Math.hypot(ux, uy) * Math.hypot(vx, vy);
+		if (len <= 0) return 0;
+		const cos = Math.max(-1, Math.min(1, dot / len));
+		const ang = Math.acos(cos);
+		return ux * vy - uy * vx < 0 ? -ang : ang;
+	}
+	function linearizeSvgPath(d) {
+		const tokens = d.match(/[MLHVCSQTAZmlhvcsqtaz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/g);
+		if (!tokens || tokens.length === 0) return [];
+		const segs = [];
+		const addSeg = (x0, y0, x1, y1) => {
+			const len = Math.hypot(x1 - x0, y1 - y0);
+			if (len > 1e-6) segs.push({
+				a: {
+					x: x0,
+					y: y0
+				},
+				b: {
+					x: x1,
+					y: y1
+				},
+				len
+			});
+		};
+		let idx = 0;
+		let cmd = "M";
+		let curX = 0;
+		let curY = 0;
+		let startX = 0;
+		let startY = 0;
+		let prevQx = 0;
+		let prevQy = 0;
+		let lastCmd = "";
+		const hasNum = () => idx < tokens.length && !/^[A-Za-z]$/.test(tokens[idx]);
+		const nextNum = () => idx < tokens.length ? Number(tokens[idx++]) : 0;
+		while (idx < tokens.length) {
+			if (/^[A-Za-z]$/.test(tokens[idx])) cmd = tokens[idx++];
+			const upper = cmd.toUpperCase();
+			if (upper === "M") {
+				const x = nextNum();
+				const y = nextNum();
+				curX = startX = x;
+				curY = startY = y;
+				lastCmd = "M";
+				cmd = "L";
+				continue;
+			}
+			if (upper === "L") {
+				const x = nextNum();
+				const y = nextNum();
+				addSeg(curX, curY, x, y);
+				curX = x;
+				curY = y;
+				lastCmd = "L";
+				continue;
+			}
+			if (upper === "H") {
+				const x = nextNum();
+				addSeg(curX, curY, x, curY);
+				curX = x;
+				lastCmd = "H";
+				continue;
+			}
+			if (upper === "V") {
+				const y = nextNum();
+				addSeg(curX, curY, curX, y);
+				curY = y;
+				lastCmd = "V";
+				continue;
+			}
+			if (upper === "Q") {
+				const x1 = nextNum();
+				const y1 = nextNum();
+				const x = nextNum();
+				const y = nextNum();
+				const x0 = curX;
+				const y0 = curY;
+				const steps = 16;
+				let px = x0;
+				let py = y0;
+				for (let s = 1; s <= steps; s++) {
+					const t = s / steps;
+					const mt = 1 - t;
+					const nx = mt * mt * x0 + 2 * mt * t * x1 + t * t * x;
+					const ny = mt * mt * y0 + 2 * mt * t * y1 + t * t * y;
+					addSeg(px, py, nx, ny);
+					px = nx;
+					py = ny;
+				}
+				prevQx = x1;
+				prevQy = y1;
+				curX = x;
+				curY = y;
+				lastCmd = "Q";
+				continue;
+			}
+			if (upper === "T") {
+				const x = nextNum();
+				const y = nextNum();
+				const x1 = lastCmd === "Q" || lastCmd === "T" ? 2 * curX - prevQx : curX;
+				const y1 = lastCmd === "Q" || lastCmd === "T" ? 2 * curY - prevQy : curY;
+				const x0 = curX;
+				const y0 = curY;
+				const steps = 16;
+				let px = x0;
+				let py = y0;
+				for (let s = 1; s <= steps; s++) {
+					const t = s / steps;
+					const mt = 1 - t;
+					const nx = mt * mt * x0 + 2 * mt * t * x1 + t * t * x;
+					const ny = mt * mt * y0 + 2 * mt * t * y1 + t * t * y;
+					addSeg(px, py, nx, ny);
+					px = nx;
+					py = ny;
+				}
+				prevQx = x1;
+				prevQy = y1;
+				curX = x;
+				curY = y;
+				lastCmd = "T";
+				continue;
+			}
+			if (upper === "C") {
+				const x1 = nextNum();
+				const y1 = nextNum();
+				const x2 = nextNum();
+				const y2 = nextNum();
+				const x = nextNum();
+				const y = nextNum();
+				const x0 = curX;
+				const y0 = curY;
+				const steps = 20;
+				let px = x0;
+				let py = y0;
+				for (let s = 1; s <= steps; s++) {
+					const t = s / steps;
+					const mt = 1 - t;
+					const nx = mt * mt * mt * x0 + 3 * mt * mt * t * x1 + 3 * mt * t * t * x2 + t * t * t * x;
+					const ny = mt * mt * mt * y0 + 3 * mt * mt * t * y1 + 3 * mt * t * t * y2 + t * t * t * y;
+					addSeg(px, py, nx, ny);
+					px = nx;
+					py = ny;
+				}
+				curX = x;
+				curY = y;
+				lastCmd = "C";
+				continue;
+			}
+			if (upper === "A") {
+				let rx = Math.abs(nextNum());
+				let ry = Math.abs(nextNum());
+				const phi = nextNum() * Math.PI / 180;
+				const largeArc = nextNum() !== 0;
+				const sweep = nextNum() !== 0;
+				const x = nextNum();
+				const y = nextNum();
+				const x1 = curX;
+				const y1 = curY;
+				if (Math.hypot(x - x1, y - y1) > 1e-6) {
+					if (rx <= 1e-6 || ry <= 1e-6) addSeg(x1, y1, x, y);
+					else {
+						const cosPhi = Math.cos(phi);
+						const sinPhi = Math.sin(phi);
+						const dx2 = (x1 - x) / 2;
+						const dy2 = (y1 - y) / 2;
+						const x1p = cosPhi * dx2 + sinPhi * dy2;
+						const y1p = -sinPhi * dx2 + cosPhi * dy2;
+						const lambda = x1p * x1p / (rx * rx) + y1p * y1p / (ry * ry);
+						if (lambda > 1) {
+							const s = Math.sqrt(lambda);
+							rx *= s;
+							ry *= s;
+						}
+						const rx2 = rx * rx;
+						const ry2 = ry * ry;
+						const x1p2 = x1p * x1p;
+						const y1p2 = y1p * y1p;
+						const numVal = Math.max(0, rx2 * ry2 - rx2 * y1p2 - ry2 * x1p2);
+						const denVal = rx2 * y1p2 + ry2 * x1p2;
+						const factor = (largeArc === sweep ? -1 : 1) * (denVal > 0 ? Math.sqrt(numVal / denVal) : 0);
+						const cxp = factor * (rx * y1p / ry);
+						const cyp = factor * (-(ry * x1p) / rx);
+						const cx = cosPhi * cxp - sinPhi * cyp + (x1 + x) / 2;
+						const cy = sinPhi * cxp + cosPhi * cyp + (y1 + y) / 2;
+						const theta1 = vecAngle(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry);
+						let dTheta = vecAngle((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
+						if (!sweep && dTheta > 0) dTheta -= Math.PI * 2;
+						if (sweep && dTheta < 0) dTheta += Math.PI * 2;
+						const steps = Math.max(16, Math.ceil(Math.abs(dTheta) / (Math.PI / 24)));
+						let px = x1;
+						let py = y1;
+						for (let s = 1; s <= steps; s++) {
+							const ang = theta1 + dTheta * s / steps;
+							const nx = s === steps ? x : cx + cosPhi * rx * Math.cos(ang) - sinPhi * ry * Math.sin(ang);
+							const ny = s === steps ? y : cy + sinPhi * rx * Math.cos(ang) + cosPhi * ry * Math.sin(ang);
+							addSeg(px, py, nx, ny);
+							px = nx;
+							py = ny;
+						}
+					}
+				}
+				curX = x;
+				curY = y;
+				lastCmd = "A";
+				continue;
+			}
+			if (upper === "Z") {
+				addSeg(curX, curY, startX, startY);
+				curX = startX;
+				curY = startY;
+				lastCmd = "Z";
+				continue;
+			}
+			if (hasNum()) nextNum();
+		}
+		return segs;
+	}
+	function pointAtSegLength(segs, targetDist) {
+		if (segs.length === 0) return {
+			x: 0,
+			y: 0
+		};
+		if (targetDist <= 0) return _objectSpread2({}, segs[0].a);
+		let acc = 0;
+		for (const seg of segs) {
+			if (acc + seg.len >= targetDist) {
+				const t = seg.len > 0 ? (targetDist - acc) / seg.len : 0;
+				return {
+					x: seg.a.x + (seg.b.x - seg.a.x) * t,
+					y: seg.a.y + (seg.b.y - seg.a.y) * t
+				};
+			}
+			acc += seg.len;
+		}
+		return _objectSpread2({}, segs[segs.length - 1].b);
+	}
+	/** 按弧长均匀采样 SVG 路径上的点（不依赖浏览器 DOM）。 */
+	function sampleSvgPath(d, count) {
+		const segs = linearizeSvgPath(d);
+		if (segs.length === 0) return [];
+		const total = segs.reduce((sum, s) => sum + s.len, 0);
+		const n = count !== null && count !== void 0 ? count : Math.max(32, Math.min(800, Math.round(total / 2)));
+		const points = [];
+		for (let i = 0; i < n; i++) points.push(pointAtSegLength(segs, total * i / n));
+		return points;
+	}
+	/** 计算 SVG 路径弧长中点坐标（不依赖浏览器 DOM）。 */
+	function svgPathMidpoint(d, fallback) {
+		const segs = linearizeSvgPath(d);
+		if (segs.length === 0) return fallback;
+		const total = segs.reduce((sum, s) => sum + s.len, 0);
+		if (total <= 0) return fallback;
+		return pointAtSegLength(segs, total / 2);
+	}
 	//#endregion
 	//#region standard/Button/component.json
 	var component_default$7 = {
@@ -1119,6 +2349,11 @@ var VF = (function(exports) {
 		for (const cid of (_n$children = n.children) !== null && _n$children !== void 0 ? _n$children : []) add(cid);
 		return list;
 	}
+	/** 查找某个节点在画布树中的父节点 ID（含主窗口的 docks / central / statusBar 分区）。 */
+	function parentOfNode(scene, id) {
+		for (const [parentId, parent] of Object.entries(scene.nodes)) if (childrenOfNode(parent).includes(id)) return parentId;
+		return null;
+	}
 	function allWindowIds(scene) {
 		var _scene$windows;
 		const result = [];
@@ -1764,6 +2999,157 @@ var VF = (function(exports) {
 			layoutSubtree(winId, winBox);
 		}
 		return boxes;
+	}
+	//#endregion
+	//#region src/transform.ts
+	/** 把角度规整到 (-180, 180] 的整数度数。 */
+	function normalizeRotation(deg) {
+		if (!Number.isFinite(deg)) return 0;
+		let a = Math.round(deg) % 360;
+		if (a > 180) a -= 360;
+		if (a <= -180) a += 360;
+		return a === 0 ? 0 : a;
+	}
+	/** 把点 p 绕 center 顺时针旋转 deg 度。 */
+	function rotatePoint(p, center, deg) {
+		if (!deg) return {
+			x: p.x,
+			y: p.y
+		};
+		const rad = deg * Math.PI / 180;
+		const cos = Math.cos(rad);
+		const sin = Math.sin(rad);
+		const dx = p.x - center.x;
+		const dy = p.y - center.y;
+		return {
+			x: center.x + dx * cos - dy * sin,
+			y: center.y + dx * sin + dy * cos
+		};
+	}
+	function parentOfInScene(scene, id) {
+		return parentOfNode(scene, id);
+	}
+	/** 从节点自身往外到根窗口之前的祖先链 `[id, parentId, ...]`。 */
+	function ancestorChainInScene(scene, id) {
+		const chain = [];
+		for (let cursor = id; cursor && cursor !== scene.root; cursor = parentOfInScene(scene, cursor)) {
+			if (chain.includes(cursor)) break;
+			chain.push(cursor);
+		}
+		return chain;
+	}
+	/** 节点在画布世界坐标系中的累计旋转角度（含祖先容器的旋转）。 */
+	function worldRotationInScene(scene, id) {
+		let total = 0;
+		for (const curr of ancestorChainInScene(scene, id)) {
+			var _scene$nodes$curr$rot, _scene$nodes$curr;
+			total += (_scene$nodes$curr$rot = (_scene$nodes$curr = scene.nodes[curr]) === null || _scene$nodes$curr === void 0 ? void 0 : _scene$nodes$curr.rotation) !== null && _scene$nodes$curr$rot !== void 0 ? _scene$nodes$curr$rot : 0;
+		}
+		return normalizeRotation(total);
+	}
+	function needsSceneLayoutForChain(scene, chain) {
+		for (const curr of chain) {
+			if (!scene.nodes[curr]) continue;
+			const parentId = parentOfInScene(scene, curr);
+			if (!parentId && curr !== scene.root) return true;
+			if (parentId) {
+				const parent = scene.nodes[parentId];
+				if (parent && (layoutOf(parent) !== null || isPartitionedWindow(parent) || parent.type === "Dock")) return true;
+			}
+		}
+		return false;
+	}
+	function localBoxInParent(scene, curr, boxes) {
+		var _n$x2, _n$y2;
+		const n = scene.nodes[curr];
+		if (!n) return {
+			x: 0,
+			y: 0,
+			width: 0,
+			height: 0
+		};
+		if (curr === scene.root) return {
+			x: 0,
+			y: 0,
+			width: n.width,
+			height: n.height
+		};
+		const parentId = parentOfInScene(scene, curr);
+		if (!parentId) {
+			var _n$x, _n$y;
+			const box = boxes === null || boxes === void 0 ? void 0 : boxes.get(curr);
+			const w = box ? box.width : n.width;
+			const h = box ? box.height : n.height;
+			const rootNode = scene.nodes[scene.root];
+			return {
+				x: (_n$x = n.x) !== null && _n$x !== void 0 ? _n$x : rootNode ? Math.round((rootNode.width - w) / 2) : 0,
+				y: (_n$y = n.y) !== null && _n$y !== void 0 ? _n$y : rootNode ? Math.round((rootNode.height - h) / 2) : 0,
+				width: w,
+				height: h
+			};
+		}
+		const parent = scene.nodes[parentId];
+		if (Boolean(parent && (layoutOf(parent) !== null || isPartitionedWindow(parent) || parent.type === "Dock")) && boxes) {
+			const box = boxes.get(curr);
+			if (box) return {
+				x: box.x,
+				y: box.y,
+				width: box.width,
+				height: box.height
+			};
+		}
+		return {
+			x: (_n$x2 = n.x) !== null && _n$x2 !== void 0 ? _n$x2 : 0,
+			y: (_n$y2 = n.y) !== null && _n$y2 !== void 0 ? _n$y2 : 0,
+			width: n.width,
+			height: n.height
+		};
+	}
+	/** 把节点 id 内部局部坐标 `(0..width, 0..height)` 中的点转换到画布世界坐标。 */
+	function nodeLocalToWorldInScene(scene, id, localPt, layoutBoxes) {
+		let pt = {
+			x: localPt.x,
+			y: localPt.y
+		};
+		const chain = ancestorChainInScene(scene, id);
+		const boxes = layoutBoxes !== null && layoutBoxes !== void 0 ? layoutBoxes : needsSceneLayoutForChain(scene, chain) ? computeSceneLayout(scene) : void 0;
+		for (const curr of chain) {
+			const n = scene.nodes[curr];
+			if (!n) continue;
+			const box = localBoxInParent(scene, curr, boxes);
+			if (n.rotation) pt = rotatePoint(pt, {
+				x: box.width / 2,
+				y: box.height / 2
+			}, n.rotation);
+			pt = {
+				x: pt.x + box.x,
+				y: pt.y + box.y
+			};
+		}
+		return pt;
+	}
+	/** 把画布世界坐标中的点转换到节点 id 内部未旋转局部坐标 `(0..width, 0..height)`。 */
+	function worldToNodeLocalInScene(scene, id, worldPt, layoutBoxes) {
+		let pt = {
+			x: worldPt.x,
+			y: worldPt.y
+		};
+		const chain = ancestorChainInScene(scene, id);
+		const boxes = layoutBoxes !== null && layoutBoxes !== void 0 ? layoutBoxes : needsSceneLayoutForChain(scene, chain) ? computeSceneLayout(scene) : void 0;
+		for (const curr of [...chain].reverse()) {
+			const n = scene.nodes[curr];
+			if (!n) continue;
+			const box = localBoxInParent(scene, curr, boxes);
+			pt = {
+				x: pt.x - box.x,
+				y: pt.y - box.y
+			};
+			if (n.rotation) pt = rotatePoint(pt, {
+				x: box.width / 2,
+				y: box.height / 2
+			}, -n.rotation);
+		}
+		return pt;
 	}
 	//#endregion
 	//#region src/expr.ts
@@ -3229,6 +4615,422 @@ var VF = (function(exports) {
 	function dump() {
 		return dumpRuntime(runtime, scene);
 	}
+	const num = (value, fallback) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
+	const str = (value, fallback = "") => typeof value === "string" && value !== "" ? value : fallback;
+	function paintColor(value, fallback) {
+		const color = str(value, fallback);
+		return color === "none" || color === "transparent" ? "none" : color;
+	}
+	const outlineCache = /* @__PURE__ */ new Map();
+	function parseAt(value) {
+		if (typeof value !== "string") return null;
+		const [x, y] = value.split(",").map(Number);
+		return Number.isFinite(x) && Number.isFinite(y) ? {
+			x,
+			y
+		} : null;
+	}
+	function graphics(width, height) {
+		let hasAny = false;
+		for (const n of Object.values(scene.nodes)) if (n.type === "Shape" || n.type === "Line") {
+			hasAny = true;
+			break;
+		}
+		if (!hasAny) return {};
+		const boxes = computeSceneLayout(scene, {
+			rootSize: {
+				width,
+				height
+			},
+			isVisible: (id) => runtime.view(id).visible,
+			getProp: (id, prop) => {
+				var _runtime$view$props$p2;
+				return (_runtime$view$props$p2 = runtime.view(id).props[prop]) !== null && _runtime$view$props$p2 !== void 0 ? _runtime$view$props$p2 : null;
+			}
+		});
+		const absRect = (id) => {
+			var _n$x, _n$y, _n$width, _n$height;
+			const b = boxes.get(id);
+			if (b) return {
+				x: b.absX,
+				y: b.absY,
+				width: b.width,
+				height: b.height
+			};
+			const n = scene.nodes[id];
+			return {
+				x: (_n$x = n === null || n === void 0 ? void 0 : n.x) !== null && _n$x !== void 0 ? _n$x : 0,
+				y: (_n$y = n === null || n === void 0 ? void 0 : n.y) !== null && _n$y !== void 0 ? _n$y : 0,
+				width: (_n$width = n === null || n === void 0 ? void 0 : n.width) !== null && _n$width !== void 0 ? _n$width : 0,
+				height: (_n$height = n === null || n === void 0 ? void 0 : n.height) !== null && _n$height !== void 0 ? _n$height : 0
+			};
+		};
+		const sceneParentOrigin = (id) => {
+			const pId = parentOfNode(scene, id);
+			if (!pId) return {
+				x: 0,
+				y: 0
+			};
+			const r = absRect(pId);
+			return {
+				x: r.x,
+				y: r.y
+			};
+		};
+		const qtParentOrigin = (id) => {
+			var _pNode$headerHeight;
+			const pId = parentOfNode(scene, id);
+			if (!pId || pId === scene.root) return {
+				x: 0,
+				y: 0
+			};
+			const pNode = scene.nodes[pId];
+			if (!pNode || pNode.type === "Window" || pNode.type === "Dialog") return {
+				x: 0,
+				y: 0
+			};
+			const r = absRect(pId);
+			const hdr = pNode.type === "Dock" ? (_pNode$headerHeight = pNode.headerHeight) !== null && _pNode$headerHeight !== void 0 ? _pNode$headerHeight : 26 : 0;
+			return {
+				x: r.x,
+				y: r.y + hdr
+			};
+		};
+		const attachedTarget = (lineId, value) => {
+			const target = typeof value === "string" ? value : "";
+			const n = target ? scene.nodes[target] : void 0;
+			return n && target !== lineId && n.type !== "Line" && target !== scene.root ? target : null;
+		};
+		const outlineOf = (id) => {
+			const n = scene.nodes[id];
+			if (!n) return [];
+			const r = absRect(id);
+			const props = runtime.view(id).props;
+			const kind = str(props.shape, "rectangle");
+			const isShape = n.type === "Shape" && kind !== "text";
+			const stroke = props.stroke === "none" ? 0 : num(props.strokeWidth, 2);
+			const key = isShape ? JSON.stringify([
+				kind,
+				r.width,
+				r.height,
+				stroke,
+				props.radius,
+				props.sides,
+				props.points,
+				props.ratio
+			]) : `box|${r.width}|${r.height}`;
+			const cached = outlineCache.get(key);
+			if (cached) return cached;
+			let pts;
+			if (isShape) {
+				const d = shapeGeometry(kind, r.width, r.height, stroke, props).body;
+				pts = sampleSvgPath(d);
+			} else pts = [
+				{
+					x: 0,
+					y: 0
+				},
+				{
+					x: r.width,
+					y: 0
+				},
+				{
+					x: r.width,
+					y: r.height
+				},
+				{
+					x: 0,
+					y: r.height
+				}
+			];
+			if (outlineCache.size > 500) outlineCache.clear();
+			outlineCache.set(key, pts);
+			return pts;
+		};
+		const worldOutlineOf = (id) => outlineOf(id).map((pt) => nodeLocalToWorldInScene(scene, id, pt, boxes));
+		const nearestOnOutline = (id, p) => {
+			const r = absRect(id);
+			const pts = worldOutlineOf(id);
+			let best = {
+				point: {
+					x: r.x,
+					y: r.y
+				},
+				distance: Infinity
+			};
+			for (let i = 0; i < pts.length; i++) {
+				const a = pts[i];
+				const b = pts[(i + 1) % pts.length];
+				const dx = b.x - a.x;
+				const dy = b.y - a.y;
+				const length2 = dx * dx + dy * dy;
+				const t = length2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length2)) : 0;
+				const q = {
+					x: a.x + dx * t,
+					y: a.y + dy * t
+				};
+				const d = Math.hypot(q.x - p.x, q.y - p.y);
+				if (d < best.distance) best = {
+					point: q,
+					distance: d
+				};
+			}
+			return best;
+		};
+		const outlineRayHit = (id, direction) => {
+			const r = absRect(id);
+			const c = {
+				x: r.x + r.width / 2,
+				y: r.y + r.height / 2
+			};
+			const pts = worldOutlineOf(id);
+			let best = null;
+			let bestT = -1;
+			for (let i = 0; i < pts.length; i++) {
+				const a = pts[i];
+				const b = pts[(i + 1) % pts.length];
+				const ex = b.x - a.x;
+				const ey = b.y - a.y;
+				const denominator = direction.x * ey - direction.y * ex;
+				if (Math.abs(denominator) < 1e-9) continue;
+				const t = ((a.x - c.x) * ey - (a.y - c.y) * ex) / denominator;
+				const u = ((a.x - c.x) * direction.y - (a.y - c.y) * direction.x) / denominator;
+				if (t > 0 && u >= 0 && u <= 1 && t > bestT) {
+					bestT = t;
+					best = {
+						x: c.x + direction.x * t,
+						y: c.y + direction.y * t
+					};
+				}
+			}
+			return best;
+		};
+		const sideDirectionOf = (id, side) => {
+			const dir = sideDirection(side);
+			const rot = worldRotationInScene(scene, id);
+			return rot ? rotatePoint(dir, {
+				x: 0,
+				y: 0
+			}, rot) : dir;
+		};
+		const sideAnchorOf = (id, side) => {
+			var _scene$nodes$id;
+			const rotDir = sideDirectionOf(id, side);
+			if (((_scene$nodes$id = scene.nodes[id]) === null || _scene$nodes$id === void 0 ? void 0 : _scene$nodes$id.type) === "Shape") {
+				const hit = outlineRayHit(id, rotDir);
+				if (hit) return hit;
+			}
+			const r = absRect(id);
+			const localAnchor = sideAnchor({
+				x: 0,
+				y: 0,
+				width: r.width,
+				height: r.height
+			}, side);
+			return nodeLocalToWorldInScene(scene, id, localAnchor, boxes);
+		};
+		const resolveAttach = (id, sideValue, at, other) => {
+			const rect = absRect(id);
+			const localRect = {
+				x: 0,
+				y: 0,
+				width: rect.width,
+				height: rect.height
+			};
+			if (sideValue === "outline" && at) {
+				const guess = nodeLocalToWorldInScene(scene, id, {
+					x: at.x * rect.width,
+					y: at.y * rect.height
+				}, boxes);
+				const point = nearestOnOutline(id, guess).point;
+				const localSide = autoSide(localRect, worldToNodeLocalInScene(scene, id, point, boxes));
+				return {
+					point,
+					direction: sideDirectionOf(id, localSide)
+				};
+			}
+			const localOther = worldToNodeLocalInScene(scene, id, other, boxes);
+			const side = SIDES.includes(sideValue) ? sideValue : autoSide(localRect, localOther);
+			return {
+				point: sideAnchorOf(id, side),
+				direction: sideDirectionOf(id, side)
+			};
+		};
+		const lineEndpoints = (id, props) => {
+			const origin = sceneParentOrigin(id);
+			const raw = (which) => which === "start" ? {
+				x: origin.x + num(props.x1, 0),
+				y: origin.y + num(props.y1, 0)
+			} : {
+				x: origin.x + num(props.x2, 160),
+				y: origin.y + num(props.y2, 0)
+			};
+			const startTarget = attachedTarget(id, props.startNode);
+			const endTarget = attachedTarget(id, props.endNode);
+			const center = (target) => {
+				const r = absRect(target);
+				return {
+					x: r.x + r.width / 2,
+					y: r.y + r.height / 2
+				};
+			};
+			const startRef = startTarget ? center(startTarget) : raw("start");
+			const endRef = endTarget ? center(endTarget) : raw("end");
+			const resolve = (which, target, other) => {
+				if (!target) return {
+					point: raw(which),
+					direction: null
+				};
+				const sideValue = str(which === "start" ? props.startSide : props.endSide, "auto");
+				return resolveAttach(target, sideValue, parseAt(which === "start" ? props.startAt : props.endAt), other);
+			};
+			return {
+				start: resolve("start", startTarget, endRef),
+				end: resolve("end", endTarget, startRef)
+			};
+		};
+		const computeLineLayout = (id, props) => {
+			var _props$route;
+			const { start, end } = lineEndpoints(id, props);
+			const origin = sceneParentOrigin(id);
+			const bends = parseBends(props.bends).map((p) => ({
+				x: p.x + origin.x,
+				y: p.y + origin.y
+			}));
+			const geometry = lineGeometry((_props$route = props.route) !== null && _props$route !== void 0 ? _props$route : "straight", start, end, bends);
+			const xs = geometry.points.map((p) => p.x);
+			const ys = geometry.points.map((p) => p.y);
+			const margin = 10 + num(props.strokeWidth, 2) * 3 + (str(props.label, "") ? num(props.fontSize, 12) : 0);
+			const x = Math.min(...xs) - margin;
+			const y = Math.min(...ys) - margin;
+			return {
+				start,
+				end,
+				geometry,
+				bbox: {
+					x,
+					y,
+					width: Math.max(...xs) + margin - x,
+					height: Math.max(...ys) + margin - y
+				}
+			};
+		};
+		const out = {};
+		for (const [id, n] of Object.entries(scene.nodes)) if (n.type === "Shape") {
+			const box = absRect(id);
+			const pOrigin = qtParentOrigin(id);
+			const bx = box.x - pOrigin.x;
+			const by = box.y - pOrigin.y;
+			const bw = Math.round(box.width);
+			const bh = Math.round(box.height);
+			const props = runtime.view(id).props;
+			const kind = str(props.shape, "rectangle");
+			const fill = paintColor(props.fill, "#ffffff");
+			const stroke = paintColor(props.stroke, "#1f2430");
+			const strokeWidth = stroke === "none" ? 0 : Math.max(0, num(props.strokeWidth, 2));
+			const strokeStyle = str(props.strokeStyle, "solid");
+			const opacity = Math.max(0, Math.min(1, num(props.opacity, 1)));
+			const rot = typeof n.rotation === "number" ? n.rotation : 0;
+			const rad = rot * Math.PI / 180;
+			const cosA = Math.abs(Math.cos(rad));
+			const sinA = Math.abs(Math.sin(rad));
+			const cx = bx + bw / 2;
+			const cy = by + bh / 2;
+			const aabbW = rot !== 0 ? Math.ceil(bw * cosA + bh * sinA) + 4 : bw;
+			const aabbH = rot !== 0 ? Math.ceil(bw * sinA + bh * cosA) + 4 : bh;
+			const aabbX = rot !== 0 ? Math.round(cx - aabbW / 2) : Math.round(bx);
+			const aabbY = rot !== 0 ? Math.round(cy - aabbH / 2) : Math.round(by);
+			const geom = shapeGeometry(kind, bw, bh, strokeWidth, props);
+			const tbox = shapeTextBox(kind, bw, bh);
+			out[id] = {
+				kind: "shape",
+				x: aabbX,
+				y: aabbY,
+				width: aabbW,
+				height: aabbH,
+				logicalX: Math.round(bx),
+				logicalY: Math.round(by),
+				logicalWidth: bw,
+				logicalHeight: bh,
+				centerX: cx - aabbX,
+				centerY: cy - aabbY,
+				rotation: rot,
+				opacity,
+				body: geom.body,
+				details: geom.details,
+				fill,
+				stroke,
+				strokeWidth,
+				strokeStyle,
+				text: typeof props.text === "string" ? props.text : "",
+				textX: tbox.x,
+				textY: tbox.y,
+				textWidth: tbox.width,
+				textHeight: tbox.height,
+				textColor: str(props.textColor, "#1f2430"),
+				fontSize: num(props.fontSize, 14),
+				fontWeight: str(props.fontWeight, "normal"),
+				textAlign: str(props.textAlign, "center")
+			};
+		} else if (n.type === "Line") {
+			var _props$route2, _props$startCap, _props$endCap;
+			const props = runtime.view(id).props;
+			const layout = computeLineLayout(id, props);
+			const pOrigin = qtParentOrigin(id);
+			const left = Math.floor(layout.bbox.x);
+			const top = Math.floor(layout.bbox.y);
+			const w = Math.ceil(layout.bbox.x + layout.bbox.width) - left;
+			const h = Math.ceil(layout.bbox.y + layout.bbox.height) - top;
+			const stroke = paintColor(props.stroke, "#1f2430");
+			const strokeWidth = Math.max(.5, num(props.strokeWidth, 2));
+			const strokeStyle = str(props.strokeStyle, "solid");
+			const opacity = Math.max(0, Math.min(1, num(props.opacity, 1)));
+			const route = (_props$route2 = props.route) !== null && _props$route2 !== void 0 ? _props$route2 : "straight";
+			let pts = layout.geometry.points;
+			pts = shortenEnd(pts, true, capInset(props.startCap, strokeWidth));
+			pts = shortenEnd(pts, false, capInset(props.endCap, strokeWidth));
+			const mainPath = pathFromPoints(route, pts);
+			const first = layout.geometry.points[0];
+			const last = layout.geometry.points[layout.geometry.points.length - 1];
+			const sCap = capShape((_props$startCap = props.startCap) !== null && _props$startCap !== void 0 ? _props$startCap : "none", first, layout.geometry.startAngle, strokeWidth);
+			const eCap = capShape((_props$endCap = props.endCap) !== null && _props$endCap !== void 0 ? _props$endCap : "none", last, layout.geometry.endAngle, strokeWidth);
+			const label = typeof props.label === "string" ? props.label : "";
+			const fallbackMid = {
+				x: (first.x + last.x) / 2,
+				y: (first.y + last.y) / 2
+			};
+			const mid = label ? svgPathMidpoint(mainPath, fallbackMid) : fallbackMid;
+			out[id] = {
+				kind: "line",
+				x: left - pOrigin.x,
+				y: top - pOrigin.y,
+				width: w,
+				height: h,
+				logicalX: left - pOrigin.x,
+				logicalY: top - pOrigin.y,
+				logicalWidth: w,
+				logicalHeight: h,
+				originX: left,
+				originY: top,
+				opacity,
+				mainPath,
+				hitPath: layout.geometry.path,
+				stroke,
+				strokeWidth,
+				strokeStyle,
+				startCapPath: sCap ? sCap.path : "",
+				startCapFilled: sCap ? sCap.filled : false,
+				endCapPath: eCap ? eCap.path : "",
+				endCapFilled: eCap ? eCap.filled : false,
+				label,
+				labelX: mid.x - left,
+				labelY: mid.y - top,
+				textColor: str(props.textColor, "#1f2430"),
+				fontSize: num(props.fontSize, 12)
+			};
+		}
+		return out;
+	}
 	//#endregion
 	exports.closeWindow = closeWindow;
 	exports.computeLayout = computeLayout;
@@ -3238,6 +5040,7 @@ var VF = (function(exports) {
 	exports.finishActionSuccess = finishActionSuccess;
 	exports.fireTimer = fireTimer;
 	exports.getState = getState;
+	exports.graphics = graphics;
 	exports.init = init;
 	exports.request = request;
 	exports.setActionSim = setActionSim;

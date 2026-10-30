@@ -148,7 +148,8 @@ export interface ControlPlan {
   /** 子控件挂载的父变量名（例如 QDockWidget 内部装内容的 QWidget） */
   bodyVariable: string;
   parentVariable: string;
-  kind: "component" | "container" | "external" | "placeholder" | "dock" | "dialog" | "stateImage" | "paintEffect";
+  kind: "component" | "container" | "external" | "placeholder" | "dock" | "dialog" | "shape" | "line" | "stateImage" | "paintEffect";
+  rotation?: number;
   /** 设计项目里的类型名 */
   type: string;
   qtClass: string;
@@ -451,6 +452,14 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
         plan.placeholder = id;
       }
     } else {
+      if (node.type === "Shape") {
+      plan.kind = "shape";
+      plan.qtClass = "VfGraphicWidget";
+      if (typeof node.rotation === "number" && node.rotation !== 0) plan.rotation = node.rotation;
+    } else if (node.type === "Line") {
+      plan.kind = "line";
+      plan.qtClass = "VfGraphicWidget";
+    } else {
       const decl: ComponentDecl | undefined = project.components.get(node.type)?.decl ?? STANDARD_COMPONENTS.get(node.type)?.decl;
       const qt: QtMapping | undefined = decl?.qt;
       if (decl?.stateImages && typeof decl.stateImages === "object" && decl.stateImages.normal) {
@@ -504,6 +513,10 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
         unmappedTypes.add(node.type);
       }
     }
+    }
+    if (node.type !== "Shape" && node.type !== "Line" && typeof node.rotation === "number" && node.rotation !== 0) {
+      hint(`控件 ${id} 设置了旋转（${node.rotation}°），普通控件导出成 Qt 时暂不处理旋转（仅基础图形 Shape 支持导出旋转）`, id);
+    }
     controls.push(plan);
     for (const child of node.children ?? []) visit(child, plan.bodyVariable);
   };
@@ -523,11 +536,7 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
   for (const child of topIds) visit(child, rootParentVar);
 
   for (const type of [...unmappedTypes].sort()) {
-    if (type === "Shape" || type === "Line") {
-      hint(`${type === "Shape" ? "基础图形" : "线条"}还不能导出成 Qt，导出后是一个占位框；事件、状态和逻辑照常工作`);
-    } else {
-      hint(`控件类型 ${type} 没有写在 Qt 里对应什么（component.json 的 qt），导出后是一个占位框；事件、状态和逻辑照常工作`);
-    }
+    hint(`控件类型 ${type} 没有写在 Qt 里对应什么（component.json 的 qt），导出后是一个占位框；事件、状态和逻辑照常工作`);
   }
   for (const name of [...unmappedProps].sort()) {
     hint(`属性 ${name} 在 Qt 里没有对应的属性，导出后不起作用`);
