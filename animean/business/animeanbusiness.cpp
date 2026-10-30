@@ -29,12 +29,100 @@
 #define slots Q_SLOTS
 #undef ANIMEAN_RESTORE_QT_SLOTS
 #endif
+#include "pythonbind/python_bindings.h"
 namespace py = pybind11;
 #endif
 
 namespace {
 
 constexpr int kDefaultPlaybackFps = 12;
+
+#ifdef ANIMEAN_WITH_PYTHON
+py::dict pointToPythonDict(const QPointF &point)
+{
+    py::dict pointInfo;
+    pointInfo["x"] = point.x();
+    pointInfo["y"] = point.y();
+    return pointInfo;
+}
+
+py::object variantToPythonObject(const QVariant &value)
+{
+    switch (value.userType()) {
+    case QMetaType::Bool:
+        return py::bool_(value.toBool());
+    case QMetaType::Int:
+    case QMetaType::UInt:
+    case QMetaType::LongLong:
+    case QMetaType::ULongLong:
+        return py::int_(value.toLongLong());
+    case QMetaType::Float:
+    case QMetaType::Double:
+        return py::float_(value.toDouble());
+    default:
+        return py::str(value.toString().toStdString());
+    }
+}
+
+bool isQuietHookOutput(const QString &output)
+{
+    return output.isEmpty() || output.endsWith(QStringLiteral("(no output)"));
+}
+
+QString pythonHookSendMessage(const py::dict &message)
+{
+    if (!Py_IsInitialized()) {
+        return QString();
+    }
+    try {
+        py::gil_scoped_acquire acquire;
+        py::object hooks = py::module_::import("python_hooks");
+        if (!hooks.attr("has_hooks")(message).cast<bool>()) {
+            return QString();
+        }
+        py::object io = py::module_::import("io");
+        py::object contextlib = py::module_::import("contextlib");
+        py::object stdoutBuffer = io.attr("StringIO")();
+        py::object stderrBuffer = io.attr("StringIO")();
+        py::object stdoutRedirect = contextlib.attr("redirect_stdout")(stdoutBuffer);
+        py::object stderrRedirect = contextlib.attr("redirect_stderr")(stderrBuffer);
+
+        stdoutRedirect.attr("__enter__")();
+        stderrRedirect.attr("__enter__")();
+        QString errorText;
+        try {
+            hooks.attr("dispatch")(message);
+        } catch (const py::error_already_set &error) {
+            errorText = QString::fromUtf8(error.what());
+        }
+        stderrRedirect.attr("__exit__")(py::none(), py::none(), py::none());
+        stdoutRedirect.attr("__exit__")(py::none(), py::none(), py::none());
+
+        QString output = QString::fromUtf8(stdoutBuffer.attr("getvalue")().cast<std::string>().c_str());
+        const QString stderrOutput = QString::fromUtf8(stderrBuffer.attr("getvalue")().cast<std::string>().c_str());
+        if (!stderrOutput.isEmpty()) {
+            output += stderrOutput;
+        }
+        if (!errorText.isEmpty()) {
+            output += errorText;
+        }
+        if (output.trimmed().isEmpty()) {
+            output = QStringLiteral("(no output)");
+        }
+        const auto text = [&message](const char *key, const char *fallback) {
+            if (!message.contains(py::str(key))) {
+                return QString::fromUtf8(fallback);
+            }
+            return QString::fromUtf8(py::str(message[key]).cast<std::string>().c_str());
+        };
+        const QString event = text("event", "?");
+        const QString tool = text("tool", "-");
+        return QStringLiteral("[python feedback] %1 tool=%2\n%3").arg(event, tool, output.trimmed());
+    } catch (const py::error_already_set &error) {
+        return QStringLiteral("[python feedback] hook setup error: %1").arg(QString::fromUtf8(error.what()));
+    }
+}
+#endif
 
 QString fileNameForBuiltInTool(AnimeanBusiness::Tool tool)
 {
@@ -231,19 +319,104 @@ AnimeanBusiness::AnimeanBusiness(QObject *parent)
     m_internalChildHistory.reset(QStringLiteral("Initial"), m_internalChildModel);
 
     for (const QString &viewName : {QStringLiteral("main"), QStringLiteral("child")}) {
-        const AnimeSceneModel &model = modelForView(viewName);
+        AnimeSceneModel &model = modelForView(viewName);
         SelectionAttention &attention = m_attentionByView[viewName];
         attention.frame = model.currentFrame();
         attention.layer = model.currentLayer();
         attention.asset = model.currentAsset();
         constrainAttention(model, &attention, AttentionChange::FrameChange);
+        model.setCurrentFrame(attention.frame);
+        model.setCurrentLayer(attention.layer);
+        model.setCurrentAsset(attention.asset);
+
+        HeadlessViewState &headless = m_headlessViewState[viewName];
+        headless.tool = int(Tool::Pen);
+        headless.pythonNotifiedFrame = model.currentFrame();
+        headless.pythonNotifiedLayer = model.currentLayer();
+        headless.pythonNotifiedLayerId = headless.pythonNotifiedLayer >= 0
+                                             ? model.layerIdAt(headless.pythonNotifiedLayer)
+                                             : 0;
     }
 
     m_playbackTimer->setInterval(1000 / kDefaultPlaybackFps);
     connect(m_playbackTimer, &QTimer::timeout, this, &AnimeanBusiness::advancePlaybackFrame);
+
+#ifdef ANIMEAN_WITH_PYTHON
+    registerAnimeanUiScene(&m_internalChildModel);
+    registerAnimeanUiScene(&m_internalMainModel);
+    registerAnimeanUiToolOptionsCallback([this]() {
+        if (m_activeExtraTool.isEmpty()) {
+            refreshToolOptions();
+        } else {
+            refreshExtraToolOptions();
+        }
+    });
+    registerAnimeanUiRefreshCallback([this](bool frame, bool layer, bool asset, bool) {
+        syncAllViewAttentionsFromModels();
+        if (frame) {
+            emit timelineChanged();
+            const int childFrame = modelForView(QStringLiteral("child")).currentFrame();
+            if (childFrame != m_lastAutoFitChildFrame) {
+                m_lastAutoFitChildFrame = childFrame;
+                emit requestAutoFitTextureControlView();
+            }
+        }
+        if (layer) {
+            emit layersChanged(QStringLiteral("main"), attentionForView(QStringLiteral("main")).layer);
+            emit layersChanged(QStringLiteral("child"), attentionForView(QStringLiteral("child")).layer);
+        }
+        if (asset) {
+            const QString target = assetPanelTargetViewName();
+            emit assetsChanged(target, attentionForView(target).asset);
+        }
+        syncEmbeddedPythonState();
+    });
+    registerAnimeanUiLockedToolsCallback([this](const QString &view, const QStringList &tools) {
+        applyLockedTools(view, tools);
+    });
+    registerAnimeanUiDrawColorCallback([this](const QColor &color) {
+        setDrawingColor(color);
+    });
+    registerAnimeanUiDrawSettingsCallback([this](int stabilizer, int simplify, int corner) {
+        setDrawSettings(stabilizer, simplify, corner);
+    });
+    registerAnimeanUiHistoryCallback([this](const QString &op, const QString &viewName, const QString &label) {
+        if (!viewName.isEmpty()
+            && viewName != QStringLiteral("main")
+            && viewName != QStringLiteral("child")) {
+            return;
+        }
+        if (op == QStringLiteral("commit")) {
+            commitHistory(label.isEmpty() ? QStringLiteral("Python") : label, viewName);
+        } else if (op == QStringLiteral("undo")) {
+            undo(viewName);
+        } else if (op == QStringLiteral("redo")) {
+            redo(viewName);
+        }
+    });
+    if (Py_IsInitialized()) {
+        syncEmbeddedPythonState();
+    }
+#endif
 }
 
-AnimeanBusiness::~AnimeanBusiness() = default;
+AnimeanBusiness::~AnimeanBusiness()
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    clearAnimeanUiHistoryCallback();
+    clearAnimeanUiLockedToolsCallback();
+    clearAnimeanUiDrawColorCallback();
+    clearAnimeanUiToolOptionsCallback();
+    clearAnimeanUiRefreshCallback();
+    for (auto it = m_adapters.cbegin(); it != m_adapters.cend(); ++it) {
+        if (it.value().model) {
+            unregisterAnimeanUiScene(it.value().model);
+        }
+    }
+    unregisterAnimeanUiScene(&m_internalChildModel);
+    unregisterAnimeanUiScene(&m_internalMainModel);
+#endif
+}
 
 QString AnimeanBusiness::resolveViewName(const QString &viewName) const
 {
@@ -275,6 +448,15 @@ const AnimePaintViewAdapter *AnimeanBusiness::adapterFor(const QString &viewName
 void AnimeanBusiness::bindPaintView(const QString &viewName, const AnimePaintViewAdapter &adapter)
 {
     const QString key = resolveViewName(viewName);
+#ifdef ANIMEAN_WITH_PYTHON
+    if (const AnimePaintViewAdapter *oldAdapter = adapterFor(key)) {
+        if (oldAdapter->model) {
+            unregisterAnimeanUiScene(oldAdapter->model);
+        }
+    }
+    unregisterAnimeanUiScene(key == QStringLiteral("child") ? &m_internalChildModel
+                                                            : &m_internalMainModel);
+#endif
     m_adapters.insert(key, adapter);
 
     AnimeSceneModel &model = modelForView(key);
@@ -282,6 +464,12 @@ void AnimeanBusiness::bindPaintView(const QString &viewName, const AnimePaintVie
                         ? QStringLiteral("child_paint_view")
                         : QStringLiteral("main_paint_view"));
     model.setIntId(key == QStringLiteral("child") ? 2 : 1);
+
+#ifdef ANIMEAN_WITH_PYTHON
+    registerAnimeanUiScene(&modelForView(QStringLiteral("child")));
+    registerAnimeanUiScene(&modelForView(QStringLiteral("main")));
+    registerAnimeanUiScene(&modelForView(m_activeViewName));
+#endif
 
     SelectionAttention &attention = m_attentionByView[key];
     attention.frame = model.currentFrame();
@@ -302,7 +490,19 @@ void AnimeanBusiness::bindPaintView(const QString &viewName, const AnimePaintVie
 void AnimeanBusiness::unbindPaintView(const QString &viewName)
 {
     const QString key = resolveViewName(viewName);
+#ifdef ANIMEAN_WITH_PYTHON
+    if (const AnimePaintViewAdapter *oldAdapter = adapterFor(key)) {
+        if (oldAdapter->model) {
+            unregisterAnimeanUiScene(oldAdapter->model);
+        }
+    }
+#endif
     m_adapters.remove(key);
+#ifdef ANIMEAN_WITH_PYTHON
+    registerAnimeanUiScene(&modelForView(QStringLiteral("child")));
+    registerAnimeanUiScene(&modelForView(QStringLiteral("main")));
+    registerAnimeanUiScene(&modelForView(m_activeViewName));
+#endif
     if (key == QStringLiteral("main")) {
         emit mainPaintViewObjectChanged(mainPaintViewObject());
     } else if (key == QStringLiteral("child")) {
@@ -399,11 +599,17 @@ void AnimeanBusiness::setActiveViewName(const QString &viewName)
 {
     const QString resolved = resolveViewName(viewName);
     if (m_activeViewName == resolved) {
+#ifdef ANIMEAN_WITH_PYTHON
+        registerAnimeanUiScene(&modelForView(m_activeViewName));
+#endif
         return;
     }
 
     stopPlayback();
     m_activeViewName = resolved;
+#ifdef ANIMEAN_WITH_PYTHON
+    registerAnimeanUiScene(&modelForView(m_activeViewName));
+#endif
 
     emit activeViewChanged(m_activeViewName);
     emit activePaintViewObjectChanged(activePaintViewObject());
@@ -414,7 +620,7 @@ void AnimeanBusiness::setActiveViewName(const QString &viewName)
     const QString assetTarget = assetPanelTargetViewName();
     emit assetsChanged(assetTarget, attentionForView(assetTarget).asset);
     emit historyChanged();
-    emit pythonStateSyncRequested();
+    syncEmbeddedPythonState();
     refreshToolLockState();
     setStatusMessage(QStringLiteral("Active paint view: %1").arg(m_activeViewName));
 }
@@ -484,13 +690,20 @@ void AnimeanBusiness::syncAllViewAttentionsFromModels()
         if (AnimePaintViewAdapter *adapter = adapterFor(viewName)) {
             if (adapter->setCurrentFrame) {
                 adapter->setCurrentFrame(attention.frame);
+            } else {
+                notifyHeadlessFrameChangedIfNeeded(viewName);
             }
             if (adapter->setCurrentLayer) {
                 adapter->setCurrentLayer(attention.layer);
+            } else {
+                notifyHeadlessLayerChangedIfNeeded(viewName);
             }
             if (adapter->setCurrentAsset) {
                 adapter->setCurrentAsset(attention.asset);
             }
+        } else {
+            notifyHeadlessFrameChangedIfNeeded(viewName);
+            notifyHeadlessLayerChangedIfNeeded(viewName);
         }
     }
 }
@@ -519,11 +732,13 @@ void AnimeanBusiness::updateAttention(const QString &viewName,
             adapter->setCurrentFrame(attention.frame);
         } else {
             model.setCurrentFrame(attention.frame);
+            notifyHeadlessFrameChangedIfNeeded(key);
         }
         if (adapter->setCurrentLayer) {
             adapter->setCurrentLayer(attention.layer);
         } else {
             model.setCurrentLayer(attention.layer);
+            notifyHeadlessLayerChangedIfNeeded(key);
         }
         if (adapter->setCurrentAsset) {
             adapter->setCurrentAsset(attention.asset);
@@ -532,7 +747,9 @@ void AnimeanBusiness::updateAttention(const QString &viewName,
         }
     } else {
         model.setCurrentFrame(attention.frame);
+        notifyHeadlessFrameChangedIfNeeded(key);
         model.setCurrentLayer(attention.layer);
+        notifyHeadlessLayerChangedIfNeeded(key);
         model.setCurrentAsset(attention.asset);
     }
 
@@ -549,7 +766,7 @@ void AnimeanBusiness::updateAttention(const QString &viewName,
         emit assetsChanged(key, attention.asset);
     }
     emit attentionUpdated(key, update.frame, update.layer, update.asset);
-    emit pythonStateSyncRequested();
+    syncEmbeddedPythonState();
 }
 
 QImage AnimeanBusiness::renderFrameThumbnail(int frameIndex,
@@ -705,7 +922,7 @@ void AnimeanBusiness::applyNewCanvasSize(const QSize &size)
 
     commitHistory(QStringLiteral("Canvas Size"), QStringLiteral("main"));
     emit canvasSizeChanged(QStringLiteral("main"), size);
-    emit pythonStateSyncRequested();
+    syncEmbeddedPythonState();
     refreshToolOptions();
     setStatusMessage(QStringLiteral("Canvas: %1 x %2 px").arg(size.width()).arg(size.height()));
 }
@@ -725,6 +942,10 @@ void AnimeanBusiness::activateLoadedModel(const QString &viewName, const QString
 {
     const QString key = resolveViewName(viewName);
     AnimeSceneModel &model = modelForView(key);
+#ifdef ANIMEAN_WITH_PYTHON
+    registerAnimeanUiScene(&model);
+    registerAnimeanUiScene(&modelForView(m_activeViewName));
+#endif
     if (AnimePaintViewAdapter *adapter = adapterFor(key)) {
         if (adapter->modelReplaced) {
             adapter->modelReplaced();
@@ -798,7 +1019,7 @@ bool AnimeanBusiness::loadProjectFrom(const QString &fileName, QString *errorOut
     emit projectFilePathChanged(m_currentFilePath);
     emit windowTitleChanged(windowTitle());
     setActiveViewName(QStringLiteral("main"));
-    emit pythonStateSyncRequested();
+    syncEmbeddedPythonState();
     refreshToolOptions();
     setStatusMessage(QStringLiteral("Opened project (main + texture): %1")
                          .arg(QFileInfo(fileName).fileName()));
@@ -1084,6 +1305,7 @@ bool AnimeanBusiness::deleteLayer(int layerIndex, const QString &viewName)
         if (model.deleteLayer(layerIndex)) {
             model.remapFillSourceLayersAfterDelete(layerIndex);
             commitHistory(QStringLiteral("Delete Layer"), key);
+            notifyHeadlessLayerChangedIfNeeded(key);
             removed = true;
         }
     }
@@ -1112,6 +1334,7 @@ int AnimeanBusiness::deleteLayerGroup(int groupId, const QString &viewName)
             commitHistory(deleted == 1 ? QStringLiteral("Delete Group")
                                        : QStringLiteral("Delete Group (%1 layers)").arg(deleted),
                           key);
+            notifyHeadlessLayerChangedIfNeeded(key);
         }
     }
     if (deleted > 0) {
@@ -1153,6 +1376,7 @@ bool AnimeanBusiness::moveLayer(int fromIndex, int toIndex, const QString &viewN
         if (model.moveLayer(fromIndex, toIndex)) {
             model.remapFillSourceLayersAfterMove(fromIndex, toIndex);
             commitHistory(QStringLiteral("Move Layer"), key);
+            notifyHeadlessLayerChangedIfNeeded(key);
             moved = true;
         }
     }
@@ -1178,7 +1402,11 @@ bool AnimeanBusiness::setLayerVisible(int layerIndex, bool visible, const QStrin
     if (AnimePaintViewAdapter *adapter = adapterFor(key)) {
         if (adapter->sendLayerVisibilityMessage) {
             handledByPython = adapter->sendLayerVisibilityMessage(layerIndex, visible);
+        } else {
+            handledByPython = dispatchHeadlessLayerVisibilityHook(key, layerIndex, visible);
         }
+    } else {
+        handledByPython = dispatchHeadlessLayerVisibilityHook(key, layerIndex, visible);
     }
     if (!handledByPython) {
         AnimeSceneModel &model = modelForView(key);
@@ -1561,10 +1789,17 @@ bool AnimeanBusiness::applyTool(int tool, bool reloadOptions)
         if (AnimePaintViewAdapter *adapter = adapterFor(viewKey)) {
             if (adapter->setTool) {
                 adapter->setTool(tool);
+            } else {
+                setHeadlessViewTool(viewKey, tool);
             }
             if (adapter->setStrokeProperty) {
                 adapter->setStrokeProperty(QString());
+            } else {
+                setHeadlessViewStrokeProperty(viewKey, QString());
             }
+        } else {
+            setHeadlessViewTool(viewKey, tool);
+            setHeadlessViewStrokeProperty(viewKey, QString());
         }
     }
 
@@ -1596,17 +1831,28 @@ void AnimeanBusiness::selectExtraTool(const AnimeExtraToolDefinition &tool)
         if (AnimePaintViewAdapter *adapter = adapterFor(viewKey)) {
             if (adapter->setTool) {
                 adapter->setTool(int(baseTool));
+            } else {
+                setHeadlessViewTool(viewKey, int(baseTool));
             }
             if (adapter->setStrokeProperty) {
                 adapter->setStrokeProperty(tool.property);
+            } else {
+                setHeadlessViewStrokeProperty(viewKey, tool.property);
             }
+        } else {
+            setHeadlessViewTool(viewKey, int(baseTool));
+            setHeadlessViewStrokeProperty(viewKey, tool.property);
         }
     }
 
     if (AnimePaintViewAdapter *activeAdapter = adapterFor(m_activeViewName)) {
         if (activeAdapter->sendExtraToolMessage) {
             activeAdapter->sendExtraToolMessage(tool.name, tool.property);
+        } else {
+            dispatchHeadlessExtraToolHook(m_activeViewName, tool.name, tool.property);
         }
+    } else {
+        dispatchHeadlessExtraToolHook(m_activeViewName, tool.name, tool.property);
     }
 
     m_activeExtraTool = tool.name;
@@ -1742,10 +1988,39 @@ void AnimeanBusiness::sendToolOption(const QString &hook,
                                      int startColumn,
                                      int endColumn)
 {
+    bool dispatchedByAdapter = false;
     if (AnimePaintViewAdapter *adapter = adapterFor(m_activeViewName)) {
         if (adapter->sendToolOptionMessage) {
             adapter->sendToolOptionMessage(hook, name, type, value, row, startColumn, endColumn);
+            dispatchedByAdapter = true;
         }
+    }
+    if (!dispatchedByAdapter) {
+        dispatchHeadlessToolOptionHook(m_activeViewName, hook, name, type, value, row, startColumn, endColumn);
+    }
+
+    if (hook == QStringLiteral("color")) {
+        const QColor color = value.canConvert<QColor>() ? value.value<QColor>() : QColor(value.toString());
+        if (color.isValid()) {
+            selectColor(color);
+        }
+    } else if (hook == QStringLiteral("fill_scope")) {
+        const bool allLayers = (value.toString() == QStringLiteral("all")
+                                || value.toInt() == int(FillScope::AllLayers));
+        setFillScope(int(allLayers ? FillScope::AllLayers : FillScope::CurrentLayer));
+    } else if (hook == QStringLiteral("eraser_mode")) {
+        const QString mode = value.toString();
+        Tool eraserTool = Tool::Eraser;
+        if (mode == QStringLiteral("line") || value.toInt() == int(Tool::DeleteLine)) {
+            eraserTool = Tool::DeleteLine;
+        } else if (mode == QStringLiteral("cut") || value.toInt() == int(Tool::CutLine)) {
+            eraserTool = Tool::CutLine;
+        }
+        selectEraserMode(int(eraserTool));
+    } else if (hook == QStringLiteral("smooth")) {
+        setSmoothValue(value.toInt());
+    } else if (hook == QStringLiteral("pen_width")) {
+        setPenWidth(value.toInt());
     }
 }
 
@@ -1754,12 +2029,18 @@ void AnimeanBusiness::sendPadEvent(const QString &pad, const QString &phase, dou
     if (AnimePaintViewAdapter *adapter = adapterFor(m_activeViewName)) {
         if (adapter->sendPadMessage) {
             adapter->sendPadMessage(pad, phase, x, y);
+            return;
         }
     }
+    dispatchHeadlessPadHook(m_activeViewName, pad, phase, x, y);
 }
 
 void AnimeanBusiness::refreshToolOptions()
 {
+    if (!m_activeExtraTool.isEmpty()) {
+        refreshExtraToolOptions();
+        return;
+    }
     const Tool tool = static_cast<Tool>(m_currentTool);
     const QJsonObject layout = toolOptionsLayout(tool);
     emit toolOptionsLayoutChanged(layout, m_currentTool, false);
@@ -1979,6 +2260,7 @@ void AnimeanBusiness::resetHistory(const QString &label, const QString &viewName
         }
     }
     historyForView(key).reset(label, modelForView(key));
+    notifyHeadlessHistoryRestore(key);
     emit requestClearTimelineThumbnails();
     emit historyChanged();
 }
@@ -2014,6 +2296,10 @@ void AnimeanBusiness::applyHistoryRestore(const QString &viewName)
         model.setTextId(QStringLiteral("main_paint_view"));
         model.setIntId(1);
     }
+
+#ifdef ANIMEAN_WITH_PYTHON
+    registerAnimeanUiScene(&model);
+#endif
 
     if (AnimePaintViewAdapter *adapter = adapterFor(key)) {
         if (adapter->modelReplaced) {
@@ -2061,6 +2347,9 @@ bool AnimeanBusiness::undo(const QString &viewName)
     }
     if (!ok && (!adapterFor(target) || !adapterFor(target)->undoHistory)) {
         ok = history.undo(&modelForView(target));
+        if (ok) {
+            notifyHeadlessHistoryRestore(target);
+        }
     }
     if (ok) {
         applyHistoryRestore(target);
@@ -2087,6 +2376,9 @@ bool AnimeanBusiness::redo(const QString &viewName)
     }
     if (!ok && (!adapterFor(target) || !adapterFor(target)->redoHistory)) {
         ok = history.redo(&modelForView(target));
+        if (ok) {
+            notifyHeadlessHistoryRestore(target);
+        }
     }
     if (ok) {
         applyHistoryRestore(target);
@@ -2110,6 +2402,9 @@ bool AnimeanBusiness::goToHistory(int row, const QString &viewName)
     }
     if (!ok && (!adapterFor(target) || !adapterFor(target)->goToHistory)) {
         ok = historyForView(target).goTo(row, &modelForView(target));
+        if (ok) {
+            notifyHeadlessHistoryRestore(target);
+        }
     }
     if (ok) {
         applyHistoryRestore(target);
@@ -2187,13 +2482,25 @@ QSet<int> AnimeanBusiness::onionFrames() const
     return m_onionFrames;
 }
 
+QStringList AnimeanBusiness::onionExcludeProperties() const
+{
+    return m_onionExcludeProperties;
+}
+
+QString AnimeanBusiness::onionLayerTag() const
+{
+    return m_onionLayerTag;
+}
+
 AnimeTimelineState AnimeanBusiness::timelineState() const
 {
     AnimeTimelineState state;
     state.viewName = framePanelTargetViewName();
     const AnimeSceneModel &model = modelForView(state.viewName);
     state.frameCount = model.frameCount();
-    state.currentFrame = attentionForView(state.viewName).frame;
+    state.currentFrame = (isPlaybackActive() && m_playbackViewName == state.viewName)
+                             ? m_playbackIndex
+                             : attentionForView(state.viewName).frame;
     state.holds.reserve(state.frameCount);
     state.frameNames.reserve(state.frameCount);
     for (int i = 0; i < state.frameCount; ++i) {
@@ -2431,7 +2738,6 @@ void AnimeanBusiness::startPlayback()
     m_playbackTimer->start();
 
     emit playbackStateChanged(true, m_playbackIndex, m_playbackViewName);
-    emit timelineChanged();
     setStatusMessage(QStringLiteral("Playing %1 frames of %2 at %3 fps (prerendered)")
                          .arg(totalFrames)
                          .arg(key)
@@ -2644,5 +2950,675 @@ void AnimeanBusiness::pullOnionPolicy()
         setStatusMessage(QStringLiteral("onion layer tag error: %1")
                              .arg(QString::fromUtf8(error.what())));
     }
+#endif
+}
+
+void AnimeanBusiness::syncEmbeddedPythonState()
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    if (Py_IsInitialized()) {
+        try {
+            py::gil_scoped_acquire acquire;
+            py::dict globals = py::module_::import("__main__").attr("__dict__");
+            py::object animeanPython = py::module_::import("animean_python");
+            py::object animeModel = py::module_::import("animemodel");
+            AnimeSceneModel &activeModel = modelForView(m_activeViewName);
+            AnimeSceneModel &mainModel = modelForView(QStringLiteral("main"));
+            AnimeSceneModel &childModel = modelForView(QStringLiteral("child"));
+            globals["animean_python"] = animeanPython;
+            globals["animemodel"] = animeModel;
+            globals["ui"] = animeModel.attr("ui");
+            globals["model"] = py::cast(&activeModel, py::return_value_policy::reference);
+            globals["main_model"] = py::cast(&mainModel, py::return_value_policy::reference);
+            globals["child_model"] = py::cast(&childModel, py::return_value_policy::reference);
+            globals["active_view"] = m_activeViewName.toStdString();
+            globals["current"] = animeModel.attr("current");
+            globals["model_pybind"] = animeanPython.attr("model_pybind");
+            globals["vectorlogic"] = animeanPython.attr("vectorlogic");
+            globals["canvas_width"] = activeModel.canvasSize().width();
+            globals["canvas_height"] = activeModel.canvasSize().height();
+            globals["main_canvas_width"] = mainModel.canvasSize().width();
+            globals["main_canvas_height"] = mainModel.canvasSize().height();
+            globals["child_canvas_width"] = childModel.canvasSize().width();
+            globals["child_canvas_height"] = childModel.canvasSize().height();
+        } catch (const py::error_already_set &error) {
+            emit pythonDebugMessage(QStringLiteral("[python register] error: %1").arg(QString::fromUtf8(error.what())));
+            setStatusMessage(QStringLiteral("Python state sync error: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+#endif
+    emit pythonStateSyncRequested();
+}
+
+QString AnimeanBusiness::resolvePythonScriptPath(const QString &scriptName)
+{
+    const QFileInfo directInfo(scriptName);
+    if (directInfo.exists()) {
+        return directInfo.absoluteFilePath();
+    }
+
+    const QString appPath = QCoreApplication::applicationDirPath();
+    const QStringList candidates = {
+        QDir(appPath).filePath(scriptName),
+        QDir(appPath).filePath(QStringLiteral("pyfile/%1").arg(scriptName)),
+        QDir(appPath).filePath(QStringLiteral("../pyfile/%1").arg(scriptName)),
+        QDir(appPath).filePath(QStringLiteral("../../pyfile/%1").arg(scriptName)),
+#ifdef ANIMEAN_PYFILE_DIR
+        QDir(QStringLiteral(ANIMEAN_PYFILE_DIR)).filePath(scriptName),
+#endif
+#ifdef ANIMEAN_PYTHONBIND_DIR
+        QDir(QStringLiteral(ANIMEAN_PYTHONBIND_DIR)).filePath(scriptName),
+#endif
+#ifdef ANIMEAN_SOURCE_DIR
+        QDir(QStringLiteral(ANIMEAN_SOURCE_DIR)).filePath(scriptName),
+#endif
+    };
+
+    for (const QString &candidate : candidates) {
+        if (QFileInfo::exists(candidate)) {
+            return QFileInfo(candidate).absoluteFilePath();
+        }
+    }
+
+    return QString();
+}
+
+QString AnimeanBusiness::runEmbeddedPythonCommand(const QString &command, const QString &scriptDir)
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    if (!Py_IsInitialized()) {
+        return QStringLiteral("Python disabled");
+    }
+    try {
+        py::gil_scoped_acquire acquire;
+        py::module_ sys = py::module_::import("sys");
+        py::list sysPath = sys.attr("path");
+        QStringList searchDirs;
+        if (!scriptDir.isEmpty()) {
+            searchDirs.append(QDir::cleanPath(scriptDir));
+        }
+#ifdef ANIMEAN_PYFILE_DIR
+        searchDirs.append(QDir::cleanPath(QStringLiteral(ANIMEAN_PYFILE_DIR)));
+#endif
+#ifdef ANIMEAN_PYTHONBIND_DIR
+        searchDirs.append(QDir::cleanPath(QStringLiteral(ANIMEAN_PYTHONBIND_DIR)));
+#endif
+        for (const QString &dir : searchDirs) {
+            if (dir.isEmpty() || !QFileInfo::exists(dir)) {
+                continue;
+            }
+            const std::string cleanDir = QDir::cleanPath(dir).toStdString();
+            if (!sysPath.contains(py::str(cleanDir))) {
+                sysPath.insert(0, cleanDir);
+            }
+        }
+
+        py::dict globals = py::module_::import("__main__").attr("__dict__");
+        syncEmbeddedPythonState();
+
+        const QString runPrefix = QStringLiteral("run ");
+        QString scriptName;
+        if (command.endsWith(QStringLiteral(".py"), Qt::CaseInsensitive)) {
+            scriptName = command;
+        } else if (command.startsWith(runPrefix, Qt::CaseInsensitive)) {
+            scriptName = command.mid(runPrefix.size()).trimmed();
+        }
+
+        const bool runScript = !scriptName.isEmpty();
+        const QString scriptPath = runScript ? resolvePythonScriptPath(scriptName) : QString();
+        if (runScript && scriptPath.isEmpty()) {
+            return QStringLiteral("Python script not found: %1").arg(scriptName);
+        }
+
+        py::object io = py::module_::import("io");
+        py::object contextlib = py::module_::import("contextlib");
+        py::object stdoutBuffer = io.attr("StringIO")();
+        py::object stderrBuffer = io.attr("StringIO")();
+        py::object stdoutRedirect = contextlib.attr("redirect_stdout")(stdoutBuffer);
+        py::object stderrRedirect = contextlib.attr("redirect_stderr")(stderrBuffer);
+
+        QString errorText;
+        stdoutRedirect.attr("__enter__")();
+        stderrRedirect.attr("__enter__")();
+        try {
+            if (runScript) {
+                globals["__file__"] = scriptPath.toStdString();
+                const QString normalizedPath = QDir::toNativeSeparators(scriptPath);
+                const QString scriptLiteral = QString::fromStdString(
+                    py::repr(py::str(normalizedPath.toStdString())).cast<std::string>());
+                const QString code = QStringLiteral(
+                    "with open(%1, 'r', encoding='utf-8') as __animean_file:\n"
+                    "    __animean_code = __animean_file.read()\n"
+                    "exec(compile(__animean_code, %1, 'exec'), globals())\n")
+                                         .arg(scriptLiteral);
+                py::exec(code.toStdString(), globals);
+            } else {
+                const char *runner =
+                    "import ast\n"
+                    "try:\n"
+                    "    __animean_expr = ast.parse(__animean_command, mode='eval')\n"
+                    "except SyntaxError:\n"
+                    "    exec(__animean_command, globals())\n"
+                    "else:\n"
+                    "    __animean_value = eval(compile(__animean_expr, '<AnimeAn debug>', 'eval'), globals())\n"
+                    "    if __animean_value is not None:\n"
+                    "        print(repr(__animean_value))\n";
+                globals["__animean_command"] = command.toStdString();
+                py::exec(runner, globals);
+            }
+        } catch (const py::error_already_set &error) {
+            errorText = QString::fromUtf8(error.what());
+        }
+        stderrRedirect.attr("__exit__")(py::none(), py::none(), py::none());
+        stdoutRedirect.attr("__exit__")(py::none(), py::none(), py::none());
+
+        QString output = QString::fromUtf8(stdoutBuffer.attr("getvalue")().cast<std::string>().c_str());
+        const QString stderrOutput = QString::fromUtf8(stderrBuffer.attr("getvalue")().cast<std::string>().c_str());
+        if (!stderrOutput.isEmpty()) {
+            output += stderrOutput;
+        }
+        if (!errorText.isEmpty()) {
+            output += errorText;
+        }
+        if (output.trimmed().isEmpty()) {
+            output = QStringLiteral("(no output)");
+        }
+        AnimeSceneModel &activeModel = modelForView(m_activeViewName);
+        updateAttention(m_activeViewName,
+                        AttentionChange::AssetChange,
+                        activeModel.currentFrame(),
+                        activeModel.currentLayer(),
+                        activeModel.currentAsset());
+        for (const QString &viewKey : {QStringLiteral("main"), QStringLiteral("child")}) {
+            if (AnimePaintViewAdapter *adapter = adapterFor(viewKey)) {
+                if (adapter->requestUpdate) {
+                    adapter->requestUpdate();
+                }
+            }
+        }
+        return output;
+    } catch (const py::error_already_set &error) {
+        return QStringLiteral("Python debug error: %1").arg(QString::fromUtf8(error.what()));
+    }
+#else
+    Q_UNUSED(command);
+    Q_UNUSED(scriptDir);
+    return QStringLiteral("Python disabled");
+#endif
+}
+
+QString AnimeanBusiness::runPythonInitializationScript(QString *outputOut)
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    emit pythonDebugMessage(QStringLiteral("> initalize.py"));
+    const QString output = runEmbeddedPythonCommand(QStringLiteral("initalize.py")).trimmed();
+    if (outputOut) {
+        *outputOut = output;
+    }
+    emit pythonDebugMessage(output);
+    loadExtraTools();
+    pullOnionPolicy();
+    return output;
+#else
+    if (outputOut) {
+        *outputOut = QStringLiteral("Python disabled");
+    }
+    return QStringLiteral("Python disabled");
+#endif
+}
+
+void AnimeanBusiness::setHeadlessViewTool(const QString &viewName, int tool)
+{
+    const QString key = resolveViewName(viewName);
+    HeadlessViewState &state = m_headlessViewState[key];
+    const Tool oldTool = static_cast<Tool>(state.tool);
+    const Tool newTool = static_cast<Tool>(tool);
+    if ((oldTool == Tool::Arrow || oldTool == Tool::Connect || oldTool == Tool::Transfer)
+        && newTool != oldTool) {
+        dispatchHeadlessHandleHook(key, QStringLiteral("cancel"));
+    }
+    state.tool = tool;
+    dispatchHeadlessHandleHook(key, QStringLiteral("arm"));
+}
+
+void AnimeanBusiness::setHeadlessViewStrokeProperty(const QString &viewName, const QString &property)
+{
+    const QString key = resolveViewName(viewName);
+    HeadlessViewState &state = m_headlessViewState[key];
+    const bool changed = state.strokeProperty != property;
+    state.strokeProperty = property;
+    state.activePythonTool = property.isEmpty() ? QString() : QStringLiteral("extra");
+    if (changed) {
+        dispatchHeadlessHandleHook(key, QStringLiteral("arm"));
+    }
+}
+
+void AnimeanBusiness::notifyHeadlessFrameChangedIfNeeded(const QString &viewName)
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    const QString key = resolveViewName(viewName);
+    const AnimeSceneModel &model = modelForView(key);
+    HeadlessViewState &state = m_headlessViewState[key];
+    const int frame = model.currentFrame();
+    if (frame == state.pythonNotifiedFrame) {
+        return;
+    }
+    state.pythonNotifiedFrame = frame;
+    if (!Py_IsInitialized() || !animeanHookEventSubscribed(QStringLiteral("framechange"))) {
+        return;
+    }
+    const int layer = model.currentLayer();
+    const AnimeCell cell = model.cellAt(frame, layer);
+    py::gil_scoped_acquire acquire;
+    py::dict cellInfo;
+    cellInfo["row"] = frame;
+    cellInfo["layer"] = layer;
+    cellInfo["asset"] = cell.assetIndex;
+    cellInfo["frame_id"] = cell.frameId;
+
+    const QString baseToolName = toolControlName(static_cast<Tool>(state.tool));
+    py::dict message;
+    message["event"] = "framechange";
+    message["view"] = key.toStdString();
+    message["tool"] = (state.activePythonTool.isEmpty() ? baseToolName : state.activePythonTool).toStdString();
+    message["base_tool"] = baseToolName.toStdString();
+    message["property"] = state.strokeProperty.toStdString();
+    message["cell"] = cellInfo;
+    message["stroke"] = py::dict();
+    message["position"] = pointToPythonDict(QPointF());
+    message["delta"] = pointToPythonDict(QPointF());
+
+    const QString output = pythonHookSendMessage(message);
+    if (!isQuietHookOutput(output)) {
+        emit pythonDebugMessage(output);
+    }
+#else
+    Q_UNUSED(viewName);
+#endif
+}
+
+void AnimeanBusiness::notifyHeadlessLayerChangedIfNeeded(const QString &viewName)
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    const QString key = resolveViewName(viewName);
+    const AnimeSceneModel &model = modelForView(key);
+    HeadlessViewState &state = m_headlessViewState[key];
+    const int layer = model.currentLayer();
+    const int layerId = layer >= 0 ? model.layerIdAt(layer) : 0;
+    if (layer == state.pythonNotifiedLayer && layerId == state.pythonNotifiedLayerId) {
+        return;
+    }
+    const int previous = state.pythonNotifiedLayer;
+    state.pythonNotifiedLayer = layer;
+    state.pythonNotifiedLayerId = layerId;
+    if (!Py_IsInitialized() || !animeanHookEventSubscribed(QStringLiteral("layerchange"))) {
+        return;
+    }
+
+    const int frameRow = model.currentFrame();
+    const AnimeCell cell = model.cellAt(frameRow, layer);
+    py::gil_scoped_acquire acquire;
+    py::dict cellInfo;
+    cellInfo["row"] = frameRow;
+    cellInfo["layer"] = layer;
+    cellInfo["asset"] = cell.assetIndex;
+    cellInfo["frame_id"] = cell.frameId;
+
+    const QString baseToolName = toolControlName(static_cast<Tool>(state.tool));
+    py::dict message;
+    message["event"] = "layerchange";
+    message["view"] = key.toStdString();
+    message["tool"] = (state.activePythonTool.isEmpty() ? baseToolName : state.activePythonTool).toStdString();
+    message["base_tool"] = baseToolName.toStdString();
+    message["property"] = state.strokeProperty.toStdString();
+    message["cell"] = cellInfo;
+    message["stroke"] = py::dict();
+    message["position"] = pointToPythonDict(QPointF());
+    message["delta"] = pointToPythonDict(QPointF());
+    message["layer"] = layer;
+    message["layer_id"] = layerId;
+    message["previous"] = previous == -2 ? -1 : previous;
+
+    const QString output = pythonHookSendMessage(message);
+    if (!isQuietHookOutput(output)) {
+        emit pythonDebugMessage(output);
+    }
+#else
+    Q_UNUSED(viewName);
+#endif
+}
+
+void AnimeanBusiness::notifyHeadlessHistoryRestore(const QString &viewName)
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    const QString key = resolveViewName(viewName);
+    const AnimeSceneModel &model = modelForView(key);
+    HeadlessViewState &state = m_headlessViewState[key];
+    state.pythonNotifiedFrame = model.currentFrame();
+    state.pythonNotifiedLayer = model.currentLayer();
+    state.pythonNotifiedLayerId =
+        state.pythonNotifiedLayer >= 0 ? model.layerIdAt(state.pythonNotifiedLayer) : 0;
+    if (!Py_IsInitialized() || !animeanHookEventSubscribed(QStringLiteral("historyrestore"))) {
+        return;
+    }
+
+    const int row = model.currentFrame();
+    const int layer = model.currentLayer();
+    const AnimeCell cell = model.cellAt(row, layer);
+    py::gil_scoped_acquire acquire;
+    py::dict cellInfo;
+    cellInfo["row"] = row;
+    cellInfo["layer"] = layer;
+    cellInfo["asset"] = cell.assetIndex;
+    cellInfo["frame_id"] = cell.frameId;
+
+    const QString baseToolName = toolControlName(static_cast<Tool>(state.tool));
+    py::dict message;
+    message["event"] = "historyrestore";
+    message["view"] = key.toStdString();
+    message["tool"] = (state.activePythonTool.isEmpty() ? baseToolName : state.activePythonTool).toStdString();
+    message["base_tool"] = baseToolName.toStdString();
+    message["property"] = state.strokeProperty.toStdString();
+    message["cell"] = cellInfo;
+    message["stroke"] = py::dict();
+    message["position"] = pointToPythonDict(QPointF());
+    message["delta"] = pointToPythonDict(QPointF());
+
+    const QString output = pythonHookSendMessage(message);
+    if (!isQuietHookOutput(output)) {
+        emit pythonDebugMessage(output);
+    }
+#else
+    Q_UNUSED(viewName);
+#endif
+}
+
+void AnimeanBusiness::dispatchHeadlessHandleHook(const QString &viewName, const QString &phase)
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    if (!Py_IsInitialized() || !animeanHookEventSubscribed(QStringLiteral("handle"))) {
+        return;
+    }
+    const QString key = resolveViewName(viewName);
+    const AnimeSceneModel &model = modelForView(key);
+    const HeadlessViewState &state = m_headlessViewState[key];
+    const int frameRow = model.currentFrame();
+    const int layer = model.currentLayer();
+    const AnimeCell cell = model.cellAt(frameRow, layer);
+
+    py::gil_scoped_acquire acquire;
+    py::dict cellInfo;
+    cellInfo["row"] = frameRow;
+    cellInfo["layer"] = layer;
+    cellInfo["asset"] = cell.assetIndex;
+    cellInfo["frame_id"] = cell.frameId;
+
+    py::dict currentColor;
+    currentColor["r"] = m_drawingColor.red();
+    currentColor["g"] = m_drawingColor.green();
+    currentColor["b"] = m_drawingColor.blue();
+    currentColor["a"] = m_drawingColor.alpha();
+
+    py::dict keys;
+    keys["shift"] = false;
+    keys["ctrl"] = false;
+    keys["alt"] = false;
+    keys["constrain"] = false;
+
+    const QString baseToolName = toolControlName(static_cast<Tool>(state.tool));
+    py::dict message;
+    message["event"] = "handle";
+    message["view"] = key.toStdString();
+    message["tool"] = (state.activePythonTool.isEmpty() ? baseToolName : state.activePythonTool).toStdString();
+    message["base_tool"] = baseToolName.toStdString();
+    message["property"] = state.strokeProperty.toStdString();
+    message["cell"] = cellInfo;
+    message["stroke"] = py::dict();
+    message["position"] = pointToPythonDict(QPointF());
+    message["delta"] = pointToPythonDict(QPointF());
+    message["phase"] = phase.toStdString();
+    message["handle"] = "";
+    message["color"] = currentColor;
+    message["modifiers"] = keys;
+    message["zoom"] = 1.0;
+
+    const QString output = pythonHookSendMessage(message);
+    if (!isQuietHookOutput(output)) {
+        emit pythonDebugMessage(output);
+    }
+#else
+    Q_UNUSED(viewName);
+    Q_UNUSED(phase);
+#endif
+}
+
+void AnimeanBusiness::dispatchHeadlessExtraToolHook(const QString &viewName,
+                                                    const QString &name,
+                                                    const QString &property)
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    const QString key = resolveViewName(viewName);
+    HeadlessViewState &state = m_headlessViewState[key];
+    const QString previousTool = state.activePythonTool;
+    const QString previousProperty = state.strokeProperty;
+    state.activePythonTool = name.isEmpty() ? QStringLiteral("extra") : name;
+    state.strokeProperty = property;
+
+    if (Py_IsInitialized() && animeanHookEventSubscribed(QStringLiteral("extra"))) {
+        const AnimeSceneModel &model = modelForView(key);
+        const int row = model.currentFrame();
+        const int layer = model.currentLayer();
+        const AnimeCell cell = model.cellAt(row, layer);
+        py::gil_scoped_acquire acquire;
+        py::dict cellInfo;
+        cellInfo["row"] = row;
+        cellInfo["layer"] = layer;
+        cellInfo["asset"] = cell.assetIndex;
+        cellInfo["frame_id"] = cell.frameId;
+
+        const QString baseToolName = toolControlName(static_cast<Tool>(state.tool));
+        py::dict message;
+        message["event"] = "extra";
+        message["view"] = key.toStdString();
+        message["tool"] = (state.activePythonTool.isEmpty() ? baseToolName : state.activePythonTool).toStdString();
+        message["base_tool"] = baseToolName.toStdString();
+        message["property"] = state.strokeProperty.toStdString();
+        message["cell"] = cellInfo;
+        message["stroke"] = py::dict();
+        message["position"] = pointToPythonDict(QPointF());
+        message["delta"] = pointToPythonDict(QPointF());
+
+        const QString output = pythonHookSendMessage(message);
+        if (!isQuietHookOutput(output)) {
+            emit pythonDebugMessage(output);
+        }
+    }
+
+    state.activePythonTool = previousTool;
+    state.strokeProperty = previousProperty;
+#else
+    Q_UNUSED(viewName);
+    Q_UNUSED(name);
+    Q_UNUSED(property);
+#endif
+}
+
+void AnimeanBusiness::dispatchHeadlessToolOptionHook(const QString &viewName,
+                                                     const QString &hook,
+                                                     const QString &name,
+                                                     const QString &type,
+                                                     const QVariant &value,
+                                                     int row,
+                                                     int startColumn,
+                                                     int endColumn)
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    if (!Py_IsInitialized() || !animeanHookEventSubscribed(QStringLiteral("option"))) {
+        return;
+    }
+    const QString key = resolveViewName(viewName);
+    const AnimeSceneModel &model = modelForView(key);
+    const HeadlessViewState &state = m_headlessViewState[key];
+    const int frameRow = model.currentFrame();
+    const int layer = model.currentLayer();
+    const AnimeCell cell = model.cellAt(frameRow, layer);
+
+    py::gil_scoped_acquire acquire;
+    py::dict cellInfo;
+    cellInfo["row"] = frameRow;
+    cellInfo["layer"] = layer;
+    cellInfo["asset"] = cell.assetIndex;
+    cellInfo["frame_id"] = cell.frameId;
+
+    py::dict optionInfo;
+    optionInfo["name"] = name.toStdString();
+    optionInfo["type"] = type.toStdString();
+    optionInfo["value"] = variantToPythonObject(value);
+    optionInfo["hook"] = hook.toStdString();
+    optionInfo["row"] = row;
+    optionInfo["start_column"] = startColumn;
+    optionInfo["end_column"] = endColumn;
+
+    const QString baseToolName = toolControlName(static_cast<Tool>(state.tool));
+    py::dict message;
+    message["event"] = "option";
+    message["view"] = key.toStdString();
+    message["tool"] = (state.activePythonTool.isEmpty() ? baseToolName : state.activePythonTool).toStdString();
+    message["base_tool"] = baseToolName.toStdString();
+    message["property"] = state.strokeProperty.toStdString();
+    message["cell"] = cellInfo;
+    message["stroke"] = py::dict();
+    message["position"] = pointToPythonDict(QPointF());
+    message["delta"] = pointToPythonDict(QPointF());
+    message["option"] = optionInfo;
+    message["name"] = name.toStdString();
+    message["type"] = type.toStdString();
+    message["value"] = variantToPythonObject(value);
+    message["hook"] = hook.toStdString();
+    message["row"] = row;
+    message["start_column"] = startColumn;
+    message["end_column"] = endColumn;
+
+    const QString output = pythonHookSendMessage(message);
+    if (!isQuietHookOutput(output)) {
+        emit pythonDebugMessage(output);
+    }
+#else
+    Q_UNUSED(viewName);
+    Q_UNUSED(hook);
+    Q_UNUSED(name);
+    Q_UNUSED(type);
+    Q_UNUSED(value);
+    Q_UNUSED(row);
+    Q_UNUSED(startColumn);
+    Q_UNUSED(endColumn);
+#endif
+}
+
+void AnimeanBusiness::dispatchHeadlessPadHook(const QString &viewName,
+                                              const QString &pad,
+                                              const QString &phase,
+                                              double x,
+                                              double y)
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    if (!Py_IsInitialized() || !animeanHookEventSubscribed(QStringLiteral("pad"))) {
+        return;
+    }
+    const QString key = resolveViewName(viewName);
+    const AnimeSceneModel &model = modelForView(key);
+    const HeadlessViewState &state = m_headlessViewState[key];
+    const int frameRow = model.currentFrame();
+    const int layer = model.currentLayer();
+    const AnimeCell cell = model.cellAt(frameRow, layer);
+
+    py::gil_scoped_acquire acquire;
+    py::dict cellInfo;
+    cellInfo["row"] = frameRow;
+    cellInfo["layer"] = layer;
+    cellInfo["asset"] = cell.assetIndex;
+    cellInfo["frame_id"] = cell.frameId;
+
+    const QString baseToolName = toolControlName(static_cast<Tool>(state.tool));
+    py::dict message;
+    message["event"] = "pad";
+    message["view"] = key.toStdString();
+    message["tool"] = (state.activePythonTool.isEmpty() ? baseToolName : state.activePythonTool).toStdString();
+    message["base_tool"] = baseToolName.toStdString();
+    message["property"] = state.strokeProperty.toStdString();
+    message["cell"] = cellInfo;
+    message["stroke"] = py::dict();
+    message["position"] = pointToPythonDict(QPointF());
+    message["delta"] = pointToPythonDict(QPointF());
+    message["pad"] = pad.toStdString();
+    message["phase"] = phase.toStdString();
+    message["value"] = pointToPythonDict(QPointF(x, y));
+
+    const QString output = pythonHookSendMessage(message);
+    if (!isQuietHookOutput(output)) {
+        emit pythonDebugMessage(output);
+    }
+#else
+    Q_UNUSED(viewName);
+    Q_UNUSED(pad);
+    Q_UNUSED(phase);
+    Q_UNUSED(x);
+    Q_UNUSED(y);
+#endif
+}
+
+bool AnimeanBusiness::dispatchHeadlessLayerVisibilityHook(const QString &viewName,
+                                                          int layerIndex,
+                                                          bool visible)
+{
+#ifdef ANIMEAN_WITH_PYTHON
+    if (!Py_IsInitialized() || !animeanHookEventSubscribed(QStringLiteral("visibility"))) {
+        return false;
+    }
+    const QString key = resolveViewName(viewName);
+    const AnimeSceneModel &model = modelForView(key);
+    const HeadlessViewState &state = m_headlessViewState[key];
+    const int frameRow = model.currentFrame();
+    const AnimeCell cell = model.cellAt(frameRow, layerIndex);
+
+    py::gil_scoped_acquire acquire;
+    py::dict cellInfo;
+    cellInfo["row"] = frameRow;
+    cellInfo["layer"] = layerIndex;
+    cellInfo["asset"] = cell.assetIndex;
+    cellInfo["frame_id"] = cell.frameId;
+
+    const QString baseToolName = toolControlName(static_cast<Tool>(state.tool));
+    py::dict message;
+    message["event"] = "visibility";
+    message["view"] = key.toStdString();
+    message["tool"] = (state.activePythonTool.isEmpty() ? baseToolName : state.activePythonTool).toStdString();
+    message["base_tool"] = baseToolName.toStdString();
+    message["property"] = state.strokeProperty.toStdString();
+    message["cell"] = cellInfo;
+    message["stroke"] = py::dict();
+    message["position"] = pointToPythonDict(QPointF());
+    message["delta"] = pointToPythonDict(QPointF());
+    message["layer"] = layerIndex;
+    message["visible"] = visible;
+
+    const QString output = pythonHookSendMessage(message);
+    if (!isQuietHookOutput(output)) {
+        emit pythonDebugMessage(output);
+    }
+
+    try {
+        if (message.contains(py::str("handled"))) {
+            return message[py::str("handled")].cast<bool>();
+        }
+    } catch (const py::error_already_set &) {
+    } catch (const py::cast_error &) {
+    }
+    return false;
+#else
+    Q_UNUSED(viewName);
+    Q_UNUSED(layerIndex);
+    Q_UNUSED(visible);
+    return false;
 #endif
 }

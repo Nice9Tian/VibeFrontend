@@ -87,11 +87,30 @@
 | `setFps()` / `setPlaybackLoop()` / `startPlayback()` / `advancePlaybackFrame()` / `stopPlayback()` | 设置播放帧率（写入文档并提交历史）、切换循环开关、预渲染缓存并启动/步进/停止播放定时器 | `MainWindow::startPlayback` (841–881)、`advancePlaybackFrame` (883–908)、`stopPlayback` (910–933)、`createTimeline` (3238–3269) |
 | `setOnionEnabled()` / `setOnionLines()` / `setOnionFills()` / `setOnionAmLayers()` / `setOnionGuideLines()` / `toggleOnionFrame()` / `pullOnionPolicy()` | 主画布洋葱皮开关、首次开启时自动填入相邻帧、线条/填充/自动映射层/辅助线过滤开关，以及从 Python 拉取洋葱皮排除属性与标签策略 | `MainWindow::createTimeline` (3276–3351)、`pullOnionPolicy` (3368–3410) |
 
-### 9. 嵌入式 Python 状态同步
+### 9. 嵌入式 Python 状态同步、脚本执行与全局回调注册
 
 | `AnimeanBusiness` 接口 | 说明 | 对应原 `mainwindow.cpp` 位置 |
 | --- | --- | --- |
-| `pythonStateSyncRequested` | 在工程加载、画布尺寸变更、切换视图、注意力焦点刷新等时机发出信号，驱动界面层向 Python `__main__` 全局字典同步 `model`、`main_model`、`child_model`、`active_view` 及主/子画布宽高变量 | `MainWindow::syncEmbeddedPythonState` (2441–2474) |
+| `syncEmbeddedPythonState()` / `pythonStateSyncRequested` | 向 Python `__main__` 全局字典同步 `animean_python`、`animemodel`、`ui`、`model`、`main_model`、`child_model`、`active_view`、`current`、`model_pybind`、`vectorlogic` 及主/子画布宽高变量，并在工程加载、画布尺寸变更、切换视图、焦点刷新等时机触发 | `MainWindow::syncEmbeddedPythonState` (2441–2474) |
+| `resolvePythonScriptPath()` / `runEmbeddedPythonCommand()` / `runPythonInitializationScript()` | 定位 `pyfile/` 下的脚本路径、在嵌入式解释器中执行命令并捕获 `stdout`/`stderr`、执行启动脚本 `initalize.py` 并拉取洋葱皮策略 | `MainWindow::resolvePythonScriptPath` (2206–2241)、`runEmbeddedPythonCommand` (2354–2439)、`runPythonInitializationScript` (2476–2507) |
+| 无界面 Python Hook 派发（`notifyHeadlessFrameChangedIfNeeded` / `notifyHeadlessLayerChangedIfNeeded` / `notifyHeadlessHistoryRestore` / `dispatchHeadless*Hook`） | 当未绑定 `PaintOpenGLWidget`（如 `business_tests` 无界面模式）时，由 `AnimeanBusiness` 直接调用 `python_hooks` 模块派发 `frame_change`、`layer_change`、`history_restore`、`handle`、`extra_tool`、`tool_option`、`pad`、`layervisibility` 钩子；绑定画布后则转交 `PaintOpenGLWidget` 执行，避免重复触发 | `PaintOpenGLWidget` 内各 `notifyPython*` 与 `dispatch*Hook` 实现 |
+
+#### `python_bindings.cpp` 全局回调（`registerAnimeanUi*Callback`）的职责边界与覆盖关系
+
+`pythonbind/python_bindings.cpp` 中的 UI 回调槽位均为进程级单槽全局变量（后注册者覆盖先注册者）。职责划分与覆盖规则如下：
+
+1. **纯业务/无界面模式（仅构造 `AnimeanBusiness`）**：
+   - `AnimeanBusiness` 构造函数默认注册核心业务回调：`registerAnimeanUiScene`（注册内部主/子模型并设主模型为当前场景）、`registerAnimeanUiToolOptionsCallback`、`registerAnimeanUiToolLockCallback`、`registerAnimeanUiRefreshCallback`、`registerAnimeanUiDrawSettingsCallback`、`registerAnimeanUiStrokeFitCallback`、`registerAnimeanUiHistoryCallbacks`。
+   - 这使得不创建 `MainWindow` 的无界面宿主或 `business_tests` 在初始化 Python 解释器后，即可直接通过 `ui.*` 与 `animean_python` 完成场景读写、工具选项刷新、工具锁定、焦点同步、画笔参数同步与撤销/重做历史操作。
+2. **完整 GUI 模式（构造 `MainWindow` 并在其内部构造 `AnimeanBusiness`）**：
+   - `MainWindow` 在构造 `m_business` 并调用 `bindPaintView` 绑定主/子 `PaintOpenGLWidget` 后，会再次调用 `registerAnimeanUi*Callback`。
+   - **委托回 `AnimeanBusiness` 的回调**：`registerAnimeanUiToolOptionsCallback`、`registerAnimeanUiToolLockCallback`、`registerAnimeanUiRefreshCallback`、`registerAnimeanUiDrawSettingsCallback`、`registerAnimeanUiStrokeFitCallback`、`registerAnimeanUiHistoryCallbacks`、`registerAnimeanUiSelectToolCallback`、`registerAnimeanUiOnionCallbacks` 在 `MainWindow` 的 lambda 中直接委托给 `m_business`（或经 `m_business` 更新后再触发画布重绘/状态栏提示），保证业务状态唯一收口在 `AnimeanBusiness`。
+   - **仅留在 `MainWindow` 的回调**：以下回调强依赖 `PaintOpenGLWidget` 渲染层或 `QtWidgets` 窗口树，因此在无界面模式下不注册，仅由 `MainWindow` 注册：
+     - `registerAnimeanUiOverlayCallback` / `registerAnimeanUiEditHandlesCallback` / `registerAnimeanUiCursorCallback`：直接操作 `PaintOpenGLWidget` 的屏幕空间覆盖层图元、编辑手柄与自定义光标；
+     - `registerAnimeanUiMenuCallbacks` / `registerAnimeanUiLayerContextCallbacks`：操作 `QMenuBar` 脚本菜单与图层面板右键 `QMenu`；
+     - `registerAnimeanUiDialogCallbacks`：构造并弹出基于 `QDialog` / `QWidget` 布局的脚本自定义模态对话框；
+     - `registerAnimeanUiFreezeCallbacks`：遍历 `MainWindow` 下的 `QDockWidget`、`QMenuBar`、`SubControlFrame` 并切换 `QWidget::setEnabled`；
+     - `registerAnimeanUiPythonDebugCallback` / `registerAnimeanUiStatusCallback`：向 REPL 调试面板追加输出及更新主窗口状态栏。
 
 ---
 
@@ -126,3 +145,29 @@
 7. **外部格式导入的交互式流程（`importRaster`、`importOpenToonzLines`、`importClipStudioPaint`）**
    - **位置**：`MainWindow::importRaster`、`importOpenToonzLines`、`importClipStudioPaint`。
    - **原因**：这三项流程混合了 `QFileDialog` 选文件、`QMessageBox::question` 询问是否按当前画布缩放尺寸，以及 `PaintOpenGLWidget::ImportedVectorFrame` 的画布导入接口，后续若有新界面触发需求，可在剥离弹窗询问策略后进一步迁入业务层。
+
+---
+
+## 三、无界面测试覆盖说明（`tests/business_tests.cpp`）
+
+`business_tests` 仅链接 `animean_business`（不链接 `QtWidgets` / `QtOpenGLWidgets`，不实例化 `MainWindow`），并在 `main()` 中通过 `pybind11::scoped_interpreter` 启动真实内嵌 Python 3.12 运行时、执行 `initalize.py` 导入全部业务脚本模块：
+
+1. **五类核心业务无界面自测**：
+   - 画布视图提供（`mainPaintViewObject` / `childPaintViewObject` / `activePaintViewObject`）、适配器绑定与状态栏消息；
+   - 图层增删、移动、显隐、分组/解组、资产增删与绑定、跨视图按全局序号撤销/重做与历史跳转；
+   - 内置工具与扩展工具切换、颜色/笔宽/平滑度/填充范围、工具锁定与回退 `Arrow`；
+   - 时间轴帧增删/Hold/复制/移动、FPS、非循环/循环播放推进与洋葱皮；
+   - `.anproj` 工程新建/保存/加载与 `.textureview` 纹理视图文件独立读写。
+2. **真实 Python 联动分支覆盖（`testRealPythonIntegration`）**：
+   - 验证 `__main__` 全局变量同步与 `animean_python.get_current()` / `get_scene()`；
+   - 验证 `optionsForToolJson()` 真实调用 `toolcontrol.options_for_tool_json(tool, state)` 并与 Python 直接调用结果一致；
+   - 验证 `loadExtraTools()`、`optionsForExtraToolJson()`、`selectExtraTool()` 真实调用 `extra_tools.tools_json()`、`toolcontrol.options_for_extra_tool_json()` 与 `extra_tools.run_tool_handler()`；
+   - 验证 `pullOnionPolicy()` 从 Python 读取 `onionLayerTag` 与 `onionExcludeProperties`；
+   - 验证未绑定 `AnimePaintViewAdapter` 时无界面派发 `framechange`、`layerchange`、`historyrestore`、`handle`、`extra`、`option`、`pad`、`visibility`（驱动 `visibility_tool.py`）全部 Python 钩子。
+3. **审核发现 1–6 专项回归测试（`testRegression1`–`testRegression6`）**：
+   - `testRegression1ToolLockAndFallbackSync`：`ui.set_locked_tools` 与视图切换触发 `toolLockStateChanged`、回退 `Arrow` 并发出 `toolChanged` 及选项布局更新；
+   - `testRegression2ActiveViewRegistersCurrentPythonScene`：`setActiveViewName` 调用 `registerAnimeanUiScene` 更新 Python 当前场景，`ui.set_current` 作用在激活视图；
+   - `testRegression3PlaybackAdvancesFrameIndexAndTimelineState`：`advancePlaybackFrame` 发出携带递增 `frameIndex` 的 `playbackStateChanged` 并推进 `timelineState().currentFrame`，播放中不误触发 `framechange` 钩子；
+   - `testRegression4NoDuplicateSignalsOnViewSwitchAndEdits`：切换视图与编辑操作各信号严格触发 1 次，无重复发射；
+   - `testRegression5ExtraToolOptionsPreservedOnRefreshAndDrawSettings`：扩展工具激活期间调用 `refreshToolOptions()`、`ui.set_draw_settings()`、`applyNewCanvasSize()` 保持扩展工具选项布局不被基础工具覆盖；
+   - `testRegression6ToolSwitchExtraToolOrderAndSingleOptionApply`：切工具只构建 1 次选项布局、`sendToolOption` 只触发 1 次 `arm` 钩子、`selectExtraTool` 严格保持 `hook:arm` → `hook:extra` → `signal:toolChanged` → `signal:toolOptionsLayoutChanged` → `extra_tools.run_tool_handler` 顺序。

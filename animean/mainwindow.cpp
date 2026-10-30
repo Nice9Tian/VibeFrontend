@@ -382,18 +382,6 @@ MainWindow::MainWindow(QWidget *parent)
     , m_business(new AnimeanBusiness(this))
 {
     ui->setupUi(this);
-    connect(m_business, &AnimeanBusiness::statusMessageChanged, this, [this](const QString &message) {
-        statusBar()->showMessage(message);
-    });
-    connect(m_business, &AnimeanBusiness::windowTitleChanged, this, &MainWindow::setWindowTitle);
-    connect(m_business, &AnimeanBusiness::requestSurfaceTextureView, this, &MainWindow::showTextureView);
-    connect(m_business, &AnimeanBusiness::requestAutoFitTextureControlView,
-            this, &MainWindow::autoFitTextureControlView);
-    connect(m_business, &AnimeanBusiness::requestClearTimelineThumbnails, this, [this]() {
-        if (m_timeline) {
-            m_timeline->clearThumbnails();
-        }
-    });
 
     setupDocks();
     setupListDragDrop();
@@ -421,15 +409,7 @@ MainWindow::MainWindow(QWidget *parent)
     // the menu bar and decides whether RDP applies), so the rebuild is its
     // own callback rather than a fifth flag on the scene refresh.
     registerAnimeanUiToolOptionsCallback([this]() {
-        // Built-in tools (no extra tool armed) rebuild through the plain
-        // tool-options path; refreshExtraToolOptions early-returns for them,
-        // which would make ui.refresh_tool_options() a silent no-op on Pen
-        // and Fill — exactly where the palette control lives.
-        if (m_business->activeExtraTool().isEmpty()) {
-            m_business->refreshToolOptions();
-        } else {
-            m_business->refreshExtraToolOptions();
-        }
+        m_business->refreshToolOptions();
     });
     registerAnimeanUiRefreshCallback([this](bool frame, bool layer, bool asset, bool widget) {
         // EVERY view re-reads its own model, not just the active one: a
@@ -470,7 +450,6 @@ MainWindow::MainWindow(QWidget *parent)
                 paintView->modelReplaced();
             }
         }
-        syncEmbeddedPythonState();
     });
     registerAnimeanUiFreezeCallback([this](bool frozen) {
         setPythonUiFrozen(frozen);
@@ -964,9 +943,6 @@ void MainWindow::startPlayback()
     if (frameCount >= 2) {
         QApplication::restoreOverrideCursor();
     }
-    if (m_business->isPlaybackActive() && m_timeline) {
-        m_timeline->setPlaybackActive(true);
-    }
 }
 
 void MainWindow::advancePlaybackFrame()
@@ -980,9 +956,6 @@ void MainWindow::stopPlayback()
         return;
     }
     m_business->stopPlayback();
-    if (m_timeline) {
-        m_timeline->setPlaybackActive(false);
-    }
 }
 
 void MainWindow::createForcePadDock()
@@ -1476,8 +1449,8 @@ void MainWindow::refreshToolOptions()
     // Rebuilds the tool options panel from the current tool state. Needed
     // because the Draw Setting window and the panel's own Smooth slider are
     // two views of the SAME stabilizer value.
-    if (m_reloadToolOptions) {
-        m_reloadToolOptions(m_currentToolForOptions);
+    if (m_business) {
+        m_business->refreshToolOptions();
     }
 }
 
@@ -2150,12 +2123,6 @@ void MainWindow::setActivePaintView(PaintOpenGLWidget *view)
         paintView->setActiveIndicator(paintView == view);
     }
     m_business->setActiveViewName(view->viewName());
-    refreshPanelTargets();
-    scheduleHistoryRefresh();
-    syncEmbeddedPythonState();
-    // The rail is enforced against the board the next gesture lands on, and
-    // that board just changed.
-    refreshToolLockState();
     if (m_forcePadDock) {
         // The pad acts on the active view; say so where the user is looking.
         m_forcePadDock->setWindowTitle(QStringLiteral("Repulsion Pad - %1").arg(view->viewName()));
@@ -2272,161 +2239,26 @@ void MainWindow::appendPythonDebugMessage(const QString &message)
 
 void MainWindow::runPythonInitializationScript()
 {
-#ifdef ANIMEAN_WITH_PYTHON
-    appendPythonDebugMessage(QStringLiteral("> initalize.py"));
-    appendPythonDebugMessage(runEmbeddedPythonCommand(QStringLiteral("initalize.py")).trimmed());
-#endif
+    if (m_business) {
+        m_business->runPythonInitializationScript();
+    }
 }
 
 QString MainWindow::resolvePythonScriptPath(const QString &scriptName) const
 {
-    const QFileInfo directInfo(scriptName);
-    if (directInfo.exists()) {
-        return directInfo.absoluteFilePath();
-    }
-
-    const QString appPath = QCoreApplication::applicationDirPath();
-    const QStringList candidates = {
-        QDir(appPath).filePath(scriptName),
-#ifdef ANIMEAN_WITH_PYTHON
-        QDir(QStringLiteral(ANIMEAN_PYFILE_DIR)).filePath(scriptName),
-        QDir(QStringLiteral(ANIMEAN_SOURCE_DIR)).filePath(scriptName),
-#endif
-    };
-
-    for (const QString &candidate : candidates) {
-        if (QFileInfo::exists(candidate)) {
-            return QFileInfo(candidate).absoluteFilePath();
-        }
-    }
-
-    return QString();
+    return AnimeanBusiness::resolvePythonScriptPath(scriptName);
 }
 
 QString MainWindow::runEmbeddedPythonCommand(const QString &command)
 {
-#ifdef ANIMEAN_WITH_PYTHON
-    try {
-        py::gil_scoped_acquire acquire;
-        py::dict globals = py::module_::import("__main__").attr("__dict__");
-        syncEmbeddedPythonState();
-
-        const QString runPrefix = QStringLiteral("run ");
-        QString scriptName;
-        if (command.endsWith(QStringLiteral(".py"), Qt::CaseInsensitive)) {
-            scriptName = command;
-        } else if (command.startsWith(runPrefix, Qt::CaseInsensitive)) {
-            scriptName = command.mid(runPrefix.size()).trimmed();
-        }
-
-        const bool runScript = !scriptName.isEmpty();
-        const QString scriptPath = runScript ? resolvePythonScriptPath(scriptName) : QString();
-        if (runScript && scriptPath.isEmpty()) {
-            return QStringLiteral("Python script not found: %1").arg(scriptName);
-        }
-
-        py::object io = py::module_::import("io");
-        py::object contextlib = py::module_::import("contextlib");
-        py::object stdoutBuffer = io.attr("StringIO")();
-        py::object stderrBuffer = io.attr("StringIO")();
-        py::object stdoutRedirect = contextlib.attr("redirect_stdout")(stdoutBuffer);
-        py::object stderrRedirect = contextlib.attr("redirect_stderr")(stderrBuffer);
-
-        QString errorText;
-        stdoutRedirect.attr("__enter__")();
-        stderrRedirect.attr("__enter__")();
-        try {
-            if (runScript) {
-                globals["__file__"] = scriptPath.toStdString();
-                const QString normalizedPath = QDir::toNativeSeparators(scriptPath);
-                const QString scriptLiteral = QString::fromStdString(
-                    py::repr(py::str(normalizedPath.toStdString())).cast<std::string>());
-                const QString code = QStringLiteral(
-                    "with open(%1, 'r', encoding='utf-8') as __animean_file:\n"
-                    "    __animean_code = __animean_file.read()\n"
-                    "exec(compile(__animean_code, %1, 'exec'), globals())\n")
-                                         .arg(scriptLiteral);
-                py::exec(code.toStdString(), globals);
-            } else {
-                const char *runner =
-                    "import ast\n"
-                    "try:\n"
-                    "    __animean_expr = ast.parse(__animean_command, mode='eval')\n"
-                    "except SyntaxError:\n"
-                    "    exec(__animean_command, globals())\n"
-                    "else:\n"
-                    "    __animean_value = eval(compile(__animean_expr, '<AnimeAn debug>', 'eval'), globals())\n"
-                    "    if __animean_value is not None:\n"
-                    "        print(repr(__animean_value))\n";
-                globals["__animean_command"] = command.toStdString();
-                py::exec(runner, globals);
-            }
-        } catch (const py::error_already_set &error) {
-            errorText = QString::fromUtf8(error.what());
-        }
-        stderrRedirect.attr("__exit__")(py::none(), py::none(), py::none());
-        stdoutRedirect.attr("__exit__")(py::none(), py::none(), py::none());
-
-        QString output = QString::fromUtf8(stdoutBuffer.attr("getvalue")().cast<std::string>().c_str());
-        const QString stderrOutput = QString::fromUtf8(stderrBuffer.attr("getvalue")().cast<std::string>().c_str());
-        if (!stderrOutput.isEmpty()) {
-            output += stderrOutput;
-        }
-        if (!errorText.isEmpty()) {
-            output += errorText;
-        }
-        if (output.trimmed().isEmpty()) {
-            output = QStringLiteral("(no output)");
-        }
-        PaintOpenGLWidget *view = activePaintWidget();
-        updateAttention(view,
-                        AttentionChange::AssetChange,
-                        view->model().currentFrame(),
-                        view->model().currentLayer(),
-                        view->model().currentAsset());
-        for (PaintOpenGLWidget *paintView : m_paintViews) {
-            paintView->update();
-        }
-        return output;
-    } catch (const py::error_already_set &error) {
-        return QStringLiteral("Python debug error: %1").arg(QString::fromUtf8(error.what()));
-    }
-#else
-    Q_UNUSED(command);
-    return QStringLiteral("Python disabled");
-#endif
+    return m_business ? m_business->runEmbeddedPythonCommand(command) : QString();
 }
 
 void MainWindow::syncEmbeddedPythonState()
 {
-#ifdef ANIMEAN_WITH_PYTHON
-    try {
-        py::gil_scoped_acquire acquire;
-        py::dict globals = py::module_::import("__main__").attr("__dict__");
-        py::object animeanPython = py::module_::import("animean_python");
-        py::object animeModel = py::module_::import("animemodel");
-        PaintOpenGLWidget *view = activePaintWidget();
-        globals["animean_python"] = animeanPython;
-        globals["animemodel"] = animeModel;
-        globals["ui"] = animeModel.attr("ui");
-        globals["model"] = py::cast(&view->model(), py::return_value_policy::reference);
-        globals["main_model"] = py::cast(&m_paintWidget->model(), py::return_value_policy::reference);
-        globals["child_model"] = py::cast(&m_childPaintWidget->model(), py::return_value_policy::reference);
-        globals["active_view"] = view->viewName().toStdString();
-        globals["current"] = animeModel.attr("current");
-        globals["model_pybind"] = animeanPython.attr("model_pybind");
-        globals["vectorlogic"] = animeanPython.attr("vectorlogic");
-        globals["canvas_width"] = view->model().canvasSize().width();
-        globals["canvas_height"] = view->model().canvasSize().height();
-        globals["main_canvas_width"] = m_paintWidget->model().canvasSize().width();
-        globals["main_canvas_height"] = m_paintWidget->model().canvasSize().height();
-        globals["child_canvas_width"] = m_childPaintWidget->model().canvasSize().width();
-        globals["child_canvas_height"] = m_childPaintWidget->model().canvasSize().height();
-    } catch (const py::error_already_set &error) {
-        appendPythonDebugMessage(QStringLiteral("[python register] error: %1").arg(QString::fromUtf8(error.what())));
-        setStatusText(QStringLiteral("Python state sync error: %1").arg(QString::fromUtf8(error.what())));
+    if (m_business) {
+        m_business->syncEmbeddedPythonState();
     }
-#endif
 }
 
 void MainWindow::setupConnections()
@@ -2459,8 +2291,8 @@ void MainWindow::setupConnections()
     });
     connect(m_business, &AnimeanBusiness::historyChanged,
             this, &MainWindow::scheduleHistoryRefresh);
-    connect(m_business, &AnimeanBusiness::pythonStateSyncRequested,
-            this, &MainWindow::syncEmbeddedPythonState);
+    connect(m_business, &AnimeanBusiness::pythonDebugMessage,
+            this, &MainWindow::appendPythonDebugMessage);
     connect(m_business, &AnimeanBusiness::requestSurfaceTextureView,
             this, &MainWindow::showTextureView);
     connect(m_business, &AnimeanBusiness::activeViewChanged, this, [this](const QString &viewName) {
@@ -2473,9 +2305,40 @@ void MainWindow::setupConnections()
     });
     connect(m_business, &AnimeanBusiness::requestAutoFitTextureControlView,
             this, &MainWindow::autoFitTextureControlView);
-    connect(m_business, &AnimeanBusiness::playbackStateChanged, this, [this](bool playing, int, const QString &) {
-        if (m_timeline) {
-            m_timeline->setPlaybackActive(playing);
+    connect(m_business, &AnimeanBusiness::playbackStateChanged, this,
+            [this](bool playing, int frameIndex, const QString &viewName) {
+        if (!m_timeline) {
+            return;
+        }
+        m_timeline->setPlaybackActive(playing);
+        if (playing && viewName == m_business->framePanelTargetViewName()) {
+            const AnimeTimelineState state = m_business->timelineState();
+            m_timeline->setFrameData(state.frameCount, frameIndex, state.holds);
+        }
+    });
+    connect(m_business, &AnimeanBusiness::toolLockStateChanged, this, [this]() {
+        if (!m_paintingToolsPanel) {
+            return;
+        }
+        for (PaintOpenGLWidget::Tool tool : kLockableTools) {
+            m_paintingToolsPanel->setToolEnabled(tool, !isToolLocked(int(tool)));
+        }
+    });
+    connect(m_business, &AnimeanBusiness::toolChanged, this,
+            [this](int tool, const QString &extraToolName) {
+        m_currentToolForOptions = tool;
+        m_activeExtraTool = extraToolName;
+        m_activeExtraToolProperty = m_business->activeExtraToolProperty();
+        const PaintOpenGLWidget::Tool armed = static_cast<PaintOpenGLWidget::Tool>(tool);
+        if (extraToolName.isEmpty()) {
+            for (ToolsPanel *panel : m_toolsPanels) {
+                if (panel) {
+                    panel->setTool(armed);
+                }
+            }
+        }
+        if (m_toolOptPanel) {
+            m_toolOptPanel->setTool(armed);
         }
     });
     connect(m_business, &AnimeanBusiness::toolOptionsLayoutChanged, this,
@@ -2483,6 +2346,11 @@ void MainWindow::setupConnections()
         if (m_toolOptPanel) {
             m_toolOptPanel->configureLayout(layout);
         }
+    });
+    connect(m_business, &AnimeanBusiness::toolOptionsStateChanged, this, [this]() {
+        m_toolFillAllLayers = m_business->toolFillAllLayers();
+        m_toolSmoothValue = m_business->toolSmoothValue();
+        m_toolPenWidth = m_business->toolPenWidth();
     });
 
     for (PaintOpenGLWidget *view : m_paintViews) {
@@ -2868,34 +2736,20 @@ void MainWindow::createToolDocks()
         const QJsonObject layout = m_business->toolOptionsLayout(static_cast<AnimeanBusiness::Tool>(int(tool)));
         toolOptPanel->configureLayout(layout);
     };
-    m_reloadToolOptions = [loadToolOptions](int tool) {
-        loadToolOptions(static_cast<PaintOpenGLWidget::Tool>(tool));
+    m_reloadToolOptions = [this](int) {
+        m_business->refreshToolOptions();
     };
 
-    auto applyTool = [this, toolOptPanel, loadToolOptions](PaintOpenGLWidget::Tool tool, bool reloadOptions) {
+    auto applyTool = [this](PaintOpenGLWidget::Tool tool, bool reloadOptions) {
         m_business->applyTool(int(tool), reloadOptions);
-        const PaintOpenGLWidget::Tool armed =
-            static_cast<PaintOpenGLWidget::Tool>(m_business->currentTool());
-        for (ToolsPanel *panel : m_toolsPanels) {
-            panel->setTool(armed);
-        }
-        if (armed != tool) {
-            return;
-        }
-        toolOptPanel->setTool(armed);
-        m_activeExtraTool.clear();   // a plain tool: nothing extra to rebuild
-        m_activeExtraToolProperty.clear();
-        if (reloadOptions) {
-            loadToolOptions(armed);
-        }
     };
 
     auto selectTool = [applyTool](PaintOpenGLWidget::Tool tool) {
         applyTool(tool, true);
     };
 
-    m_applyTool = [applyTool](int tool, bool reloadOptions) {
-        applyTool(static_cast<PaintOpenGLWidget::Tool>(tool), reloadOptions);
+    m_applyTool = [this](int tool, bool reloadOptions) {
+        m_business->applyTool(tool, reloadOptions);
     };
 
     loadToolOptions(PaintOpenGLWidget::Tool::Pen);
@@ -2903,7 +2757,7 @@ void MainWindow::createToolDocks()
     for (ToolsPanel *panel : m_toolsPanels) {
         connect(panel, &ToolsPanel::toolSelected, this, selectTool);
         connect(panel, &ToolsPanel::extraToolSelected, this,
-                [this, panel, toolOptPanel](const ToolsPanel::ExtraToolDefinition &tool) {
+                [this, panel](const ToolsPanel::ExtraToolDefinition &tool) {
             // The clicked page already cleared itself; the OTHER pages have to
             // be told, because a check on one page is not exclusive with a
             // check on another.
@@ -2920,43 +2774,8 @@ void MainWindow::createToolDocks()
             extra.baseTool = tool.baseTool;
             extra.page = tool.page;
             m_business->selectExtraTool(extra);
-            const PaintOpenGLWidget::Tool baseTool =
-                static_cast<PaintOpenGLWidget::Tool>(m_business->currentTool());
-            toolOptPanel->setTool(baseTool);
-            m_activeExtraTool = m_business->activeExtraTool();
-            m_activeExtraToolProperty = m_business->activeExtraToolProperty();
         });
     }
-
-    connect(toolOptPanel, &ToolOptPanel::colorSelected, this, [this, applyTool](const QColor &color) {
-        // ARM FIRST, PAINT SECOND, in both branches. Arming announces the
-        // tool change and the colour policy (pyfile/tool_colors.py) answers
-        // it by restoring that tool's remembered colour - so applying the
-        // pick before the arm loses the pick to the restore.
-        const bool onFill = m_business->currentTool() == int(PaintOpenGLWidget::Tool::Fill);
-        applyTool(onFill ? PaintOpenGLWidget::Tool::Fill
-                         : PaintOpenGLWidget::Tool::Pen, false);
-        m_business->setDrawingColor(color);
-    });
-
-    connect(toolOptPanel, &ToolOptPanel::fillScopeSelected, this, [this](PaintOpenGLWidget::FillScope scope) {
-        m_toolFillAllLayers = scope == PaintOpenGLWidget::FillScope::AllLayers;
-        m_business->setFillScope(int(scope));
-    });
-
-    connect(toolOptPanel, &ToolOptPanel::eraserModeSelected, this, [applyTool](PaintOpenGLWidget::Tool tool) {
-        applyTool(tool, false);
-    });
-
-    connect(toolOptPanel, &ToolOptPanel::smoothValueChanged, this, [this](int value) {
-        m_toolSmoothValue = value;
-        m_business->setSmoothValue(value);
-    });
-
-    connect(toolOptPanel, &ToolOptPanel::penWidthChanged, this, [this](int value) {
-        m_toolPenWidth = value;
-        m_business->setPenWidth(value);
-    });
 
     connect(toolOptPanel, &ToolOptPanel::optionChanged, this, [this](const QString &hook, const QString &name, const QString &type, const QVariant &value, int row, int startColumn, int endColumn) {
         m_business->sendToolOption(hook, name, type, value, row, startColumn, endColumn);
@@ -2970,26 +2789,15 @@ bool MainWindow::isToolLocked(int tool) const
 
 void MainWindow::applyLockedTools(const QString &view, const QStringList &tools)
 {
-    m_business->applyLockedTools(view, tools);
-    refreshToolLockState();
+    if (m_business) {
+        m_business->applyLockedTools(view, tools);
+    }
 }
 
 void MainWindow::refreshToolLockState()
 {
-    // One rail for the whole application, so it shows the active board's set.
-    // Called on both edges of the question: a new set arriving, and the active
-    // board changing under the set already stored.
-    PaintOpenGLWidget *view = activePaintWidget();
-    if (!m_paintingToolsPanel || !view) {
-        return;
-    }
-    for (PaintOpenGLWidget::Tool tool : kLockableTools) {
-        m_paintingToolsPanel->setToolEnabled(tool, !isToolLocked(int(tool)));
-    }
-    // The armed tool may have just been locked out from under the user. Arrow
-    // is always available, so it is where the board lands.
-    if (m_applyTool && isToolLocked(int(view->tool()))) {
-        m_applyTool(int(PaintOpenGLWidget::Tool::Arrow), true);
+    if (m_business) {
+        m_business->refreshToolLockState();
     }
 }
 
@@ -3152,7 +2960,6 @@ void MainWindow::newProject()
 void MainWindow::applyNewCanvasSize(const QSize &size)
 {
     m_business->applyNewCanvasSize(size);
-    refreshToolOptions();
 }
 
 void MainWindow::promptForNewCanvasOnStartup()
@@ -3253,7 +3060,6 @@ bool MainWindow::loadProjectFrom(const QString &fileName)
     m_childFilePath = m_business->childFilePath();
     updateWindowTitle();
     showMainPaintView();
-    refreshToolOptions();
     return true;
 }
 

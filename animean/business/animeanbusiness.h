@@ -303,6 +303,8 @@ public:
     bool isOnionAmLayers() const;
     bool isOnionGuideLines() const;
     QSet<int> onionFrames() const;
+    QStringList onionExcludeProperties() const;
+    QString onionLayerTag() const;
     AnimeTimelineState timelineState() const;
 
 public slots:
@@ -413,8 +415,15 @@ public slots:
     void toggleOnionFrame(int frame, bool on);
     void pullOnionPolicy();
 
+    // 嵌入式 Python 状态同步与脚本执行 (Embedded Python State Sync & Execution)
+    void syncEmbeddedPythonState();
+    static QString resolvePythonScriptPath(const QString &scriptName);
+    QString runEmbeddedPythonCommand(const QString &command, const QString &scriptDir = QString());
+    QString runPythonInitializationScript(QString *outputOut = nullptr);
+
 signals:
     void statusMessageChanged(const QString &message);
+    void pythonDebugMessage(const QString &message);
     void projectFilePathChanged(const QString &filePath);
     void childFilePathChanged(const QString &filePath);
     void windowTitleChanged(const QString &title);
@@ -449,9 +458,44 @@ signals:
     void pythonStateSyncRequested();
 
 private:
+    struct HeadlessViewState {
+        int tool = int(Tool::Pen);
+        QString strokeProperty;
+        QString activePythonTool;
+        int pythonNotifiedFrame = -1;
+        int pythonNotifiedLayer = -1;
+        int pythonNotifiedLayerId = -1;
+    };
+
     QString resolveViewName(const QString &viewName) const;
     AnimePaintViewAdapter *adapterFor(const QString &viewName);
     const AnimePaintViewAdapter *adapterFor(const QString &viewName) const;
+    void setHeadlessViewTool(const QString &viewName, int tool);
+    void setHeadlessViewStrokeProperty(const QString &viewName, const QString &property);
+    void notifyHeadlessFrameChangedIfNeeded(const QString &viewName);
+    void notifyHeadlessLayerChangedIfNeeded(const QString &viewName);
+    void notifyHeadlessHistoryRestore(const QString &viewName);
+    void dispatchHeadlessHandleHook(const QString &viewName,
+                                    const QString &phase);
+    void dispatchHeadlessExtraToolHook(const QString &viewName,
+                                       const QString &name,
+                                       const QString &property);
+    void dispatchHeadlessToolOptionHook(const QString &viewName,
+                                        const QString &hook,
+                                        const QString &name,
+                                        const QString &type,
+                                        const QVariant &value,
+                                        int row,
+                                        int startColumn,
+                                        int endColumn);
+    void dispatchHeadlessPadHook(const QString &viewName,
+                                 const QString &pad,
+                                 const QString &phase,
+                                 double x,
+                                 double y);
+    bool dispatchHeadlessLayerVisibilityHook(const QString &viewName,
+                                             int layerIndex,
+                                             bool visible);
 
     AnimeSceneModel m_internalMainModel;
     AnimeSceneModel m_internalChildModel;
@@ -462,6 +506,8 @@ private:
 
     QHash<QString, AnimePaintViewAdapter> m_adapters;
     QHash<QString, SelectionAttention> m_attentionByView;
+    QHash<QString, HeadlessViewState> m_headlessViewState;
+    int m_lastAutoFitChildFrame = -1;
 
     QString m_activeViewName = QStringLiteral("main");
     bool m_changeableTimeline = false;

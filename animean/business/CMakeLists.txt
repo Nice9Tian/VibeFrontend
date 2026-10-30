@@ -1,8 +1,19 @@
 include("${CMAKE_CURRENT_SOURCE_DIR}/LayerRules.cmake")
 
-animean_add_business_layer(animean_business
+set(ANIMEAN_BUSINESS_SOURCES
     animeanbusiness.cpp
     animeanbusiness.h
+)
+
+if(ANIMEAN_WITH_PYTHON)
+    list(APPEND ANIMEAN_BUSINESS_SOURCES
+        "${CMAKE_SOURCE_DIR}/pythonbind/python_bindings.cpp"
+        "${CMAKE_SOURCE_DIR}/pythonbind/python_bindings.h"
+    )
+endif()
+
+animean_add_business_layer(animean_business
+    ${ANIMEAN_BUSINESS_SOURCES}
 )
 
 # 业务层只依赖 animean_core、Qt::Core、Qt::Gui，绝不链接 Qt::Widgets 或 Qt::OpenGLWidgets。
@@ -18,10 +29,6 @@ target_compile_definitions(animean_business PRIVATE
 )
 
 if(ANIMEAN_WITH_PYTHON)
-    target_sources(animean_business PRIVATE
-        "${CMAKE_SOURCE_DIR}/pythonbind/python_bindings.cpp"
-        "${CMAKE_SOURCE_DIR}/pythonbind/python_bindings.h"
-    )
     target_include_directories(animean_business PUBLIC
         "${CMAKE_SOURCE_DIR}/pythonbind"
     )
