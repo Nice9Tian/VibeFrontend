@@ -1417,7 +1417,7 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
 async function main(): Promise<void> {
   await testDockModelAndReferences();
   await testHeadlessDomInteractionsAndQtLayout();
-  console.log("全部阶段 3（Qt 停靠与浮动嵌入框）测试通过。");
+  if (!process.exitCode) console.log("全部阶段 3（Qt 停靠与浮动嵌入框）测试通过。");
 }
 
 main().catch((err) => {
