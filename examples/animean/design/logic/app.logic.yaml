@@ -109,7 +109,7 @@ state:
     schema:
       type: object
       initial:
-        row_spacing: 8
+        row_spacing: 4
         column_spacing: 6
         controls:
           - { name: "color", type: "button", title: "Black", hook: "color", value: "black", row: 0, column: 0, state: { color: "black" } }
@@ -193,6 +193,21 @@ state:
     tabIndex:
       type: number
       initial: 0
+    colorPanelOpen:
+      type: boolean
+      initial: true
+    hue:
+      type: number
+      initial: 210
+    saturation:
+      type: number
+      initial: 78
+    brightness:
+      type: number
+      initial: 92
+    hexColor:
+      type: string
+      initial: "#3394eb"
   newProject:
     name:
       type: string
@@ -1034,6 +1049,35 @@ objects:
             args:
               mode: '"select"'
               index: value
+  colorPanelToggleBtn:
+    doc: docs/window.md#color-panel
+    props:
+      enabled: not layer.locked
+      selected: inspector.colorPanelOpen
+      text: 'inspector.colorPanelOpen ? "收起调色盘" : "展开调色盘"'
+    events:
+      click:
+        - set: inspector.colorPanelOpen = not inspector.colorPanelOpen
+  colorPanel:
+    doc: docs/window.md#color-panel
+    props:
+      visible: inspector.colorPanelOpen
+    effects:
+      visible: PanelExpand
+  colorPickerCanvas:
+    doc: docs/window.md#color-picker
+    props:
+      hue: inspector.hue
+      saturation: inspector.saturation
+      brightness: inspector.brightness
+      hexColor: inspector.hexColor
+    events:
+      click:
+        - set: 'inspector.hue = inspector.hue == 210 ? 32 : 210'
+        - set: 'inspector.hexColor = inspector.hue == 210 ? "#3394eb" : "#eb8f33"'
+  colorHexLabel:
+    props:
+      text: '"当前颜色：" + inspector.hexColor'
 
   timelineDock:
     doc: docs/window.md#timeline-dock

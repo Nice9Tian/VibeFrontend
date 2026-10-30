@@ -199,14 +199,13 @@ export default function create(el, { props, emit }) {
       let syncControl = () => {};
 
       if (type === "slider") {
-        const head = document.createElement("div");
-        head.className = "vf-std-dataform-head";
+        const rowBox = document.createElement("div");
+        rowBox.className = "vf-std-dataform-row";
         const lbl = document.createElement("span");
         lbl.textContent = title;
         const num = document.createElement("span");
         num.className = "vf-std-dataform-val";
         num.dataset.vfFieldValue = name;
-        head.append(lbl, num);
 
         const input = document.createElement("input");
         input.type = "range";
@@ -221,7 +220,8 @@ export default function create(el, { props, emit }) {
           num.textContent = input.value;
           emitField(c, Number(input.value));
         });
-        cell.append(head, input);
+        rowBox.append(lbl, input, num);
+        cell.append(rowBox);
 
         syncControl = (val, disabled) => {
           const v = String(val ?? c.min ?? 0);

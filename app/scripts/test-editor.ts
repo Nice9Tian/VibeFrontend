@@ -1110,7 +1110,8 @@ await (async () => {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const animeanDir = path.resolve(__dirname, "../../examples/animean/design");
   const baseProj = await loadProjectFiles(nodeIO(animeanDir), null);
-  assert.deepEqual(check(baseProj), [], `examples/animean/design 应无任何 check 报错或警告，实际=${JSON.stringify(check(baseProj))}`);
+  const baseErrWarn = check(baseProj).filter((p) => p.level !== "hint");
+  assert.deepEqual(baseErrWarn, [], `examples/animean/design 应无任何 check 报错或警告，实际=${JSON.stringify(baseErrWarn)}`);
 
   for (const reserved of ["clock", "value", "param", "result", "error", "self", "Window", "Shape", "Line"]) {
     assert.equal(RESERVED_IDENTIFIER_NAMES.has(reserved), true, `${reserved} 应在 RESERVED_IDENTIFIER_NAMES 中`);

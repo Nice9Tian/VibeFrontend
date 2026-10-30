@@ -129,6 +129,8 @@ User referenced "control=hintBox; type=Container (unconverted); path=panelWindow
 | `events` | 控件自己会发出的事件名，例如输入框的 `["change"]`。**鼠标事件不用写**，运行层会自动提供 |
 | `children` | 是否可以包含子节点 |
 | `qt` | 这个控件导出成 Qt 时对应什么，见第 9.5 节。不导出可以不写 |
+| `stateImages` | 状态图片（固定 5 状态 SVG + 九宫格拉伸 + 透明度过渡），见第 9.7 节。不用状态图片不写 |
+| `effects` | 控件自带的需要翻译的效果（如 `"paint": "ColorPickerDraw"` 或 `"visible": "PanelExpand"`），见第 9.4 节 |
 
 两个有固定含义的属性名：
 
@@ -306,7 +308,7 @@ conditions:
 | `bind` | 与一个状态路径双向绑定，控件声明中必须有 `bind` |
 | `conditions` | 属于这个控件的条件 |
 | `events` | 事件及其步骤 |
-| `effects` | 给属性的变化指定效果，目前只支持 `visible`，见第 9.4 节 |
+| `effects` | 给控件指定需要翻译的效果，支持 `visible`（过渡效果）和 `paint`（绘制效果），见第 9.4 节 |
 
 `scene.json` 中 `props` 的值是固定的默认值；YAML `props` 中同名属性的计算结果会覆盖它。
 
@@ -340,16 +342,17 @@ conditions:
 - [ ] `style.css` 的选择器里没有写类型名，文字放不下的情况有处理。
 - [ ] 业务管的状态只在业务事件的 `simulate` 里修改；`simulate` 里没有修改界面自己管的状态。
 - [ ] `effects` 里写的效果在 `effects/` 中有对应的文件夹；改了效果的实现之后，告诉用户它的哈希变了，Qt 那边的翻译要重做。
+- [ ] 用了 `stateImages` 的控件，5 个状态的 SVG 文件在控件文件夹内存在，且没有使用 Qt `QSvgRenderer` 不支持的 `<feDropShadow>`、`<feComponentTransfer>` 和 `clip-path`。
 
 ## 8. 原型还不支持的内容
 
 以下内容在设计文档中有，但当前原型没有实现，请不要使用：
 
-- 基础图形、线条与节点旋转导出成 Qt（详见第 10.5 节）
+- 普通控件（非基础图形的 `QWidget`）在导出成 Qt 时的旋转绘制（基础图形 `Shape` 的旋转已按 `QPainter` 导出，详见第 10.5 节）
 
 ## 9. 导出成 Qt 用到的写法
 
-设计项目可以导出成 Qt 工程（在工具的 `app/` 文件夹里运行 `npm run export:qt -- <设计项目文件夹>`）。导出后界面和业务代码分开：界面是生成的，业务通过接口接进来。下面几种写法决定接口里有什么。只在工具里预览、不导出的项目，可以完全不用它们。
+设计项目可以导出成 Qt 工程（在工具界面顶部点“导出成 Qt”按钮，或在工具的 `app/` 文件夹里运行 `npm run export:qt -- <设计项目文件夹>`）。导出后界面和业务代码分开：界面是生成的，业务通过接口接进来。下面几种写法决定接口里有什么。只在工具里预览、不导出的项目，可以完全不用它们。
 
 ### 9.1 状态归谁管
 
@@ -418,7 +421,12 @@ objects:
 
 ### 9.4 效果（需要翻译）
 
-控件显示和隐藏时的过渡动画写成“效果”，放在 `effects/<效果名>/`：
+不能由导出器自动转换的过渡动画和自绘图形写成“效果”，放在 `effects/<效果名>/`。效果分两类：
+
+1. **过渡效果（`kind: "visibility"` 或 `"transition"`）**：控制控件显示和隐藏时的过渡动画。
+2. **绘制效果（`kind: "paint"`）**：自定义绘制控件内容（如调色盘、曲线图）。
+
+#### 过渡效果（`kind: "visibility"`）
 
 ```json
 {
@@ -430,7 +438,7 @@ objects:
 }
 ```
 
-`kind` 目前只有 `visibility`（显示和隐藏的过渡）一种。`index.js` 默认导出一个播放函数：
+`index.js` 默认导出一个播放函数：
 
 ```js
 export default function play(el, { showing }) {
@@ -446,22 +454,46 @@ export default function play(el, { showing }) {
 
 - 调用时元素是显示着的：显示时运行层先把它显示出来再调用；隐藏时等返回的 Promise 结束才把它藏起来。
 - 放完后元素要回到原样。用 `el.animate()` 写的动画放完会自动还原；如果改了 `el.style`，要自己改回去。
-- 和控件一样，`index.js` 必须是单个文件，不能 `import`。
+- 在 YAML 的 `objects.<ID>.effects.visible`（或控件 `component.json` 的 `effects.visible`）里指定过渡效果：
+  ```yaml
+  objects:
+    detailPanel:
+      props:
+        visible: panel.expanded
+      effects:
+        visible: PanelExpand
+  ```
+- 导出成 Qt 后，在 `ui_interface/UiEffects.h` 生成 `vf::<Name>Effect<0xHash>`（虚函数 `QAbstractAnimation *create(QWidget *target, bool showing)`）；没有翻译（或加 `--no-effects`）时直接切到结束状态。
 
-在 YAML 里把效果指给某个控件的 `visible`：
+#### 绘制效果（`kind: "paint"`）
 
-```yaml
-objects:
-  detailPanel:
-    props:
-      visible: panel.expanded
-    effects:
-      visible: PanelExpand
+```json
+{
+  "name": "ColorPickerDraw",
+  "label": "调色盘自绘",
+  "description": "绘制色相环、饱和度/明度渐变方框与当前选中色采样点",
+  "kind": "paint",
+  "entry": "index.js"
+}
 ```
 
-导出成 Qt 时，效果不会自动转换，要由 Agent 在导出工程的界面效果层用 Qt 的动画重写一遍，这就是“需要翻译”。没有翻译时不影响行为，控件直接显示或隐藏，只是没有过渡。
+`index.js` 默认导出一个挂载绘制函数，签名与控件类似：
 
-每个效果有一个**哈希**，由效果的名字、种类和文件夹里全部文件的内容算出来（`label` 和 `description` 不算）。Qt 那边的翻译是照着某个哈希写的。**改了效果的实现，哈希就变了，Qt 那边旧的翻译会编译不过，必须重新翻译。** 所以改 `effects/` 里的文件之后，要在回复里告诉用户。当前的哈希显示在工具的问题栏里。
+```js
+export default function paint(el, { props, emit, mode }) {
+  // 在 el 内用 Canvas / SVG 绘制；返回 { update(props), destroy() }
+}
+```
+
+- 可以在控件 `component.json` 中写 `"effects": { "paint": "ColorPickerDraw" }`，也可以在 YAML 的 `objects.<ID>.effects.paint` 中为某个节点指定。
+- 导出成 Qt 后，在 `ui_interface/UiEffects.h` 生成 `vf::<Name>Effect<0xHash>`（虚函数 `void paint(QPainter *painter, const QRect &rect, const QVariantMap &props)`）；没有翻译（或加 `--no-effects`）时显示虚线占位框。
+
+#### 名 + 哈希与成对收藏
+
+- 每个效果有一个 8 位十六进制**哈希**，由效果的名字、种类和文件夹里全部文件的内容算出来（`label` 和 `description` 不算）。
+- 工具在素材栏、图层和问题栏上给带有效果的控件标出 `需翻译`。
+- Qt 那边的实现继承自 `vf::<Name>Effect<0xHash>`。**改了效果的实现，哈希就变了，重新导出后 Qt 编译立刻在对应效果的 `static_assert`（`[VF-EFFECT-HASH]`）处报错并指出位置**，提醒重新翻译。
+- 已翻译的效果可以把工具端实现（`effects/<Name>/`）和 Qt 端实现（`ui_effects/` 下的 `.h`/`.cpp`）在素材库中**成对收藏**（`pairedEffects`）：跨控件或跨项目复用时成对带过去，只要效果没改就无需再翻译。
 
 ### 9.5 控件在 Qt 里对应什么
 
@@ -484,7 +516,7 @@ objects:
 | `events` | 控件自己声明的事件 → Qt 的信号。`type` 是信号带的值的类型（`string`、`number`、`boolean`），不带值就不写 |
 
 - `visible`、`enabled` 和鼠标事件不用写，导出时自动处理。
-- 没有写 `qt` 的控件，导出后是一个占位框，上面写着类型名和 ID。它的事件、状态和逻辑照常工作，只是长相没有过来。
+- 没有写 `qt`（且没有 `stateImages` 或绘制效果）的控件，导出后是一个占位框，上面写着类型名和 ID。它的事件、状态和逻辑照常工作，只是长相没有过来。
 - 用到了、但没有写在 `qt.props` 里的属性（例如只影响网页样式的 `variant`），导出后不起作用，导出时会提示。
 
 ### 9.6 导出之后
@@ -495,7 +527,33 @@ objects:
 "export": { "qt": "../qt/ui" }
 ```
 
-导出的文件夹里有一份 `AGENTS.md`，写明哪些文件是生成的、不能改，以及怎样接业务、怎样翻译效果；`INTERFACE.md` 列出全部接口和相对上一次导出的变化。可以参考仓库里的 `examples/minimal/`。
+导出的文件夹里有一份 `AGENTS.md`，写明哪些文件是生成的、不能改，以及怎样接业务、怎样翻译效果；`INTERFACE.md` 列出全部接口和相对上一次导出的变化。可以参考仓库里的 `examples/minimal/` 和 `examples/animean/`。
+
+### 9.7 状态图片（`stateImages`）与 SVG 兼容规则
+
+不写网页 CSS 样式、而是用一套状态图片来画外观的控件，在 `component.json` 中写 `stateImages`：
+
+```json
+"stateImages": {
+  "normal":   "normal.svg",
+  "hover":    "hover.svg",
+  "pressed":  "pressed.svg",
+  "selected": "selected.svg",
+  "disabled": "disabled.svg",
+  "slice": [8, 8, 8, 8],
+  "transitionMs": 120
+}
+```
+
+- **固定 5 个状态**：`normal`（平时）、`hover`（悬停）、`pressed`（按下）、`selected`（选中，对应 `props.selected` 或 `props.checked` 为真）、`disabled`（不可用，对应 `enabled` 为假）。状态优先级为 `disabled > pressed > selected > hover > normal`。
+- **同一套 SVG 两边共用**：SVG 文件放在控件文件夹 `components/<类型名>/` 下；工具里用 SVG 九宫格绘制，导出成 Qt 后自动打包进 Qt 资源并用 `QSvgRenderer` 绘制，无需手工翻译。
+- **九宫格拉伸（`slice: [上, 右, 下, 左]`）**：单位为 SVG `viewBox` 坐标，拉伸控件时四角保持原尺寸不变形，只拉伸四条边和中间区域。
+- **文字另外画在上面**：SVG 里只画背景、边框和底纹，不要把文字烤进 SVG；文字由控件通过 `props.text`（以及可选的 `textColor`、`selectedTextColor`、`disabledTextColor`、`fontSize`、`align`）叠画在图片上方，文字随状态变化时不用重做图片。
+- **状态切换透明度过渡（`transitionMs`）**：默认 `120` 毫秒，切换状态时新旧状态图交叉淡入淡出。
+- **SVG 兼容检查（Qt `QSvgRenderer` 限制）**：Qt 的 `QSvgRenderer` 基于 SVG Tiny 1.2 子集，不支持以下三种写法，工具检查器（`check.ts`）会自动扫描控件文件夹下的 `.svg` 并给出替代建议：
+  1. `<feDropShadow>` → 改用 `<feGaussianBlur>` + `<feOffset>` + `<feMerge>`，或者在亮色图形下面垫一层带高斯模糊的深色图形。
+  2. `<feComponentTransfer>` → 直接在图形或阴影层上写 `opacity` / `fill-opacity`。
+  3. `clip-path` / `<clipPath>` → 直接把图形画成目标轮廓，或用 `<mask>`。
 
 ## 10. 基础图形和线条
 
@@ -588,7 +646,7 @@ objects:
 
 ### 10.5 导出
 
-形状和线条目前还不能导出成 Qt，导出后是占位框，事件和逻辑照常。除线条外的节点可以在 `scene.json` 节点顶层写 `"rotation": 角度`（单位为度，绕节点中心顺时针旋转，0 度时不写）；导出成 Qt 时暂不处理旋转，工具问题栏会给出提示。
+基础图形（`Shape`）和线条（`Line`）在导出成 Qt 时，由界面绑定层生成的 `VfGraphicWidget` 使用 `QPainter` 绘制：全部形状（基础图形与流程图图形）、线型（`solid` / `dashed` / `dotted`）、六种端头（`none` / `arrow` / `triangle` / `circle` / `diamond` / `bar`）、文字与线上标签、以及线条两端的挂接关系（含 `auto`、四条边、`outline` 轮廓挂点、折线与曲线路由）均按工具的同一套算法计算并绘制，事件和逻辑照常工作。除线条外的节点可以在 `scene.json` 节点顶层写 `"rotation": 角度`（单位为度，绕节点中心顺时针旋转，0 度时不写）：基础图形（`Shape`）在导出成 Qt 时按 `QPainter` 绕中心旋转绘制（挂接在旋转图形上的线条端点也会按旋转后的真实轮廓计算）；普通控件（如标准控件或自定义 `QWidget`）在 Qt Widget 体系中不能直接旋转，导出成 Qt 时暂不处理旋转，工具问题栏会保留提示。完整样板见仓库的 `examples/shapes/`。
 
 ## 11. 排版、标准控件、窗口分区与扩展逻辑
 
@@ -871,3 +929,13 @@ actions:
         - set: layers.selectedIndex = param.to
     ```
   - 在命令行测试步骤中可用 `drag:<控件ID>:<from>:<to>`（或 `reorder:<控件ID>:<from>:<to>`）触发同样的重排路径。
+
+### 11.10 编辑模式下的布局、停靠、菜单与状态归属操作
+
+以上所有布局、停靠、菜单和状态归属除了写入 `ui/scene.json` 和 `logic/app.logic.yaml` 外，都可以直接在工具界面里通过可视面板和画布拖拽完成：
+
+- **往布局容器里拖与重排**：从左侧素材栏把控件拖到 `VBox`、`HBox`、`Flow`、`Grid`、`Form`、`Stack` 或开启了 `layout` 的 `Container` / `Dock` / `Dialog` 上时，画布会高亮显示插入线或网格目标格，松开鼠标即按对应位置插入；在画布上拖动已排版的子控件可调整它在父容器里的顺序。
+- **右侧“布局”页签**：选中容器可切换排版方式（自由定位 / 竖排 / 横排 / 换行 / 网格 / 表单 / 层叠）、调整内边距 `padding` 与间距 `gap`、重排子控件并修改每个子控件的主轴伸缩 `stretch`；选中任意子控件可设置尺寸规则 `SizePolicy`（`horizontal`、`vertical`、`stretch`、`preferredWidth/Height`、`minWidth/Height`、`maxWidth/Height`、`fixedWidth/Height`）与网格单元格（`row`、`column`、`rowSpan`、`columnSpan`）；选中 `Dock` 停靠面板可切换停靠方向（`dockArea`: `left` / `right` / `top` / `bottom`）并调整在 `window.docks` 中的顺序；选中 `Window` 可指定中央区 `central` 与状态栏 `statusBar`。
+- **右侧“菜单”页签**：可直接增删改排主窗口顶部菜单栏（`window.menuBar`）与各菜单项（设置 `id`、`text`、`shortcut`、`checkable`、`checked`、关联停靠面板 `dock` 或触发全局事件 `emit`），也可一键把窗口中的 `Dock` 绑定到“视图”菜单。
+- **右侧“状态”页签**：可新增或删除状态变量，一键把任一状态标注为“界面自管（`owner: ui`）”或“业务管（`owner: business`）”，并可添加业务事件与全局条件。
+- **锁定与撤销/重做**：被锁定的节点（含继承了锁定父容器的子节点）禁止一切布局、尺寸、停靠、属性或菜单修改；所有通过面板和画布拖拽执行的修改均自动记入撤销/重做历史（`Ctrl+Z` / `Ctrl+Y`）。

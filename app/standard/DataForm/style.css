@@ -2,12 +2,12 @@
   box-sizing: border-box;
   width: 100%;
   height: 100%;
-  padding: 6px;
+  padding: 3px 4px;
   border: 1px solid var(--color-border, #cbd5e1);
   border-radius: 6px;
   background: var(--color-surface, #ffffff);
   color: var(--color-text, #1e293b);
-  font-size: 12px;
+  font-size: 11px;
   overflow: auto;
 }
 
@@ -17,7 +17,7 @@
   justify-content: center;
   height: 100%;
   color: var(--color-muted, #64748b);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .vf-std-dataform-grid {
@@ -29,7 +29,7 @@
 .vf-std-dataform-cell {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 
@@ -44,10 +44,14 @@
   color: var(--color-primary, #2563eb);
   font-variant-numeric: tabular-nums;
   font-weight: 500;
+  min-width: 18px;
+  text-align: right;
 }
 
 .vf-std-dataform-slider {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
+  height: 14px;
   margin: 0;
   accent-color: var(--color-primary, #2563eb);
 }
@@ -62,7 +66,7 @@
 .vf-std-dataform-select {
   flex: 1;
   min-width: 0;
-  height: 24px;
+  height: 20px;
   padding: 0 4px;
   border: 1px solid var(--color-border, #cbd5e1);
   border-radius: 4px;
@@ -75,13 +79,13 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 22px;
+  height: 18px;
   cursor: pointer;
 }
 
 .vf-std-dataform-btn {
-  height: 26px;
-  padding: 0 8px;
+  height: 20px;
+  padding: 0 6px;
   border: 1px solid var(--color-border, #cbd5e1);
   border-radius: 4px;
   background: var(--color-surface, #ffffff);
@@ -137,8 +141,8 @@
 .vf-std-dataform-subwindow {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 6px;
+  gap: 2px;
+  padding: 2px 6px;
   border: 1px dashed var(--color-primary, #2563eb);
   border-radius: 5px;
   background: rgba(37, 99, 235, 0.08);

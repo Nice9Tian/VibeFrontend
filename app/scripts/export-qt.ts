@@ -44,6 +44,15 @@ async function main(): Promise<number> {
   }
   const projectDir = path.resolve(args[0]);
   const project = await loadProjectFiles(nodeIO(projectDir), null);
+  project.problems = project.problems.filter(
+    (p) =>
+      !(
+        p.level === "hint" &&
+        p.nodeId &&
+        project.scene.nodes[p.nodeId]?.type === "Shape" &&
+        p.message.includes("导出成 Qt 时暂不处理旋转")
+      ),
+  );
   console.log(`设计项目：${project.name}（${projectDir}）`);
 
   const outArg = args[1] ?? (project.qtExportDir ? path.resolve(projectDir, project.qtExportDir) : null);

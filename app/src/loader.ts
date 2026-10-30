@@ -17,6 +17,7 @@ import {
   type Scene,
 } from "./model.ts";
 import type { ShapePreset } from "./shapes.ts";
+import { canonicalJson, normalizeLf } from "./structhash.ts";
 
 export const PRESETS_PATH = "ui/presets.json";
 
@@ -30,16 +31,15 @@ export interface ProjectIO {
 
 /**
  * 效果的哈希：对名字、种类和文件夹里全部文件的内容计算 MD5，取前 8 位。
- * label 和 description 是给人看的，不参与计算；换行符统一成 LF 再算。
+ * label 和 description 是给人看的，不参与计算；换行符统一成 LF、嵌套对象按键名递归排序后再算。
  */
 export function effectHash(decl: EffectDecl, files: Record<string, string>): string {
   const { label: _label, description: _description, ...rest } = decl;
-  const declKeys = Object.keys(rest).sort();
   const body = Object.keys(files)
     .filter((name) => name !== "effect.json")
     .sort()
-    .map((name) => [name, files[name].replace(/\r\n/g, "\n")]);
-  const canonical = JSON.stringify([declKeys.map((key) => [key, (rest as Record<string, unknown>)[key]]), body]);
+    .map((name) => [name, normalizeLf(files[name])]);
+  const canonical = JSON.stringify([canonicalJson(rest), body]);
   return md5(canonical).slice(0, 8);
 }
 
@@ -53,10 +53,17 @@ async function loadComponent(io: ProjectIO, folder: string): Promise<LoadedCompo
     return { decl: { type: folder }, folder, error: `component.json 不是有效的 JSON：${(e as Error).message}` };
   }
   if (!decl.type) decl.type = folder;
+  const svgFiles: Record<string, string> = {};
+  for (const entry of await io.listDir(`components/${folder}`)) {
+    if (!entry.isDir && entry.name.toLowerCase().endsWith(".svg")) {
+      const svgText = await io.readText(`components/${folder}/${entry.name}`);
+      if (svgText !== null) svgFiles[entry.name] = svgText;
+    }
+  }
   const entry = decl.entry ?? "index.js";
   const source = await io.readText(`components/${folder}/${entry}`);
-  if (source === null) return { decl, folder, error: `找不到实现文件 ${entry}` };
-  return { decl, folder, source };
+  if (source === null) return { decl, folder, svgFiles, error: `找不到实现文件 ${entry}` };
+  return { decl, folder, source, svgFiles };
 }
 
 async function loadEffect(io: ProjectIO, folder: string): Promise<LoadedEffect | null> {
@@ -134,7 +141,6 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
     if (!component) continue;
     components.set(component.decl.type, component);
     fingerprints.push(JSON.stringify(component.decl), component.source ?? "");
-    if (component.error) problems.push({ level: "error", message: `控件 ${component.decl.type}：${component.error}` });
   }
 
   const effects = new Map<string, LoadedEffect>();

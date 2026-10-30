@@ -3,8 +3,24 @@ import { isMap, parseDocument, type Document } from "yaml";
 import { listDir, readText, removeFile, watchProject, writeText } from "./fs";
 import { initDocView, syncDocView, syncPreviewSelectionToTextarea } from "./docview";
 import { initLibrary, renderLibraryPalette } from "./library";
-import { initPreviewLauncher, initStandalonePreviewWindow, syncStandalonePreviewTitle } from "./previewwindow";
+import { invoke } from "@tauri-apps/api/core";
+import { exportQt, type Manifest } from "./export/qt";
+import { getQtTemplates } from "./export/qt-templates-browser";
 import {
+  commitPaletteDropOnStage,
+  hideLayoutDropIndicator,
+  initLayoutEdit,
+  placeNewNodeInScene,
+  previewPaletteDropOnStage,
+  renderLayoutEditPane,
+  tryDropFreeNodeIntoLayoutContainer,
+  tryStartLayoutCanvasDrag,
+} from "./layoutedit";
+import { focusMenuItemInEditor, initMenuEdit, renderMenuEditPane } from "./menuedit";
+import { initStateEdit, renderStateEditPane } from "./stateedit";
+import { initPreviewLauncher, initStandalonePreviewWindow, isStandalonePreview, notifyMainWindowSelect, syncStandalonePreviewTitle } from "./previewwindow";
+import {
+  allSceneMenuIds,
   allWindowIds,
   appendSection,
   BUILTIN_TYPES,
@@ -12,15 +28,19 @@ import {
   computeSceneLayout,
   CONTAINER_DECL,
   declFor,
+  effectsForComponent,
+  effectsForNode,
   EXTERNAL_DECL,
   getSection,
   isLayoutPositionedNode,
   isPartitionedWindow,
+  isValidIdentifier,
   layoutOf,
   LAYOUT_TYPE_KINDS,
   loadProject,
   LOGIC_PATH,
   MOUSE_EVENTS,
+  paintEffectForNode,
   parentOfNode,
   parseDocRef,
   remapNodeChildren,
@@ -30,7 +50,9 @@ import {
   sectionNameFor,
   sectionOffsets,
   STANDARD_COMPONENTS,
+  setStageStyleTarget,
   syncResizedNodeDimensions,
+  visibleEffectForNode,
   walkMenuItems,
   type ComponentInstance,
   type MenuItemSpec,
@@ -81,7 +103,6 @@ import {
   type Side,
 } from "./shapes";
 import {
-  applyAddNodeToScene,
   applyDeleteFromScene,
   applyMoveToScene,
   applyPropsToScene,
@@ -555,7 +576,7 @@ function setShown(id: string, entry: Mounted, shown: boolean): void {
   const first = entry.shown === undefined;
   entry.shown = shown;
   const generation = ++entry.generation;
-  const effectName = project.logic.objects?.[id]?.effects?.visible;
+  const effectName = visibleEffectForNode(project, id);
   const play = effectName ? project.effects.get(effectName)?.play : undefined;
   const finish = () => {
     if (entry.generation === generation) entry.wrapper.style.display = shown ? "" : "none";
@@ -632,10 +653,34 @@ function applyViews(): void {
       entry.instance = undefined;
       showNodeError(entry.body, `运行出错：${(e as Error).message}`);
     }
+    const paintName = paintEffectForNode(project, id);
+    if (paintName) {
+      const paintEffect = project.effects.get(paintName);
+      const w = Math.max(1, box?.width ?? n?.width ?? 100);
+      const h = Math.max(1, box?.height ?? n?.height ?? 100);
+      if (paintEffect?.paint) {
+        try {
+          paintEffect.paint(entry.body, { props: view.props, width: w, height: h });
+        } catch (e) {
+          showNodeError(entry.body, `绘制效果 ${paintName} 运行出错：${(e as Error).message}`);
+        }
+      } else {
+        let placeholder = entry.body.querySelector<HTMLElement>(".vf-paint-placeholder");
+        if (!placeholder) {
+          placeholder = document.createElement("div");
+          placeholder.className = "vf-paint-placeholder";
+          placeholder.style.cssText =
+            "width:100%;height:100%;box-sizing:border-box;border:1px dashed #94a3b8;border-radius:6px;background:rgba(248,250,252,0.85);color:#475569;font-size:12px;display:flex;align-items:center;justify-content:center;text-align:center;padding:6px;";
+          entry.body.replaceChildren(placeholder);
+        }
+        placeholder.textContent = `[绘制效果占位：${paintName}]`;
+      }
+    }
   }
 
   // 同步菜单项按钮的可见、可用、文本和勾选标记
-  for (const btn of document.querySelectorAll<HTMLButtonElement>("#stage [data-vf-menu-item]")) {
+  const stageDoc = (document.getElementById("stage-iframe") as HTMLIFrameElement | null)?.contentDocument ?? document;
+  for (const btn of stageDoc.querySelectorAll<HTMLButtonElement>("[data-vf-menu-item]")) {
     const itemId = btn.dataset.vfMenuItem;
     if (!itemId) continue;
     const view = runtime.view(itemId);
@@ -700,6 +745,196 @@ function showPreviewPopupMenu(x: number, y: number, specs: MenuItemSpec[]): void
   if (items.length > 0) openMenu(x, y, items);
 }
 
+const STAGE_IFRAME_BASE_CSS = `
+:root {
+  --bg: #f3f4f6;
+  --panel: #ffffff;
+  --line: #d9dce1;
+  --text: #1f2430;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-soft: #dbe7ff;
+  --preview: #d9480f;
+  --error: #c62828;
+  --hint: #8a6d1a;
+  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+}
+* {
+  box-sizing: border-box;
+}
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+}
+body.preview {
+  user-select: auto;
+}
+button, input, textarea, select {
+  font: inherit;
+  color: inherit;
+}
+#stage-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.vf-node {
+  position: absolute;
+}
+.vf-body {
+  position: absolute;
+  inset: 0;
+}
+.vf-node[data-vf-type="Container"] > .vf-body,
+.vf-node[data-vf-type="VBox"] > .vf-body:not(:empty),
+.vf-node[data-vf-type="HBox"] > .vf-body:not(:empty),
+.vf-node[data-vf-type="Grid"] > .vf-body:not(:empty),
+.vf-node[data-vf-type="Form"] > .vf-body:not(:empty),
+.vf-node[data-vf-type="Stack"] > .vf-body:not(:empty) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed #9aa1ad;
+  color: #8a909b;
+  font-size: 12px;
+  overflow: hidden;
+}
+body.preview .vf-node[data-vf-type="Container"] > .vf-body {
+  border-color: #dfe2e7;
+  color: #c3c7ce;
+}
+.vf-node[data-vf-type="External"] > .vf-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #9aa1ad;
+  background: repeating-linear-gradient(45deg, #f4f5f7 0 10px, #eceef1 10px 20px);
+  color: #6b7280;
+  font-size: 12px;
+  text-align: center;
+  white-space: pre-line;
+  overflow: hidden;
+}
+.vf-node.vf-ghost {
+  opacity: 0.35;
+  outline: 1px dashed #9aa1ad;
+}
+.vf-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--error);
+  background: #fdecec;
+  color: var(--error);
+  font-size: 12px;
+  overflow: hidden;
+  text-align: center;
+}
+.vf-node[data-vf-type="Shape"],
+.vf-node[data-vf-type="Line"] {
+  pointer-events: none;
+}
+.vf-shape-svg .vf-hit {
+  pointer-events: all;
+}
+.vf-line-svg .vf-hit {
+  pointer-events: stroke;
+}
+.vf-shape-svg,
+.vf-line-svg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+  overflow: visible;
+}
+.vf-shape-text {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  line-height: 1.3;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.vf-line-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #fff;
+  line-height: 1.3;
+  white-space: pre;
+}
+`;
+
+function ensureStageIframe(): HTMLElement {
+  const stage = $("stage");
+  let iframe = document.getElementById("stage-iframe") as HTMLIFrameElement | null;
+  if (!iframe) {
+    iframe = document.createElement("iframe");
+    iframe.id = "stage-iframe";
+    iframe.title = "设计窗口";
+    stage.prepend(iframe);
+  } else if (iframe.parentElement !== stage) {
+    stage.prepend(iframe);
+  }
+  const doc = iframe.contentDocument!;
+  let baseStyle = doc.getElementById("vf-stage-base-styles") as HTMLStyleElement | null;
+  if (!baseStyle) {
+    baseStyle = doc.createElement("style");
+    baseStyle.id = "vf-stage-base-styles";
+    baseStyle.textContent = STAGE_IFRAME_BASE_CSS;
+    doc.head.prepend(baseStyle);
+  }
+  setStageStyleTarget(doc);
+  doc.body.classList.toggle("preview", mode === "preview");
+  doc.body.classList.toggle("edit", mode === "edit");
+  let canvas = doc.getElementById("stage-canvas") as HTMLElement | null;
+  if (!canvas) {
+    canvas = doc.createElement("div");
+    canvas.id = "stage-canvas";
+    doc.body.append(canvas);
+  }
+  if (!(doc as unknown as { __vfStageEventsBound?: boolean }).__vfStageEventsBound) {
+    (doc as unknown as { __vfStageEventsBound?: boolean }).__vfStageEventsBound = true;
+    doc.addEventListener(
+      "click",
+      (e) => {
+        if (!e.altKey || mode !== "preview") return;
+        const wrapper = (e.target as Element | null)?.closest<HTMLElement>(".vf-node");
+        const id = wrapper?.dataset.vfId;
+        if (id) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (isStandalonePreview()) {
+            void notifyMainWindowSelect(id);
+          } else if (node(id)) {
+            select(id);
+            showRightTab("doc");
+          }
+        }
+      },
+      true,
+    );
+    doc.addEventListener("click", (e) => {
+      if (mode === "preview" && !e.altKey) previewRuntime?.dispatch(null, "window.click");
+    });
+  }
+  return canvas;
+}
+
 function renderStage(): void {
   for (const entry of mounted.values()) {
     try {
@@ -712,7 +947,9 @@ function renderStage(): void {
 
   const root = node(project.scene.root);
   const stage = $("stage");
-  stage.innerHTML = "";
+  const stageCanvas = ensureStageIframe();
+  stageCanvas.innerHTML = "";
+  overlay.remove();
   if (!root) return;
   stage.style.width = `${root.width}px`;
   stage.style.height = `${root.height}px`;
@@ -751,18 +988,24 @@ function renderStage(): void {
         if (isRadio) btn.dataset.vfMenuRadio = "1";
         if (item.shortcut) btn.title = `${item.text} (${item.shortcut})`;
         btn.textContent = item.text;
-        btn.addEventListener("click", () => triggerPreviewMenuItem(item.id));
+        btn.addEventListener("click", () => {
+          if (mode === "preview" && previewRuntime) {
+            triggerPreviewMenuItem(item.id);
+          } else if (mode === "edit") {
+            focusMenuItemInEditor(item.id);
+          }
+        });
         hiddenItems.append(btn);
       });
       group.append(titleSpan, hiddenItems);
       bar.append(group);
     }
-    stage.append(bar);
+    stageCanvas.append(bar);
   }
 
-  for (const child of childrenOf(root)) buildNode(child, stage);
+  for (const child of childrenOf(root)) buildNode(child, stageCanvas);
   for (const winId of allWindowIds(project.scene)) {
-    if (winId !== project.scene.root) buildNode(winId, stage);
+    if (winId !== project.scene.root) buildNode(winId, stageCanvas);
   }
   applyViews();
   if (mode === "edit") {
@@ -1566,10 +1809,20 @@ function capturePointer(e: PointerEvent): void {
 }
 const MIN_SIZE = 8;
 
-/** 落在哪个能装东西且未锁定的节点里：从鼠标下最里面的节点往外找。 */
-function containerAt(px: number, py: number): string {
+/** 落在哪个能装东西的节点里：从鼠标下最里面的节点往外找（不穿透已锁定的容器，由调用方统一拒绝向锁定容器放入控件）。 */
+function containerAt(px: number, py: number, excludeId?: string): string {
   for (let hit = hitTest(px, py); hit; hit = parentOf(hit)) {
-    if (canHoldChildren(hit) && !isNodeLocked(project.scene, hit)) return hit;
+    if (excludeId) {
+      let insideExcluded = false;
+      for (let p: string | null = hit; p; p = parentOf(p)) {
+        if (p === excludeId) {
+          insideExcluded = true;
+          break;
+        }
+      }
+      if (insideExcluded) continue;
+    }
+    if (canHoldChildren(hit)) return hit;
   }
   return project.scene.root;
 }
@@ -1584,6 +1837,10 @@ overlay.addEventListener("pointerdown", (e) => {
   if (tool.kind === "preset") {
     const preset = tool.preset;
     const parentId = containerAt(pt.x, pt.y);
+    if (isNodeLocked(project.scene, parentId)) {
+      toast("目标容器已锁定，无法放入控件");
+      return;
+    }
     if (preset.type === "Line") {
       gesture = { kind: "line", preset, start: anchorAt(pt, e, null, null), end: null, parentId, rawStart: pt, rawEnd: null };
     } else {
@@ -1595,8 +1852,13 @@ overlay.addEventListener("pointerdown", (e) => {
   }
   if (tool.kind === "node") {
     // 画容器、外部容器或控件：和画图形一样拖出大小
+    const parentId = containerAt(pt.x, pt.y);
+    if (parentId && isNodeLocked(project.scene, parentId)) {
+      toast("目标容器已锁定，无法放入控件");
+      return;
+    }
     const snapped = snapPoint(pt.x, pt.y, snapTargets(null), snapOptions(e));
-    gesture = { kind: "draw", preset: null, nodeType: tool.type, start: { x: snapped.x, y: snapped.y }, rect: null, parentId: containerAt(pt.x, pt.y), targets: snapTargets(null) };
+    gesture = { kind: "draw", preset: null, nodeType: tool.type, start: { x: snapped.x, y: snapped.y }, rect: null, parentId, targets: snapTargets(null) };
     capturePointer(e);
     return;
   }
@@ -1706,6 +1968,13 @@ overlay.addEventListener("pointerdown", (e) => {
     return;
   }
 
+  const stageDoc = (document.getElementById("stage-iframe") as HTMLIFrameElement | null)?.contentDocument;
+  const menuBtn = stageDoc?.elementFromPoint(pt.x, pt.y)?.closest<HTMLElement>("[data-vf-menu-item]");
+  if (menuBtn?.dataset.vfMenuItem) {
+    focusMenuItemInEditor(menuBtn.dataset.vfMenuItem);
+    return;
+  }
+
   const id = hitTest(pt.x, pt.y);
   const type = id ? node(id)?.type : undefined;
   // 框选：从空白处、或者从一个还没选中的容器上拖出去（和 Figma 在画框里拖的效果一样）。只点一下不拖，就是选中它
@@ -1725,6 +1994,9 @@ overlay.addEventListener("pointerdown", (e) => {
   }
   const ids = filterUnlocked(project.scene, topSelection()).filter((each) => !isLayoutPositionedNode(project.scene, each));
   if (ids.length === 0) {
+    if (!toggleOnClick && selectedIds.length === 1 && selectedId && tryStartLayoutCanvasDrag(selectedId, e)) {
+      return;
+    }
     if (toggleOnClick) gesture = { kind: "move", ids: [], origins: [], start: { x: e.clientX, y: e.clientY }, abs: absRect(id), moved: false, targets: [], toggleOnClick };
     return;
   }
@@ -2076,8 +2348,12 @@ overlay.addEventListener("pointerup", (e) => {
   endGesture();
   if (!finished) return;
   if (finished.kind === "move") {
-    if (finished.moved) void saveScene();
-    else if (finished.toggleOnClick) select(finished.toggleOnClick, true);
+    if (finished.moved) {
+      if (finished.ids.length === 1) {
+        tryDropFreeNodeIntoLayoutContainer(finished.ids[0], stagePoint(e));
+      }
+      void saveScene();
+    } else if (finished.toggleOnClick) select(finished.toggleOnClick, true);
     return;
   }
   if (
@@ -2346,11 +2622,12 @@ function newId(type: string, idBase?: string): string {
   const base = idBase || (type === "Container" ? "box" : type === "External" ? "host" : type.charAt(0).toLowerCase() + type.slice(1));
   const taken = new Set([
     ...Object.keys(project.scene.nodes),
+    ...allSceneMenuIds(project.scene),
     ...Object.keys(project.logic.state ?? {}),
     ...Object.keys(project.logic.conditions ?? {}),
   ]);
   for (let i = 1; ; i++) {
-    if (!taken.has(`${base}${i}`)) return `${base}${i}`;
+    if (!taken.has(`${base}${i}`) && isValidIdentifier(`${base}${i}`)) return `${base}${i}`;
   }
 }
 
@@ -2361,35 +2638,38 @@ function idBaseOf(id: string): string {
 
 /** 放一个新节点进画布。rect 是设计窗口里的绝对坐标。 */
 async function createNode(type: string, parentId: string, rect: Rect, props?: Record<string, Value>, idBase?: string): Promise<string> {
-  const decl = declFor(project, type) ?? CONTAINER_DECL;
-  const parentRect = absRect(parentId);
-  const id = newId(type, idBase);
-  const parentNode = node(parentId);
-  const omitCoords =
-    (parentNode ? layoutOf(parentNode) !== null : false) ||
-    (type === "Dock" && parentId === project.scene.root && !!parentNode && isPartitionedWindow(parentNode));
-  const created: SceneNode = {
-    type,
-    width: Math.max(1, Math.round(rect.width)),
-    height: Math.max(1, Math.round(rect.height)),
-  };
-  if (!omitCoords) {
-    created.x = Math.round(rect.x - (parentId === project.scene.root ? 0 : parentRect.x));
-    created.y = Math.round(rect.y - (parentId === project.scene.root ? 0 : parentRect.y));
+  if (isNodeLocked(project.scene, parentId)) {
+    toast("目标容器已锁定，无法放入控件");
+    return "";
   }
-  if (props && Object.keys(props).length > 0) created.props = props;
-  if (decl.children) created.children = [];
-  project.scene = applyAddNodeToScene(project.scene, parentId, id, created);
+  const decl = declFor(project, type) ?? CONTAINER_DECL;
+  const id = newId(type, idBase);
+  const ok = placeNewNodeInScene(
+    project.scene,
+    type,
+    id,
+    rect.x + rect.width / 2,
+    rect.y + rect.height / 2,
+    { width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) },
+    {
+      targetContainerId: parentId,
+      exactTopLeft: { x: rect.x, y: rect.y },
+      props,
+      canHaveChildren: Boolean(decl.children),
+      boxes: currentLayoutBoxes(),
+    },
+  );
+  if (!ok) {
+    toast("目标容器已锁定，无法放入控件");
+    return "";
+  }
   selectedId = id;
   await saveScene();
   return id;
 }
 
 async function addNode(type: string, px: number, py: number): Promise<void> {
-  const decl = declFor(project, type) ?? CONTAINER_DECL;
-  const size = decl.defaultSize ?? CONTAINER_DECL.defaultSize!;
-  // 落点在能放子节点的控件里，就放进去；否则放在窗口里
-  await createNode(type, containerAt(px, py), { x: px - size.width / 2, y: py - size.height / 2, width: size.width, height: size.height });
+  await commitPaletteDropOnStage(type, px, py);
 }
 
 /** 预设的属性，加上上次用过的颜色和线型（工具自带的预设才沿用；文字和用户存的预设保持原样）。 */
@@ -2880,9 +3160,14 @@ async function revertToContainer(id: string): Promise<void> {
 async function renameId(oldId: string, nextId: string): Promise<void> {
   if (nextId === oldId) return;
   if (isNodeLocked(project.scene, oldId)) return toast("控件已锁定，解锁后才能重命名");
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(nextId)) return toast("ID 只能用字母、数字和下划线，且不能以数字开头");
-  if (node(nextId) || project.logic.state?.[nextId] !== undefined || project.logic.conditions?.[nextId]) {
-    return toast(`“${nextId}”已经被别的控件、状态或条件使用`);
+  if (!isValidIdentifier(nextId)) return toast("ID 只能用字母、数字和下划线，不能以数字开头且不能使用保留字");
+  if (
+    node(nextId) ||
+    allSceneMenuIds(project.scene).has(nextId) ||
+    project.logic.state?.[nextId] !== undefined ||
+    project.logic.conditions?.[nextId]
+  ) {
+    return toast(`“${nextId}”已经被别的控件、菜单、状态或条件使用`);
   }
   const doc = parseDocument(project.logicText);
   if (doc.errors.length > 0) return toast("YAML 有语法错误，请先修正再重命名");
@@ -3648,11 +3933,20 @@ function renderShapePalette(): void {
 // ---------- 素材栏与图层 ----------
 
 function renderPalette(): void {
-  const make = (type: string, label: string, title: string) => {
+  const make = (type: string, label: string, title: string, effectNames: string[] = []) => {
     const el = document.createElement("div");
     el.className = "palette-item";
     el.dataset.type = type;
-    el.textContent = label;
+    const textSpan = document.createElement("span");
+    textSpan.textContent = label;
+    el.append(textSpan);
+    if (effectNames.length > 0) {
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      badge.textContent = "需翻译";
+      badge.title = `包含需要翻译的效果（${effectNames.join("、")}）；导出成 Qt 后要在界面效果层为它提供实现`;
+      el.append(badge);
+    }
     el.title = `${title}${title ? "\n" : ""}拖进设计窗口；或者点一下，再在设计窗口里拖出大小`;
     el.addEventListener("pointerdown", (e) => startPaletteDrag(e, type));
     if (!BUILTIN_TYPES.includes(type)) {
@@ -3682,7 +3976,14 @@ function renderPalette(): void {
   );
   const projectItems = [...project.components.values()]
     .filter((component) => !component.error)
-    .map((component) => make(component.decl.type, component.decl.label ?? component.decl.type, component.decl.description ?? ""));
+    .map((component) =>
+      make(
+        component.decl.type,
+        component.decl.label ?? component.decl.type,
+        component.decl.description ?? "",
+        effectsForComponent(component.decl),
+      ),
+    );
   const items = [...stdItems, ...projectItems];
   if (items.length === 0) {
     const empty = document.createElement("div");
@@ -3707,6 +4008,12 @@ function startPaletteDrag(down: PointerEvent, type: string): void {
   const place = (e: PointerEvent) => {
     ghost.style.left = `${e.clientX - size.width / 2}px`;
     ghost.style.top = `${e.clientY - size.height / 2}px`;
+    if (Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) > 4) {
+      const rect = $("stage").getBoundingClientRect();
+      const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+      if (inside) previewPaletteDropOnStage(type, (e.clientX - rect.left) / viewZoom(), (e.clientY - rect.top) / viewZoom());
+      else hideLayoutDropIndicator();
+    }
   };
   place(down);
   document.body.append(ghost);
@@ -3714,6 +4021,7 @@ function startPaletteDrag(down: PointerEvent, type: string): void {
     document.removeEventListener("pointermove", place);
     document.removeEventListener("pointerup", up);
     ghost.remove();
+    hideLayoutDropIndicator();
     // 只点了一下没有拖：把它选为工具，再在设计窗口里拖出大小
     if (Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) <= 4) {
       setTool(tool.kind === "node" && tool.type === type ? { kind: "select" } : { kind: "node", type });
@@ -3743,12 +4051,15 @@ function renderLayers(): void {
     type.className = "type";
     type.textContent = typeLabel(id);
     row.append(name, type);
-    const effectName = project.logic.objects?.[id]?.effects?.visible;
-    if (effectName) {
+    const nodeEffects = effectsForNode(project, id);
+    const effectList: string[] = [];
+    if (nodeEffects.visible) effectList.push(`过渡效果 ${nodeEffects.visible}`);
+    if (nodeEffects.paint) effectList.push(`绘制效果 ${nodeEffects.paint}`);
+    if (effectList.length > 0) {
       const badge = document.createElement("span");
       badge.className = "badge";
       badge.textContent = "需翻译";
-      badge.title = `显示和隐藏时播放效果 ${effectName}；导出成 Qt 后要在界面效果层为它提供实现`;
+      badge.title = `包含${effectList.join("、")}；导出成 Qt 后要在界面效果层为它提供实现`;
       row.append(badge);
     }
     if (id !== project.scene.root) {
@@ -3842,11 +4153,13 @@ let docTarget: { path: string; section: string | null } | null = null;
 let docTimer: number | undefined;
 let yamlTimer: number | undefined;
 
-function showRightTab(tab: "doc" | "yaml"): void {
-  $("tab-doc").setAttribute("aria-selected", String(tab === "doc"));
-  $("tab-yaml").setAttribute("aria-selected", String(tab === "yaml"));
-  $("pane-doc").hidden = tab !== "doc";
-  $("pane-yaml").hidden = tab !== "yaml";
+function showRightTab(tab: string): void {
+  for (const id of ["doc", "yaml", "layout", "menu", "state"]) {
+    const t = document.getElementById(`tab-${id}`);
+    const p = document.getElementById(`pane-${id}`);
+    if (t) t.setAttribute("aria-selected", String(tab === id));
+    if (p) p.hidden = tab !== id;
+  }
   if (tab === "yaml" && selectedId) scrollYamlTo(`  ${selectedId}:`);
 }
 
@@ -3914,6 +4227,9 @@ function renderRight(): void {
     }
   }
   syncDocView();
+  renderLayoutEditPane();
+  renderMenuEditPane();
+  renderStateEditPane();
 }
 
 /** 把 YAML 编辑器滚动到以 prefix 开头的那一行。 */
@@ -4335,7 +4651,314 @@ function renderAll(): void {
   syncStandalonePreviewTitle(project);
 }
 
+// ---------- 导出成 Qt ----------
+
+interface WriteQtExportReport {
+  outDir: string;
+  totalFiles: number;
+  written: number;
+  scaffolded: number;
+  removed: number;
+}
+
+function isInTauri(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+async function openExportQtModal(): Promise<void> {
+  if (docDirty || yamlDirty) {
+    await flushEditors();
+  }
+  document.getElementById("export-qt-modal")?.remove();
+
+  const inTauri = isInTauri();
+  let defaultDir = project.qtExportDir || "../qt/ui";
+  if (inTauri) {
+    try {
+      defaultDir = await invoke<string>("default_qt_export_dir", {
+        configured: project.qtExportDir ?? null,
+      });
+    } catch {
+      // 回退到相对路径
+    }
+  }
+
+  const backdrop = document.createElement("div");
+  backdrop.id = "export-qt-modal";
+  backdrop.className = "vf-modal-backdrop";
+
+  const modal = document.createElement("div");
+  modal.className = "vf-modal";
+  modal.style.width = "min(680px, 92vw)";
+
+  const header = document.createElement("div");
+  header.className = "vf-modal-header";
+  const title = document.createElement("strong");
+  title.textContent = `导出成 Qt · ${project.name}`;
+  const closeTopBtn = document.createElement("button");
+  closeTopBtn.id = "export-qt-close";
+  closeTopBtn.type = "button";
+  closeTopBtn.textContent = "关闭";
+  closeTopBtn.addEventListener("click", () => backdrop.remove());
+  header.append(title, closeTopBtn);
+
+  const body = document.createElement("div");
+  body.className = "export-qt-body";
+
+  const dirRow = document.createElement("div");
+  dirRow.className = "export-qt-row";
+  const dirLabel = document.createElement("label");
+  dirLabel.htmlFor = "export-qt-dir";
+  dirLabel.textContent = "导出目录";
+  const dirInput = document.createElement("input");
+  dirInput.id = "export-qt-dir";
+  dirInput.type = "text";
+  dirInput.value = defaultDir;
+  dirInput.placeholder = "例如 ../qt/ui 或完整绝对路径";
+  dirInput.spellcheck = false;
+
+  const browseBtn = document.createElement("button");
+  browseBtn.id = "export-qt-browse";
+  browseBtn.type = "button";
+  browseBtn.textContent = "选择文件夹…";
+
+  dirRow.append(dirLabel, dirInput, browseBtn);
+  body.append(dirRow);
+
+  const modeNotice = document.createElement("div");
+  modeNotice.id = "export-qt-mode-notice";
+  modeNotice.className = `export-qt-notice ${inTauri ? "" : "warn"}`;
+  modeNotice.textContent = inTauri
+    ? "桌面版模式：点击“执行导出”会将生成的 Qt 工程文件写入上方选定目录（ui_effects/ 仅在不存在时写入起始文件）。"
+    : "当前在浏览器模式下运行，无法直接写入本地磁盘。您仍可点击“执行导出”预览导出检查结果与接口变化清单（changes）；实际写入磁盘请使用桌面版（Tauri）或运行命令行：npm run export:qt -- <设计项目文件夹> [导出文件夹]。";
+  body.append(modeNotice);
+
+  const resultBox = document.createElement("div");
+  resultBox.id = "export-qt-result";
+  resultBox.style.display = "flex";
+  resultBox.style.flexDirection = "column";
+  resultBox.style.gap = "10px";
+  body.append(resultBox);
+
+  const renderResultView = (
+    statusKind: "error" | "warn" | "success",
+    statusText: string,
+    summaryText: string | null,
+    changes: string[] | null,
+    problems: Array<{ level: "error" | "hint"; message: string }>,
+    hasPrevious = false,
+  ) => {
+    resultBox.replaceChildren();
+
+    const banner = document.createElement("div");
+    banner.id = "export-qt-status";
+    banner.className = `export-qt-notice ${statusKind}`;
+    banner.textContent = statusText;
+    resultBox.append(banner);
+
+    if (summaryText) {
+      const summarySec = document.createElement("div");
+      summarySec.id = "export-qt-summary";
+      summarySec.className = "export-qt-section";
+      const h4 = document.createElement("h4");
+      h4.textContent = "导出接口概览";
+      const p = document.createElement("div");
+      p.style.fontSize = "12px";
+      p.style.lineHeight = "1.55";
+      p.textContent = summaryText;
+      summarySec.append(h4, p);
+      resultBox.append(summarySec);
+    }
+
+    if (changes !== null) {
+      const changeSec = document.createElement("div");
+      changeSec.id = "export-qt-changes";
+      changeSec.className = "export-qt-section";
+      const h4 = document.createElement("h4");
+      h4.textContent = "接口变化清单（changes）";
+      changeSec.append(h4);
+      if (changes.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "muted";
+        empty.style.fontSize = "12px";
+        empty.textContent = !isInTauri()
+          ? "浏览器模式下无法读取目标目录的导出记录 vf-export.json，按第一次导出预览。"
+          : !hasPrevious
+            ? "这是第一次导出到这个文件夹。"
+            : "接口和上一次导出相同（无新增、删除或签名变化）。";
+        changeSec.append(empty);
+      } else {
+        const ul = document.createElement("ul");
+        ul.className = "export-qt-list";
+        for (const ch of changes) {
+          const li = document.createElement("li");
+          li.textContent = ch;
+          ul.append(li);
+        }
+        changeSec.append(ul);
+      }
+      resultBox.append(changeSec);
+    }
+
+    if (problems.length > 0) {
+      const probSec = document.createElement("div");
+      probSec.id = "export-qt-problems";
+      probSec.className = "export-qt-section";
+      const h4 = document.createElement("h4");
+      h4.textContent = `检查与导出提示（${problems.length} 条）`;
+      const ul = document.createElement("ul");
+      ul.className = "export-qt-list";
+      for (const prob of problems) {
+        const li = document.createElement("li");
+        li.className = prob.level;
+        li.textContent = `${prob.level === "error" ? "错误" : "提示"}：${prob.message}`;
+        ul.append(li);
+      }
+      probSec.append(h4, ul);
+      resultBox.append(probSec);
+    }
+  };
+
+  browseBtn.addEventListener("click", async () => {
+    if (!isInTauri()) {
+      renderResultView(
+        "warn",
+        "浏览器模式下无法调用系统原生文件夹选择框，请在桌面版（Tauri）中使用，或直接在输入框中填写目标路径。",
+        null,
+        null,
+        [],
+      );
+      return;
+    }
+    try {
+      const picked = await invoke<string | null>("pick_export_dir", {
+        initialDir: dirInput.value.trim() || null,
+      });
+      if (picked) {
+        dirInput.value = picked;
+      }
+    } catch (e) {
+      renderResultView("error", `选择文件夹失败：${(e as Error).message}`, null, null, []);
+    }
+  });
+
+  const runExport = async () => {
+    const outDir = dirInput.value.trim();
+    if (!outDir) {
+      renderResultView("error", "请先填写导出目录路径。", null, null, []);
+      return;
+    }
+    if (project.problems.some((p) => p.level === "error")) {
+      renderResultView(
+        "error",
+        "设计项目里有错误，没有导出。请先修正以下问题：",
+        null,
+        null,
+        project.problems,
+      );
+      return;
+    }
+
+    let previous: Manifest | null = null;
+    const tauriActive = isInTauri();
+    if (tauriActive) {
+      try {
+        const rawManifest = await invoke<string | null>("read_qt_export_manifest", { outDir });
+        if (rawManifest) {
+          previous = JSON.parse(rawManifest) as Manifest;
+        }
+      } catch {
+        previous = null;
+      }
+    }
+
+    const result = exportQt(project, getQtTemplates(), previous);
+    const allProblems = [...project.problems, ...result.problems];
+    if (result.problems.some((p) => p.level === "error")) {
+      renderResultView(
+        "error",
+        "导出时发现错误，没有导出：",
+        null,
+        null,
+        allProblems,
+      );
+      return;
+    }
+
+    const iface = result.manifest.interface;
+    const effectsSummary =
+      iface.effects.length > 0
+        ? `${iface.effects.length} 个需要翻译的效果（${iface.effects.map((e) => `${e.name}=${e.hash}`).join("、")}）`
+        : "0 个需要翻译的效果";
+    const summaryText = `业务接口：${iface.events.length} 个事件，${iface.states.length} 个业务管的状态，${iface.externals.length} 个外部容器；界面接口：${effectsSummary}。`;
+
+    if (!tauriActive) {
+      renderResultView(
+        "warn",
+        `浏览器模式预览完成：已通过 exportQt 生成 ${result.files.size} 个文件（目标路径：${outDir}），但浏览器模式不能直接写入本地磁盘。请使用桌面版（Tauri）写入目录，或在命令行执行 npm run export:qt。`,
+        summaryText,
+        result.changes,
+        allProblems,
+      );
+      return;
+    }
+
+    try {
+      const obsolete = (previous?.generated ?? []).filter((rel) => !result.files.has(rel));
+      const report = await invoke<WriteQtExportReport>("write_qt_export", {
+        outDir,
+        files: Array.from(result.files, ([path, content]) => ({ path, content })),
+        scaffoldIfMissing: Array.from(result.scaffold, ([path, content]) => ({ path, content })),
+        obsolete,
+      });
+      renderResultView(
+        "success",
+        `导出成功：${report.outDir}（生成的文件 ${report.totalFiles} 个，其中内容有变化的 ${report.written} 个；删除不再需要的 ${report.removed} 个；新放入的起始文件 ${report.scaffolded} 个）`,
+        summaryText,
+        result.changes,
+        allProblems,
+        previous !== null,
+      );
+    } catch (e) {
+      renderResultView(
+        "error",
+        `写入导出目录失败：${(e as Error).message}`,
+        summaryText,
+        result.changes,
+        allProblems,
+        previous !== null,
+      );
+    }
+  };
+
+  const footer = document.createElement("div");
+  footer.className = "vf-modal-footer";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "取消";
+  cancelBtn.addEventListener("click", () => backdrop.remove());
+  const runBtn = document.createElement("button");
+  runBtn.id = "export-qt-run";
+  runBtn.type = "button";
+  runBtn.className = "primary";
+  runBtn.textContent = "执行导出";
+  runBtn.addEventListener("click", () => void runExport());
+  footer.append(cancelBtn, runBtn);
+
+  modal.append(header, body, footer);
+  backdrop.append(modal);
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) backdrop.remove();
+  });
+  document.body.append(backdrop);
+}
+
+document.getElementById("export-qt-btn")?.addEventListener("click", () => {
+  void openExportQtModal();
+});
+
 async function main(): Promise<void> {
+  ensureStageIframe();
   project = await loadProject(null);
   designRuntime = new Runtime(project);
   initLibrary({
@@ -4378,6 +5001,34 @@ async function main(): Promise<void> {
     getSelectedId: () => selectedId,
     onViewFullDoc: () => select(null),
     onCommitDoc: () => void saveDoc(),
+  });
+  initLayoutEdit({
+    getProject: () => project,
+    getMode: () => mode,
+    getSelectedId: () => selectedId,
+    selectNode: (id) => select(id),
+    saveScene,
+    editLogic,
+    newNodeId: newId,
+    containerAtPoint: containerAt,
+    currentBoxes: currentLayoutBoxes,
+    stagePoint,
+    overlay,
+    toast,
+    activateRightTab: showRightTab,
+  });
+  initMenuEdit({
+    getProject: () => project,
+    getMode: () => mode,
+    saveScene,
+    toast,
+    activateRightTab: showRightTab,
+  });
+  initStateEdit({
+    getProject: () => project,
+    editLogic,
+    toast,
+    activateRightTab: showRightTab,
   });
   initPreviewLauncher(
     () => project,

@@ -66,7 +66,7 @@ function automappingControls(withStrokeSliders) {
     end_column: 2,
   });
   return {
-    row_spacing: 6,
+    row_spacing: 4,
     column_spacing: 6,
     controls,
   };
@@ -74,7 +74,7 @@ function automappingControls(withStrokeSliders) {
 
 const SCHEMAS = {
   arrow: {
-    row_spacing: 8,
+    row_spacing: 4,
     column_spacing: 6,
     controls: [
       {
@@ -95,7 +95,7 @@ const SCHEMAS = {
     ],
   },
   brush: {
-    row_spacing: 8,
+    row_spacing: 4,
     column_spacing: 6,
     controls: [
       { name: "color", type: "button", title: "Black", hook: "color", value: "black", row: 0, column: 0, state: { color: "black" } },
@@ -107,7 +107,7 @@ const SCHEMAS = {
     ],
   },
   eraser: {
-    row_spacing: 8,
+    row_spacing: 4,
     column_spacing: 6,
     controls: [
       {
@@ -128,7 +128,7 @@ const SCHEMAS = {
     ],
   },
   fill: {
-    row_spacing: 8,
+    row_spacing: 4,
     column_spacing: 6,
     controls: [
       { name: "color", type: "button", title: "Black", hook: "color", value: "black", row: 0, column: 0, state: { color: "black" } },
@@ -151,7 +151,7 @@ const SCHEMAS = {
     ],
   },
   shape: {
-    row_spacing: 8,
+    row_spacing: 4,
     column_spacing: 6,
     controls: [
       {
@@ -205,7 +205,7 @@ const SCHEMAS = {
     ],
   },
   select: {
-    row_spacing: 8,
+    row_spacing: 4,
     column_spacing: 6,
     controls: [
       {
@@ -227,7 +227,7 @@ const SCHEMAS = {
     ],
   },
   move: {
-    row_spacing: 8,
+    row_spacing: 4,
     column_spacing: 6,
     controls: [
       {
@@ -247,7 +247,7 @@ const SCHEMAS = {
     ],
   },
   eyedropper: {
-    row_spacing: 8,
+    row_spacing: 4,
     column_spacing: 6,
     controls: [
       {

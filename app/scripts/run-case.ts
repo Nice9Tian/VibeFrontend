@@ -32,7 +32,7 @@ import { findMenuItem, type Project } from "../src/model.ts";
 import { Runtime, type ActionSimMode } from "../src/runtime.ts";
 import { nodeIO } from "./node-io.ts";
 
-export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string }> = [
+export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string; noEffects?: boolean }> = [
   {
     name: "1. 初始状态与工具栏切换",
     steps: "state;click:toolEraserBtn;check;state;click:toolFillBtn;check;state;click:toolBrushBtn;check;state",
@@ -108,107 +108,133 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string }> = [
       "click:newProjectBtn;check;state;click:cancelNewProjectBtn;check;state;click:newProjectBtn;close:newProjectDialog;check;state;click:menuToggleTimeline;check;state;click:menuToggleTimeline;check;state",
   },
   {
-    name: "17. [类别1：基础8种绘图工具切换与真实 tool_controls 表单联动] 选择/画笔/橡皮/填充/连接/套索/变换/吸管全部切换",
+    name: "17. [Step 6] 状态图片按钮 StateButton 五种状态切换（selected/normal/hover/pressed/disabled）与调色盘过渡效果",
+    steps:
+      "state;click:colorPanelToggleBtn;wait:220;check;state;enter:colorPanelToggleBtn;check;state;input:colorPanelToggleBtn:pressed;check;state;input:colorPanelToggleBtn:released;leave:colorPanelToggleBtn;check;state;click:lockLayerCheck;check;state;click:lockLayerCheck;click:colorPanelToggleBtn;wait:220;check;state",
+  },
+  {
+    name: "18. [Step 6] --no-effects 降级模式下调色盘显隐与状态图片按钮逐字一致",
+    steps:
+      "state;click:colorPanelToggleBtn;check;state;enter:colorPanelToggleBtn;state;leave:colorPanelToggleBtn;click:colorPanelToggleBtn;check;state",
+    noEffects: true,
+  },
+  {
+    name: "19. [类别1：基础8种绘图工具切换与真实 tool_controls 表单联动] 选择/画笔/橡皮/填充/连接/套索/变换/吸管全部切换",
     steps:
       "click:toolArrowBtn;check;state;click:toolEraserBtn;check;state;click:toolFillBtn;check;state;click:toolShapeBtn;check;state;click:toolSelectBtn;check;state;click:toolMoveBtn;check;state;click:toolEyedropperBtn;check;state;click:toolBrushBtn;check;state",
   },
   {
-    name: "18. [类别2：Mapping 扩展工具5种切换与工具锁定策略回退] H中线/V中线/映射区/辅助线/自动映射切换及锁定自动回退 Arrow",
+    name: "20. [类别2：Mapping 扩展工具5种切换与工具锁定策略回退] H中线/V中线/映射区/辅助线/自动映射切换及锁定自动回退 Arrow",
     steps:
       "click:toolHLineBtn;check;state;click:toolVLineBtn;check;state;click:toolMapAreaBtn;check;state;click:toolAddLineBtn;check;state;click:toolAutoMapBtn;check;state;toggle:toolLockPolicyBtn;check;state;toggle:toolLockPolicyBtn;check;state",
   },
   {
-    name: "19. [类别3：压感板 ForcePad 二维向量与压力交互] 连续触发 forcePadBox 更新二维力向量 (fx, fy) 与压力百分比",
+    name: "21. [类别3：压感板 ForcePad 二维向量与压力交互] 连续触发 forcePadBox 更新二维力向量 (fx, fy) 与压力百分比",
     steps: "click:forcePadBox;check;state;click:forcePadBox;check;state;click:forcePadBox;check;state",
   },
   {
-    name: "20. [类别4：DataForm 对齐 pen.json/fill.json 同名颜色按钮与调色板] 切换 Black/Blue/Green 颜色按钮、吸管调色板选色与对象数组下拉框",
+    name: "22. [类别4：DataForm 对齐 pen.json/fill.json 同名颜色按钮与调色板] 切换 Black/Blue/Green 颜色按钮、吸管调色板选色与对象数组下拉框",
     steps:
       "form:toolOptionsForm:color:blue;check;state;form:toolOptionsForm:color:green;check;state;form:toolOptionsForm:pen_width:18;check;state;click:toolFillBtn;form:toolOptionsForm:color:blue;check;state;form:toolOptionsForm:fill_scope:all;check;state;click:toolEyedropperBtn;form:toolOptionsForm:palette_color:#dc2626;check;state",
   },
   {
-    name: "21. [类别5：DataForm 对齐 connect.json/toolcontrol.py 的 on/off 复选与对象式 visible_when 条件显隐]",
+    name: "23. [类别5：DataForm 对齐 connect.json/toolcontrol.py 的 on/off 复选与对象式 visible_when 条件显隐]",
     steps:
       "click:toolShapeBtn;check;state;form:toolOptionsForm:connect_auto_snap:off;check;state;form:toolOptionsForm:connect_mode:smooth;check;state;form:toolOptionsForm:connect_smooth:75;check;state;click:toolHLineBtn;check;state;form:toolOptionsForm:fold_split:off;check;state;form:toolOptionsForm:bridge_topology:on;check;state;form:toolOptionsForm:bridge_tension:60;check;state",
   },
   {
-    name: "22. [类别6：画笔与压感设置模态对话框及 DialogButtonBox 确定/取消] 从 DataForm 子窗口按钮和菜单呼出并执行 accept/reject",
+    name: "24. [类别6：画笔与压感设置模态对话框及 DialogButtonBox 确定/取消] 从 DataForm 子窗口按钮和菜单呼出并执行 accept/reject",
     steps:
       "form:toolOptionsForm:openAdvBrush:true;check;state;select:pressureCurveCombo:SoftS;input:minRadiusSpin:25;input:tiltSensitivitySlider:80;click:antiAliasCheck;accept:drawSettingsButtonBox;check;state;click:menuDrawSettings;check;state;reject:drawSettingsButtonBox;check;state",
   },
   {
-    name: "23. [类别7：统一图层树 layerList 主/子视图页签、新建图层/建组、上下移动与取消选中]",
+    name: "25. [类别7：统一图层树 layerList 主/子视图页签、新建图层/建组、上下移动与取消选中]",
     steps:
       "select:layerViewTabBar:Child Layers;check;state;select:layerViewTabBar:Main Layers;check;state;click:addLayerBtn;check;state;click:addGroupBtn;check;state;click:moveLayerUpBtn;check;state;click:unselectLayerBtn;check;state;select:layerList:0;check;state",
   },
   {
-    name: "24. [类别8：统一图层树 layerList 显隐勾选 toggleCheck、分组折叠 toggleCollapse 与拖拽重排 drag/reorder]",
+    name: "26. [类别8：统一图层树 layerList 显隐勾选 toggleCheck、分组折叠 toggleCollapse 与拖拽重排 drag/reorder]",
     steps:
       "select:layerList:1;check;state;check:layerList:1:false;check;state;check:layerList:1:true;check;state;collapse:layerList:0:true;check;state;collapse:layerList:0:false;check;state;drag:layerList:2:0;check;state;reorder:layerList:0:2;check;state",
   },
   {
-    name: "25. [类别9：图层树右键菜单（复制图层 / 切换锁定 / 删除图层）直接作用于统一图层树]",
+    name: "27. [类别9：图层树右键菜单（复制图层 / 切换锁定 / 删除图层）直接作用于统一图层树]",
     steps:
       "select:layerList:1;click:ctxDuplicateLayer;check;state;click:ctxToggleLockLayer;check;state;click:ctxDeleteLayer;check;state",
   },
   {
-    name: "26. [类别10：图层组右键菜单“解组保留图层”与“删组及成员图层”对比验证]",
+    name: "28. [类别10：图层组右键菜单“解组保留图层”与“删组及成员图层”对比验证]",
     steps:
       "select:layerList:0;click:ctxDissolveGroup;check;state;click:addGroupBtn;check;state;select:layerList:2;click:ctxDeleteGroup;check;state",
   },
   {
-    name: "27. [类别11：素材库面板导入/移除、素材转图层绑定 assetToLayerBtn、取消选中、拖拽重排与多行备注编辑]",
+    name: "29. [类别11：素材库面板导入/移除、素材转图层绑定 assetToLayerBtn、取消选中、拖拽重排与多行备注编辑]",
     steps:
       "click:addAssetBtn;check;state;select:assetList:1;check;state;click:assetToLayerBtn;check;state;drag:assetList:3:0;check;state;input:assetNoteInput:水彩纹理第2版，用于背景叠加层;check;state;click:removeAssetBtn;check;state;click:unselectAssetBtn;check;state",
   },
   {
-    name: "28. [类别12：纹理子视图 FloatBox 在中央页签、独立浮窗与工具面板嵌入槽位间切换及跟随开关]",
+    name: "30. [类别12：纹理子视图 FloatBox 在中央页签、独立浮窗与工具面板嵌入槽位间切换及跟随开关]",
     steps:
       "click:floatTextureBtn;check;state;click:embedTextureBtn;check;state;click:menuToggleTextureFloat;check;state;click:dockTextureToTabBtn;check;state;click:toolHLineBtn;form:toolOptionsForm:texture_view:true;check;state;click:followTimelineCheck;check;state;click:followTextureCheck;check;state",
   },
   {
-    name: "29. [类别13：文件菜单与纹理文件子菜单（打开/保存 .textureview、打开/保存/另存为工程、导入素材/导出片段）]",
+    name: "31. [类别13：文件菜单与纹理文件子菜单（打开/保存 .textureview、打开/保存/另存为工程、导入素材/导出片段）]",
     steps:
       "click:menuOpenTexture;check;state;click:menuSaveTexture;check;state;click:menuOpenProject;check;state;click:menuSaveProject;check;state;click:menuSaveAsProject;check;state;click:menuImportImage;check;state;mock:exportClip:success;click:menuExportClip;check;state",
   },
   {
-    name: "30. [类别14：历史记录面板回溯置灰 mutedFrom、编辑菜单撤销/重做/清空当前帧与新操作截断分支]",
+    name: "32. [类别14：历史记录面板回溯置灰 mutedFrom、编辑菜单撤销/重做/清空当前帧与新操作截断分支]",
     steps:
       "click:tabHistoryBtn;check;state;click:menuClearFrame;check;state;click:menuUndo;check;state;click:undoBtn;check;state;click:redoBtn;check;state;select:historyList:0;check;state;click:addFrameBtn;check;state;click:clearHistoryBtn;check;state",
   },
   {
-    name: "31. [类别15：中央工作区 Drawing/Texture 页签切换、画布缩放 Slider 与画布右键菜单（重置缩放/清空当前帧）]",
+    name: "33. [类别15：中央工作区 Drawing/Texture 页签切换、画布缩放 Slider 与画布右键菜单（重置缩放/清空当前帧）]",
     steps:
       "select:workspaceTabBar:Texture;check;state;select:workspaceTabBar:0;check;state;input:zoomSlider:200;check;state;click:ctxResetZoom;check;state;click:ctxClearCanvas;check;state",
   },
   {
-    name: "32. [类别16：时间轴关键帧、延长帧 Hold、复制帧、帧前移重排、删除帧、帧率切换与视口滚动]",
+    name: "34. [类别16：时间轴关键帧、延长帧 Hold、复制帧、帧前移重排、删除帧、帧率切换与视口滚动]",
     steps:
       "click:addFrameBtn;check;state;click:addHoldFrameBtn;check;state;click:duplicateFrameBtn;check;state;click:moveFrameBackBtn;check;state;input:frameSlider:12;check;state;select:fpsSelectCombo:30 fps;check;state;input:timelineScrollBar:45;check;state;click:removeFrameBtn;check;state",
   },
   {
-    name: "33. [类别17：时间轴洋葱皮总开关与 4 项分层过滤复选框（线稿/填充/映射/辅助）]",
+    name: "35. [类别17：时间轴洋葱皮总开关与 4 项分层过滤复选框（线稿/填充/映射/辅助）]",
     steps:
       "toggle:onionToggleBtn;check;state;click:onionLinesCheck;check;state;click:onionFillsCheck;check;state;click:onionAmCheck;check;state;click:onionGuideCheck;check;state;click:menuOnionSkinToggle;check;state",
   },
   {
-    name: "34. [类别18：时间轴播放/暂停、循环边界回绕、非循环自动停止与预览时钟 clock.tick 推进帧]",
+    name: "36. [类别18：时间轴播放/暂停、循环边界回绕、非循环自动停止与预览时钟 clock.tick 推进帧]",
     steps:
       "clock:120;check;state;toggle:playToggleBtn;check;state;clock:240;check;state;input:frameSlider:24;clock:360;check;state;input:frameSlider:24;toggle:loopToggleBtn;clock:480;check;state",
   },
   {
-    name: "35. [类别19：自动映射菜单（一键自动上色 / 生成中间帧补间 / 同步纹理映射）]",
+    name: "37. [类别19：自动映射菜单（一键自动上色 / 生成中间帧补间 / 同步纹理映射）]",
     steps: "click:menuAutoColorize;check;state;click:menuAutoInbetween;check;state;click:menuTextureSync;check;state",
   },
   {
-    name: "36. [类别20：绘图设置抖动修正单选组（S0/S5/S12）、主题单选组（深色/石墨灰/浅色）与工具栏弹出菜单重置参数]",
+    name: "38. [类别20：绘图设置抖动修正单选组（S0/S5/S12）、主题单选组（深色/石墨灰/浅色）与工具栏弹出菜单重置参数]",
     steps:
       "click:menuStabOff;check;state;click:menuStabHigh;check;state;click:menuStabMed;check;state;click:menuThemeGraphite;check;state;click:menuThemeLight;check;state;click:menuThemeDark;check;state;form:toolOptionsForm:pen_width:40;check;state;click:popupResetTool;check;state",
   },
   {
-    name: "37. [类别21：视图菜单全部 4 个停靠面板显隐切换与重置工作区布局]",
+    name: "39. [类别21：视图菜单全部 4 个停靠面板显隐切换与重置工作区布局]",
     steps:
       "click:menuToggleTools;check;state;click:menuToggleTools;check;state;click:menuToggleInspector;check;state;click:menuToggleInspector;check;state;input:zoomSlider:250;select:workspaceTabBar:1;click:floatTextureBtn;check;state;click:menuResetLayout;check;state",
+  },
+  {
+    name: "40. [类别22：新增标准控件 Slider 与 ScrollBar 边界夹紧测试] 超出 min/max 自动夹紧到合法区间",
+    steps:
+      "input:zoomSlider:10;check;state;input:zoomSlider:900;check;state;input:frameSlider:0;check;state;input:frameSlider:99;check;state;input:timelineScrollBar:-50;check;state;input:timelineScrollBar:500;check;state",
+  },
+  {
+    name: "41. [类别23：新增标准控件 TextArea 逐字键入 type: 与完整输入 input: 一致性]",
+    steps:
+      "select:assetList:1;input:assetNoteInput:;check;state;type:assetNoteInput:LineA;check;state;type:assetNoteInput:_B;check;state",
+  },
+  {
+    name: "42. [类别24：新增标准控件 TabBar 与 Tree 越界/折叠子节点选择忽略与恢复]",
+    steps:
+      "select:workspaceTabBar:9;check;state;collapse:layerList:0:true;check;state;select:layerList:1;check;state;select:layerList:2;check;state;collapse:layerList:0:false;check;state;select:layerList:1;check;state",
   },
 ];
 
@@ -419,6 +445,10 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
       runtime.dispatch(id, "mouseenter");
     } else if (verb === "leave") {
       runtime.dispatch(id, "mouseleave");
+    } else if (verb === "press") {
+      runtime.dispatch(id, "mousedown");
+    } else if (verb === "release") {
+      runtime.dispatch(id, "mouseup");
     } else if (verb === "type") {
       const obj = project.logic.objects?.[id];
       let cur =
@@ -450,6 +480,10 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
         if (rest !== cur) {
           runtime.dispatch(id, "change", rest);
         }
+      } else if (node?.type !== "TextInput" && rest === "pressed") {
+        runtime.dispatch(id, "mousedown");
+      } else if (node?.type !== "TextInput" && rest === "released") {
+        runtime.dispatch(id, "mouseup");
       } else {
         typed.set(id, rest);
         runtime.dispatch(id, "change", rest);
@@ -575,7 +609,8 @@ async function main(): Promise<number> {
         const c = ANIMEAN_SUITE_CASES[idx];
         const webLines = await runStepsOnWeb(project, c.steps);
         const webStates = webLines.filter((l) => l.startsWith("state "));
-        const { stdout: qtOut } = await execFileAsync(qtExe, ["--steps", c.steps], {
+        const qtArgs = c.noEffects ? ["--no-effects", "--steps", c.steps] : ["--steps", c.steps];
+        const { stdout: qtOut } = await execFileAsync(qtExe, qtArgs, {
           encoding: "utf8",
           env: qtEnv,
           maxBuffer: 16 * 1024 * 1024,

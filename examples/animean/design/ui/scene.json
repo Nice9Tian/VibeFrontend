@@ -491,31 +491,31 @@
       "height": 554,
       "headerHeight": 26,
       "title": "工具选项与检查器",
-      "layout": { "kind": "vbox", "padding": 6, "gap": 4 },
-      "children": ["toolOptHeader", "toolOptionsForm", "inspectorSep1", "inspectorTabs", "inspectorStack"]
+      "layout": { "kind": "vbox", "padding": 4, "gap": 2 },
+      "children": ["toolOptHeader", "toolOptionsForm", "inspectorSep1", "inspectorTabs", "inspectorStack", "colorPanelToggleBtn", "colorPanel"]
     },
     "toolOptHeader": {
       "type": "Label",
-      "width": 252,
-      "height": 18,
+      "width": 256,
+      "height": 16,
       "props": { "text": "工具选项 (Tool Options)", "tone": "title" }
     },
     "toolOptionsForm": {
       "type": "DataForm",
-      "width": 252,
-      "height": 126,
+      "width": 256,
+      "height": 82,
       "props": { "schema": {}, "values": {}, "emptyText": "当前工具无附加选项" }
     },
     "inspectorSep1": {
       "type": "Separator",
-      "width": 252,
-      "height": 4,
+      "width": 256,
+      "height": 2,
       "props": { "orientation": "horizontal" }
     },
     "inspectorTabs": {
       "type": "Grid",
-      "width": 252,
-      "height": 24,
+      "width": 256,
+      "height": 22,
       "layout": { "kind": "grid", "columns": 3, "gap": 4, "columnStretch": [1, 1, 1], "rowStretch": [0] },
       "children": ["tabPropsBtn", "tabHistoryBtn", "tabExportBtn"]
     },
@@ -523,141 +523,168 @@
       "type": "Button",
       "row": 0,
       "column": 0,
-      "width": 80,
-      "height": 24,
+      "width": 82,
+      "height": 22,
       "props": { "text": "图层属性", "variant": "primary" }
     },
     "tabHistoryBtn": {
       "type": "Button",
       "row": 0,
       "column": 1,
-      "width": 80,
-      "height": 24,
+      "width": 82,
+      "height": 22,
       "props": { "text": "历史记录", "variant": "secondary" }
     },
     "tabExportBtn": {
       "type": "Button",
       "row": 0,
       "column": 2,
-      "width": 80,
-      "height": 24,
+      "width": 82,
+      "height": 22,
       "props": { "text": "渲染导出", "variant": "secondary" }
     },
     "inspectorStack": {
       "type": "Stack",
-      "width": 252,
-      "height": 220,
-      "size": { "stretch": 1, "vertical": "expanding", "minHeight": 86 },
+      "width": 256,
+      "height": 180,
+      "size": { "stretch": 2, "vertical": "expanding", "minHeight": 86 },
       "layout": { "kind": "stack", "padding": 0 },
       "props": { "currentIndex": 0 },
       "children": ["layerPropsPage", "exportPage", "historyPage"]
     },
     "layerPropsPage": {
       "type": "Form",
-      "width": 252,
-      "height": 220,
-      "layout": { "kind": "form", "padding": 2, "gap": 2, "labelWidth": 68 },
+      "width": 256,
+      "height": 180,
+      "layout": { "kind": "form", "padding": 0, "gap": 1, "labelWidth": 68 },
       "children": ["blendLabel", "blendCombo", "opacityLabel", "opacitySpin", "lockLabel", "lockLayerCheck"]
     },
     "blendLabel": {
       "type": "Label",
       "width": 68,
-      "height": 26,
+      "height": 20,
       "props": { "text": "混合模式", "tone": "muted" }
     },
     "blendCombo": {
       "type": "ComboBox",
       "width": 168,
-      "height": 26,
+      "height": 20,
       "props": { "options": "Normal,Multiply,Screen,Overlay", "value": "Normal" }
     },
     "opacityLabel": {
       "type": "Label",
       "width": 68,
-      "height": 26,
+      "height": 20,
       "props": { "text": "不透明度", "tone": "muted" }
     },
     "opacitySpin": {
       "type": "SpinBox",
       "width": 168,
-      "height": 26,
+      "height": 20,
       "props": { "min": 0, "max": 100, "step": 5, "value": 100 }
     },
     "lockLabel": {
       "type": "Label",
       "width": 68,
-      "height": 26,
+      "height": 20,
       "props": { "text": "锁定编辑", "tone": "muted" }
     },
     "lockLayerCheck": {
       "type": "CheckBox",
       "width": 168,
-      "height": 26,
+      "height": 20,
       "props": { "text": "锁定当前图层", "value": false }
     },
     "exportPage": {
       "type": "VBox",
-      "width": 252,
-      "height": 220,
-      "layout": { "kind": "vbox", "padding": 2, "gap": 4 },
+      "width": 256,
+      "height": 180,
+      "layout": { "kind": "vbox", "padding": 0, "gap": 2 },
       "children": ["exportHintLabel", "exportBtn", "exportResultLabel"]
     },
     "exportHintLabel": {
       "type": "Label",
-      "width": 244,
-      "height": 24,
+      "width": 256,
+      "height": 18,
       "props": { "text": "导出当前动画镜头片段", "tone": "normal" }
     },
     "exportBtn": {
       "type": "Button",
-      "width": 244,
-      "height": 28,
+      "width": 256,
+      "height": 22,
       "props": { "text": "开始导出", "variant": "primary" }
     },
     "exportResultLabel": {
       "type": "Label",
-      "width": 244,
-      "height": 24,
+      "width": 256,
+      "height": 18,
       "props": { "text": "尚未导出", "tone": "muted" }
     },
     "historyPage": {
       "type": "VBox",
-      "width": 252,
-      "height": 220,
-      "layout": { "kind": "vbox", "padding": 2, "gap": 4 },
+      "width": 256,
+      "height": 180,
+      "layout": { "kind": "vbox", "padding": 0, "gap": 2 },
       "children": ["historyToolbar", "historyList"]
     },
     "historyToolbar": {
       "type": "HBox",
-      "width": 244,
-      "height": 26,
+      "width": 256,
+      "height": 22,
       "layout": { "kind": "hbox", "padding": 0, "gap": 4 },
       "children": ["undoBtn", "redoBtn", "clearHistoryBtn"]
     },
     "undoBtn": {
       "type": "Button",
-      "width": 78,
-      "height": 26,
+      "width": 82,
+      "height": 22,
       "props": { "text": "撤销", "variant": "secondary" }
     },
     "redoBtn": {
       "type": "Button",
-      "width": 78,
-      "height": 26,
+      "width": 82,
+      "height": 22,
       "props": { "text": "重做", "variant": "secondary" }
     },
     "clearHistoryBtn": {
       "type": "Button",
-      "width": 80,
-      "height": 26,
+      "width": 84,
+      "height": 22,
       "props": { "text": "清空历史", "variant": "danger" }
     },
     "historyList": {
       "type": "List",
-      "width": 244,
-      "height": 176,
-      "size": { "stretch": 1, "vertical": "expanding", "minHeight": 48 },
+      "width": 256,
+      "height": 150,
+      "size": { "stretch": 1, "vertical": "expanding", "minHeight": 38 },
       "props": { "items": [], "value": 2, "mutedFrom": -1 }
+    },
+    "colorPanelToggleBtn": {
+      "type": "StateButton",
+      "width": 256,
+      "height": 22,
+      "props": { "text": "收起调色盘", "selected": true }
+    },
+    "colorPanel": {
+      "type": "VBox",
+      "width": 256,
+      "height": 96,
+      "size": { "stretch": 1, "vertical": "expanding", "minHeight": 42, "maxHeight": 96 },
+      "layout": { "kind": "vbox", "padding": 2, "gap": 2 },
+      "children": ["colorPickerCanvas", "colorHexLabel"]
+    },
+    "colorPickerCanvas": {
+      "type": "ColorPicker",
+      "width": 252,
+      "height": 78,
+      "size": { "stretch": 1, "vertical": "expanding", "minHeight": 24 },
+      "props": { "hue": 210, "saturation": 78, "brightness": 92, "hexColor": "#3394eb" }
+    },
+    "colorHexLabel": {
+      "type": "Label",
+      "width": 252,
+      "height": 12,
+      "props": { "text": "当前颜色：#3394eb", "tone": "muted" }
     },
 
     "timelineDock": {

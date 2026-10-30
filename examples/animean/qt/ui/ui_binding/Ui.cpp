@@ -38,12 +38,15 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMainWindow>
+#include <QMap>
+#include <QMargins>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMetaMethod>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPen>
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -54,12 +57,22 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QStatusBar>
+#include <QSvgRenderer>
 #include <QTabBar>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
 #include <QVariant>
+#include <QFont>
+#include <QFontMetricsF>
+#include <QPainterPath>
+#include <QPainterPathStroker>
+#include <QPalette>
+#include <QRegularExpression>
+#include <QVariantAnimation>
+#include <cmath>
+#include <functional>
 // （这个设计项目没有用到别的 Qt 控件类）
 
 namespace vf {
@@ -68,6 +81,234 @@ namespace {
 
 // 过渡动画超过它自己的时长这么多毫秒还没有结束，就不再等它
 const int kTransitionGraceMs = 300;
+
+// 状态图片控件：同一套 5 状态 SVG（normal / hover / pressed / selected / disabled）用 QSvgRenderer 九宫格绘制，
+// 状态切换带透明度过渡，文字由控件另外画在上面。
+class StateImageWidget : public QWidget
+{
+public:
+    explicit StateImageWidget(QWidget *parent = nullptr)
+        : QWidget(parent)
+        , m_anim(new QVariantAnimation(this))
+    {
+        setAttribute(Qt::WA_Hover, true);
+        m_anim->setStartValue(0.0);
+        m_anim->setEndValue(1.0);
+        QObject::connect(m_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant &v) {
+            m_transitionProgress = v.toReal();
+            update();
+        });
+        QObject::connect(m_anim, &QVariantAnimation::finished, this, [this] {
+            m_transitionProgress = 1.0;
+            m_prevImage.clear();
+            update();
+        });
+    }
+
+    void configure(const QString &basePath, const QMap<QString, QString> &stateFiles, const QMargins &slice, int transitionMs)
+    {
+        m_basePath = basePath;
+        m_stateFiles = stateFiles;
+        m_slice = slice;
+        m_transitionMs = qMax(0, transitionMs);
+        for (auto it = m_stateFiles.begin(); it != m_stateFiles.end(); ++it) {
+            const QString file = it.value();
+            if (!file.isEmpty() && !m_renderers.contains(file)) {
+                auto *renderer = new QSvgRenderer(m_basePath + file, this);
+                m_renderers.insert(file, renderer);
+            }
+        }
+        m_currentImage = m_stateFiles.value(QStringLiteral("normal"));
+    }
+
+    void applyViewState(const QVariantMap &props, const QString &visualState, const QString &stateImage, bool animate)
+    {
+        m_props = props;
+        m_visualState = visualState.isEmpty() ? QStringLiteral("normal") : visualState;
+        const QString nextImg = stateImage.isEmpty() ? m_stateFiles.value(m_visualState, m_stateFiles.value(QStringLiteral("normal"))) : stateImage;
+        if (!nextImg.isEmpty() && nextImg != m_currentImage) {
+            if (animate && m_transitionMs > 0 && !m_currentImage.isEmpty()) {
+                m_prevImage = m_currentImage;
+                m_currentImage = nextImg;
+                m_transitionProgress = 0.0;
+                m_anim->stop();
+                m_anim->setDuration(m_transitionMs);
+                m_anim->setStartValue(0.0);
+                m_anim->setEndValue(1.0);
+                m_anim->start();
+            } else {
+                m_anim->stop();
+                m_prevImage.clear();
+                m_currentImage = nextImg;
+                m_transitionProgress = 1.0;
+            }
+        }
+        update();
+    }
+
+    QString visualState() const { return m_visualState; }
+    QString currentStateImage() const { return m_currentImage; }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF bounds(rect());
+
+        if (m_transitionProgress < 1.0 && !m_prevImage.isEmpty()) {
+            painter.setOpacity(1.0 - m_transitionProgress);
+            renderNineSlice(&painter, m_renderers.value(m_prevImage), bounds);
+            painter.setOpacity(m_transitionProgress);
+            renderNineSlice(&painter, m_renderers.value(m_currentImage), bounds);
+        } else {
+            painter.setOpacity(1.0);
+            renderNineSlice(&painter, m_renderers.value(m_currentImage), bounds);
+        }
+        painter.setOpacity(1.0);
+
+        const QString text = m_props.value(QStringLiteral("text")).toString();
+        if (!text.isEmpty()) {
+            QColor color(QStringLiteral("#e2e8f0"));
+            if (m_visualState == QLatin1String("disabled")) {
+                const QString disCol = m_props.value(QStringLiteral("disabledTextColor")).toString();
+                color = QColor(disCol.isEmpty() ? QStringLiteral("#64748b") : disCol);
+            } else if (m_visualState == QLatin1String("selected")) {
+                const QString selCol = m_props.value(QStringLiteral("selectedTextColor")).toString();
+                color = QColor(selCol.isEmpty() ? QStringLiteral("#ffffff") : selCol);
+            } else {
+                const QString txtCol = m_props.value(QStringLiteral("textColor")).toString();
+                if (!txtCol.isEmpty())
+                    color = QColor(txtCol);
+            }
+            QFont f = font();
+            const int fontSize = m_props.value(QStringLiteral("fontSize")).toInt();
+            f.setPixelSize(fontSize > 0 ? fontSize : 13);
+            f.setWeight(QFont::DemiBold);
+            painter.setFont(f);
+            painter.setPen(color);
+            const QString alignStr = m_props.value(QStringLiteral("align")).toString();
+            Qt::Alignment align = Qt::AlignCenter;
+            if (alignStr == QLatin1String("left"))
+                align = Qt::AlignLeft | Qt::AlignVCenter;
+            else if (alignStr == QLatin1String("right"))
+                align = Qt::AlignRight | Qt::AlignVCenter;
+            painter.drawText(rect().adjusted(10, 0, -10, 0), align, text);
+        }
+    }
+
+private:
+    void renderNineSlice(QPainter *painter, QSvgRenderer *renderer, const QRectF &target) const
+    {
+        if (!renderer || !renderer->isValid() || target.isEmpty())
+            return;
+        QRectF vb = renderer->viewBoxF();
+        if (vb.isEmpty())
+            vb = QRectF(QPointF(0, 0), QSizeF(renderer->defaultSize()));
+        if (vb.isEmpty())
+            vb = QRectF(0, 0, 100, 36);
+
+        const qreal slTop = m_slice.top();
+        const qreal slRight = m_slice.right();
+        const qreal slBottom = m_slice.bottom();
+        const qreal slLeft = m_slice.left();
+        if (slTop <= 0 && slRight <= 0 && slBottom <= 0 && slLeft <= 0) {
+            renderer->render(painter, target);
+            return;
+        }
+
+        const qreal vw = vb.width();
+        const qreal vh = vb.height();
+        const qreal tw = target.width();
+        const qreal th = target.height();
+
+        const qreal sx[4] = { 0.0, qMin(slLeft, vw * 0.5), qMax(qMin(slLeft, vw * 0.5), vw - qMin(slRight, vw * 0.5)), vw };
+        const qreal sy[4] = { 0.0, qMin(slTop, vh * 0.5), qMax(qMin(slTop, vh * 0.5), vh - qMin(slBottom, vh * 0.5)), vh };
+        const qreal dx[4] = { 0.0, qMin(slLeft, tw * 0.5), qMax(qMin(slLeft, tw * 0.5), tw - qMin(slRight, tw * 0.5)), tw };
+        const qreal dy[4] = { 0.0, qMin(slTop, th * 0.5), qMax(qMin(slTop, th * 0.5), th - qMin(slBottom, th * 0.5)), th };
+
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                const qreal sw = sx[c + 1] - sx[c];
+                const qreal sh = sy[r + 1] - sy[r];
+                const qreal dw = dx[c + 1] - dx[c];
+                const qreal dh = dy[r + 1] - dy[r];
+                if (sw <= 0.0 || sh <= 0.0 || dw <= 0.0 || dh <= 0.0)
+                    continue;
+                const QRectF dstPatch(target.left() + dx[c], target.top() + dy[r], dw, dh);
+                const qreal scaleX = dw / sw;
+                const qreal scaleY = dh / sh;
+                const QRectF fullTarget(
+                    dstPatch.left() - sx[c] * scaleX,
+                    dstPatch.top() - sy[r] * scaleY,
+                    vw * scaleX,
+                    vh * scaleY
+                );
+                painter->save();
+                painter->setClipRect(dstPatch, Qt::IntersectClip);
+                renderer->render(painter, fullTarget);
+                painter->restore();
+            }
+        }
+    }
+
+    QString m_basePath;
+    QMap<QString, QString> m_stateFiles;
+    QMap<QString, QSvgRenderer *> m_renderers;
+    QMargins m_slice;
+    int m_transitionMs = 120;
+    QString m_visualState = QStringLiteral("normal");
+    QString m_currentImage;
+    QString m_prevImage;
+    qreal m_transitionProgress = 1.0;
+    QVariantAnimation *m_anim = nullptr;
+    QVariantMap m_props;
+};
+
+// 自绘效果控件：已注册绘制效果时调用实现绘制，未注册（或 --no-effects）时显示虚线占位框。
+class PaintEffectWidget : public QWidget
+{
+public:
+    using PaintCallback = std::function<bool(QPainter *, const QRect &, const QVariantMap &)>;
+
+    explicit PaintEffectWidget(QWidget *parent = nullptr) : QWidget(parent) {}
+
+    void configure(const QString &effectName, PaintCallback paintFn)
+    {
+        m_effectName = effectName;
+        m_paintFn = std::move(paintFn);
+    }
+
+    void applyProps(const QVariantMap &props)
+    {
+        m_props = props;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        if (m_paintFn && m_paintFn(&painter, rect(), m_props))
+            return;
+
+        painter.setPen(QPen(QColor(217, 119, 6, 190), 1, Qt::DashLine));
+        painter.setBrush(QColor(40, 32, 20, 120));
+        painter.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 6, 6);
+        painter.setPen(QColor(251, 191, 36));
+        painter.drawText(
+            rect().adjusted(6, 6, -6, -6),
+            Qt::AlignCenter | Qt::TextWordWrap,
+            QStringLiteral("%1\n[绘制效果占位：%2]").arg(objectName(), m_effectName)
+        );
+    }
+
+private:
+    QString m_effectName;
+    PaintCallback m_paintFn;
+    QVariantMap m_props;
+};
 
 struct PendingEvent
 {
@@ -81,6 +322,8 @@ struct Control
 {
     QString id;
     QWidget *widget = nullptr;
+    StateImageWidget *stateImageWidget = nullptr;
+    PaintEffectWidget *paintEffectWidget = nullptr;
     // 控件属性名 → Qt 属性名
     QList<QPair<QString, QByteArray>> props;
     // 显示和隐藏时播放的效果的编号，没有是 -1
@@ -90,6 +333,8 @@ struct Control
     int generation = 0;
     // 画布上定下的位置和大小，过渡结束后恢复成它
     QRect designRect;
+    QSize designMinSize;
+    QSize designMaxSize;
     // 正在过渡中，以及这次过渡的动画
     bool transitioning = false;
     QPointer<QAbstractAnimation> transition;
@@ -683,6 +928,481 @@ QLabel *addPlaceholder(QFrame *frame, const QString &text, QVBoxLayout **layoutO
     return label;
 }
 
+double vecAngleRad(double ux, double uy, double vx, double vy)
+{
+    const double dot = ux * vx + uy * vy;
+    const double len = std::hypot(ux, uy) * std::hypot(vx, vy);
+    if (len <= 0.0)
+        return 0.0;
+    const double c = qBound(-1.0, dot / len, 1.0);
+    const double ang = std::acos(c);
+    return (ux * vy - uy * vx < 0.0) ? -ang : ang;
+}
+
+// 把工具生成的 SVG 路径（M / L / H / V / C / Q / T / A / Z）转成 QPainterPath
+QPainterPath parseSvgPath(const QString &d)
+{
+    QPainterPath path;
+    path.setFillRule(Qt::WindingFill);
+    if (d.isEmpty())
+        return path;
+
+    static const QRegularExpression re(QStringLiteral("[MLHVCSQTAZmlhvcsqtaz]|[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[-+]?\\d+)?"));
+    QRegularExpressionMatchIterator it = re.globalMatch(d);
+    QStringList tokens;
+    while (it.hasNext())
+        tokens.append(it.next().captured(0));
+
+    int idx = 0;
+    QChar cmd = QLatin1Char('M');
+    QChar lastCmd = QLatin1Char(' ');
+    double curX = 0.0;
+    double curY = 0.0;
+    double startX = 0.0;
+    double startY = 0.0;
+    double prevQx = 0.0;
+    double prevQy = 0.0;
+
+    auto isCmdToken = [&](int i) -> bool {
+        if (i >= tokens.size())
+            return false;
+        const QChar c = tokens.at(i).at(0);
+        return c.isLetter();
+    };
+    auto nextNum = [&]() -> double {
+        return idx < tokens.size() ? tokens.at(idx++).toDouble() : 0.0;
+    };
+
+    while (idx < tokens.size()) {
+        if (isCmdToken(idx))
+            cmd = tokens.at(idx++).at(0).toUpper();
+
+        if (cmd == QLatin1Char('M')) {
+            const double x = nextNum();
+            const double y = nextNum();
+            path.moveTo(x, y);
+            curX = startX = x;
+            curY = startY = y;
+            lastCmd = QLatin1Char('M');
+            cmd = QLatin1Char('L');
+            continue;
+        }
+        if (cmd == QLatin1Char('L')) {
+            const double x = nextNum();
+            const double y = nextNum();
+            path.lineTo(x, y);
+            curX = x;
+            curY = y;
+            lastCmd = QLatin1Char('L');
+            continue;
+        }
+        if (cmd == QLatin1Char('H')) {
+            const double x = nextNum();
+            path.lineTo(x, curY);
+            curX = x;
+            lastCmd = QLatin1Char('H');
+            continue;
+        }
+        if (cmd == QLatin1Char('V')) {
+            const double y = nextNum();
+            path.lineTo(curX, y);
+            curY = y;
+            lastCmd = QLatin1Char('V');
+            continue;
+        }
+        if (cmd == QLatin1Char('Q')) {
+            const double x1 = nextNum();
+            const double y1 = nextNum();
+            const double x = nextNum();
+            const double y = nextNum();
+            path.quadTo(x1, y1, x, y);
+            prevQx = x1;
+            prevQy = y1;
+            curX = x;
+            curY = y;
+            lastCmd = QLatin1Char('Q');
+            continue;
+        }
+        if (cmd == QLatin1Char('T')) {
+            const double x = nextNum();
+            const double y = nextNum();
+            const double x1 = (lastCmd == QLatin1Char('Q') || lastCmd == QLatin1Char('T')) ? (2.0 * curX - prevQx) : curX;
+            const double y1 = (lastCmd == QLatin1Char('Q') || lastCmd == QLatin1Char('T')) ? (2.0 * curY - prevQy) : curY;
+            path.quadTo(x1, y1, x, y);
+            prevQx = x1;
+            prevQy = y1;
+            curX = x;
+            curY = y;
+            lastCmd = QLatin1Char('T');
+            continue;
+        }
+        if (cmd == QLatin1Char('C')) {
+            const double x1 = nextNum();
+            const double y1 = nextNum();
+            const double x2 = nextNum();
+            const double y2 = nextNum();
+            const double x = nextNum();
+            const double y = nextNum();
+            path.cubicTo(x1, y1, x2, y2, x, y);
+            curX = x;
+            curY = y;
+            lastCmd = QLatin1Char('C');
+            continue;
+        }
+        if (cmd == QLatin1Char('A')) {
+            double rx = std::abs(nextNum());
+            double ry = std::abs(nextNum());
+            const double phi = nextNum() * M_PI / 180.0;
+            const bool largeArc = nextNum() != 0.0;
+            const bool sweep = nextNum() != 0.0;
+            const double x = nextNum();
+            const double y = nextNum();
+            const double x1 = curX;
+            const double y1 = curY;
+            if (std::hypot(x - x1, y - y1) > 1e-6) {
+                if (rx <= 1e-6 || ry <= 1e-6) {
+                    path.lineTo(x, y);
+                } else {
+                    const double cosPhi = std::cos(phi);
+                    const double sinPhi = std::sin(phi);
+                    const double dx2 = (x1 - x) / 2.0;
+                    const double dy2 = (y1 - y) / 2.0;
+                    const double x1p = cosPhi * dx2 + sinPhi * dy2;
+                    const double y1p = -sinPhi * dx2 + cosPhi * dy2;
+                    const double lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+                    if (lambda > 1.0) {
+                        const double s = std::sqrt(lambda);
+                        rx *= s;
+                        ry *= s;
+                    }
+                    const double rx2 = rx * rx;
+                    const double ry2 = ry * ry;
+                    const double x1p2 = x1p * x1p;
+                    const double y1p2 = y1p * y1p;
+                    const double numVal = std::max(0.0, rx2 * ry2 - rx2 * y1p2 - ry2 * x1p2);
+                    const double denVal = rx2 * y1p2 + ry2 * x1p2;
+                    const double factor = ((largeArc == sweep) ? -1.0 : 1.0) * (denVal > 0.0 ? std::sqrt(numVal / denVal) : 0.0);
+                    const double cxp = factor * ((rx * y1p) / ry);
+                    const double cyp = factor * (-(ry * x1p) / rx);
+                    const double cx = cosPhi * cxp - sinPhi * cyp + (x1 + x) / 2.0;
+                    const double cy = sinPhi * cxp + cosPhi * cyp + (y1 + y) / 2.0;
+                    const double theta1 = vecAngleRad(1.0, 0.0, (x1p - cxp) / rx, (y1p - cyp) / ry);
+                    double dTheta = vecAngleRad((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
+                    if (!sweep && dTheta > 0.0)
+                        dTheta -= M_PI * 2.0;
+                    if (sweep && dTheta < 0.0)
+                        dTheta += M_PI * 2.0;
+                    const int segs = std::max(1, int(std::ceil(std::abs(dTheta) / (M_PI / 2.0))));
+                    const double delta = dTheta / segs;
+                    const double alpha = (4.0 / 3.0) * std::tan(delta / 4.0);
+                    auto mapPt = [&](double ux, double uy) -> QPointF {
+                        return QPointF(cx + cosPhi * rx * ux - sinPhi * ry * uy,
+                                       cy + sinPhi * rx * ux + cosPhi * ry * uy);
+                    };
+                    for (int s = 0; s < segs; ++s) {
+                        const double a1 = theta1 + s * delta;
+                        const double a2 = a1 + delta;
+                        const double cos1 = std::cos(a1);
+                        const double sin1 = std::sin(a1);
+                        const double cos2 = std::cos(a2);
+                        const double sin2 = std::sin(a2);
+                        const QPointF c1 = mapPt(cos1 - alpha * sin1, sin1 + alpha * cos1);
+                        const QPointF c2 = mapPt(cos2 + alpha * sin2, sin2 - alpha * cos2);
+                        const QPointF p2 = (s == segs - 1) ? QPointF(x, y) : mapPt(cos2, sin2);
+                        path.cubicTo(c1, c2, p2);
+                    }
+                }
+            }
+            curX = x;
+            curY = y;
+            lastCmd = QLatin1Char('A');
+            continue;
+        }
+        if (cmd == QLatin1Char('Z')) {
+            path.closeSubpath();
+            curX = startX;
+            curY = startY;
+            lastCmd = QLatin1Char('Z');
+            continue;
+        }
+        if (!isCmdToken(idx))
+            nextNum();
+    }
+    return path;
+}
+
+// 基础图形（Shape）与线条（Line）绘制控件
+class VfGraphicWidget : public QWidget
+{
+public:
+    explicit VfGraphicWidget(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setAutoFillBackground(false);
+    }
+
+    void applySpec(const QJSValue &spec, bool updateGeometry)
+    {
+        m_kind = spec.property(QStringLiteral("kind")).toString();
+        m_x = spec.property(QStringLiteral("x")).toInt();
+        m_y = spec.property(QStringLiteral("y")).toInt();
+        m_width = std::max(1, spec.property(QStringLiteral("width")).toInt());
+        m_height = std::max(1, spec.property(QStringLiteral("height")).toInt());
+        m_logicalX = spec.property(QStringLiteral("logicalX")).toInt();
+        m_logicalY = spec.property(QStringLiteral("logicalY")).toInt();
+        m_logicalWidth = std::max(1, spec.property(QStringLiteral("logicalWidth")).toInt());
+        m_logicalHeight = std::max(1, spec.property(QStringLiteral("logicalHeight")).toInt());
+        m_opacity = spec.property(QStringLiteral("opacity")).toNumber();
+        m_stroke = spec.property(QStringLiteral("stroke")).toString();
+        m_strokeWidth = spec.property(QStringLiteral("strokeWidth")).toNumber();
+        m_strokeStyle = spec.property(QStringLiteral("strokeStyle")).toString();
+        m_textColor = spec.property(QStringLiteral("textColor")).toString();
+        m_fontSize = spec.property(QStringLiteral("fontSize")).toInt();
+
+        if (m_kind == QLatin1String("shape")) {
+            m_centerX = spec.property(QStringLiteral("centerX")).toNumber();
+            m_centerY = spec.property(QStringLiteral("centerY")).toNumber();
+            m_rotation = spec.property(QStringLiteral("rotation")).toNumber();
+            m_bodyPath = parseSvgPath(spec.property(QStringLiteral("body")).toString());
+            m_detailPaths.clear();
+            const QJSValue details = spec.property(QStringLiteral("details"));
+            const int dLen = details.property(QStringLiteral("length")).toInt();
+            for (int i = 0; i < dLen; ++i)
+                m_detailPaths.append(parseSvgPath(details.property(quint32(i)).toString()));
+            m_fill = spec.property(QStringLiteral("fill")).toString();
+            m_text = spec.property(QStringLiteral("text")).toString();
+            m_textBox = QRectF(
+                spec.property(QStringLiteral("textX")).toNumber(),
+                spec.property(QStringLiteral("textY")).toNumber(),
+                spec.property(QStringLiteral("textWidth")).toNumber(),
+                spec.property(QStringLiteral("textHeight")).toNumber());
+            m_fontWeight = spec.property(QStringLiteral("fontWeight")).toString();
+            m_textAlign = spec.property(QStringLiteral("textAlign")).toString();
+        } else if (m_kind == QLatin1String("line")) {
+            m_originX = spec.property(QStringLiteral("originX")).toNumber();
+            m_originY = spec.property(QStringLiteral("originY")).toNumber();
+            m_mainPath = parseSvgPath(spec.property(QStringLiteral("mainPath")).toString());
+            m_hitPath = parseSvgPath(spec.property(QStringLiteral("hitPath")).toString());
+            m_startCapPath = parseSvgPath(spec.property(QStringLiteral("startCapPath")).toString());
+            m_startCapFilled = spec.property(QStringLiteral("startCapFilled")).toBool();
+            m_endCapPath = parseSvgPath(spec.property(QStringLiteral("endCapPath")).toString());
+            m_endCapFilled = spec.property(QStringLiteral("endCapFilled")).toBool();
+            m_label = spec.property(QStringLiteral("label")).toString();
+            m_labelX = spec.property(QStringLiteral("labelX")).toNumber();
+            m_labelY = spec.property(QStringLiteral("labelY")).toNumber();
+        }
+
+        if (updateGeometry && (!parentWidget() || !parentWidget()->layout() || m_kind == QLatin1String("line"))) {
+            const QRect target(m_x, m_y, m_width, m_height);
+            if (geometry() != target)
+                setGeometry(target);
+        }
+        update();
+    }
+
+    bool hitTest(const QPointF &local) const
+    {
+        if (QPointF(local - QRectF(rect()).center()).manhattanLength() < 2.0)
+            return true;
+        if (m_kind == QLatin1String("shape")) {
+            QTransform tr;
+            tr.translate(m_centerX, m_centerY);
+            if (std::abs(m_rotation) > 1e-4)
+                tr.rotate(m_rotation);
+            tr.translate(-m_logicalWidth / 2.0, -m_logicalHeight / 2.0);
+            bool invOk = false;
+            const QPointF pt = tr.inverted(&invOk).map(local);
+            if (!invOk)
+                return false;
+            if (m_bodyPath.isEmpty())
+                return QRectF(0, 0, m_logicalWidth, m_logicalHeight).contains(pt);
+            if (m_fill != QLatin1String("none") && !m_fill.isEmpty() && m_bodyPath.contains(pt))
+                return true;
+            QPainterPathStroker stroker;
+            stroker.setWidth(std::max(6.0, m_strokeWidth + 4.0));
+            return stroker.createStroke(m_bodyPath).contains(pt);
+        }
+        if (m_kind == QLatin1String("line")) {
+            const QPointF pt(local.x() + m_originX, local.y() + m_originY);
+            QPainterPathStroker stroker;
+            stroker.setWidth(std::max(12.0, m_strokeWidth + 10.0));
+            return stroker.createStroke(m_hitPath).contains(pt);
+        }
+        return rect().contains(local.toPoint());
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        painter.setOpacity(qBound(0.0, m_opacity, 1.0));
+
+        auto makePen = [](const QString &colorStr, qreal width, const QString &style, Qt::PenCapStyle cap) -> QPen {
+            if (width <= 0.0 || colorStr.isEmpty() || colorStr == QLatin1String("none"))
+                return QPen(Qt::NoPen);
+            QPen pen(QColor(colorStr), width, Qt::SolidLine, cap, Qt::RoundJoin);
+            const qreal w = std::max(1.0, width);
+            if (style == QLatin1String("dashed")) {
+                pen.setDashPattern({ (w * 4.0) / width, (w * 2.5) / width });
+            } else if (style == QLatin1String("dotted")) {
+                pen.setCapStyle(Qt::RoundCap);
+                pen.setDashPattern({ (w * 0.5) / width, (w * 2.5) / width });
+            }
+            return pen;
+        };
+
+        auto makeFont = [](int pixelSize, bool bold) -> QFont {
+            QFont font(QStringLiteral("Microsoft YaHei UI"));
+            font.setStyleHint(QFont::SansSerif);
+            font.setPixelSize(std::max(1, pixelSize));
+            font.setBold(bold);
+            return font;
+        };
+
+        if (m_kind == QLatin1String("shape")) {
+            painter.save();
+            painter.translate(m_centerX, m_centerY);
+            if (std::abs(m_rotation) > 1e-4)
+                painter.rotate(m_rotation);
+            painter.translate(-m_logicalWidth / 2.0, -m_logicalHeight / 2.0);
+
+            const QBrush fillBrush = (m_fill.isEmpty() || m_fill == QLatin1String("none"))
+                ? QBrush(Qt::NoBrush)
+                : QBrush(QColor(m_fill));
+            const Qt::PenCapStyle bodyCap = (m_strokeStyle == QLatin1String("dotted")) ? Qt::RoundCap : Qt::FlatCap;
+            const QPen bodyPen = makePen(m_stroke, m_strokeWidth, m_strokeStyle, bodyCap);
+
+            if (!m_bodyPath.isEmpty()) {
+                painter.setBrush(fillBrush);
+                painter.setPen(bodyPen);
+                painter.drawPath(m_bodyPath);
+            }
+            if (!m_detailPaths.isEmpty()) {
+                const QPen detailPen = makePen(m_stroke, m_strokeWidth, m_strokeStyle, Qt::RoundCap);
+                painter.setBrush(Qt::NoBrush);
+                painter.setPen(detailPen);
+                for (const QPainterPath &dp : m_detailPaths)
+                    painter.drawPath(dp);
+            }
+            if (!m_text.isEmpty()) {
+                painter.setFont(makeFont(m_fontSize, m_fontWeight == QLatin1String("bold")));
+                painter.setPen(QColor(m_textColor));
+                int flags = Qt::AlignVCenter | Qt::TextWordWrap;
+                if (m_textAlign == QLatin1String("left"))
+                    flags |= Qt::AlignLeft;
+                else if (m_textAlign == QLatin1String("right"))
+                    flags |= Qt::AlignRight;
+                else
+                    flags |= Qt::AlignHCenter;
+                painter.drawText(m_textBox, flags, m_text);
+            }
+            painter.restore();
+            return;
+        }
+
+        if (m_kind == QLatin1String("line")) {
+            painter.save();
+            painter.translate(-m_originX, -m_originY);
+            const Qt::PenCapStyle mainCap = (m_strokeStyle == QLatin1String("dotted")) ? Qt::RoundCap : Qt::FlatCap;
+            const QPen mainPen = makePen(m_stroke, m_strokeWidth, m_strokeStyle, mainCap);
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(mainPen);
+            painter.drawPath(m_mainPath);
+
+            const QPen capPen = makePen(m_stroke, m_strokeWidth, QStringLiteral("solid"), Qt::RoundCap);
+            if (!m_startCapPath.isEmpty()) {
+                painter.setPen(capPen);
+                painter.setBrush(m_startCapFilled ? QBrush(QColor(m_stroke)) : QBrush(Qt::NoBrush));
+                painter.drawPath(m_startCapPath);
+            }
+            if (!m_endCapPath.isEmpty()) {
+                painter.setPen(capPen);
+                painter.setBrush(m_endCapFilled ? QBrush(QColor(m_stroke)) : QBrush(Qt::NoBrush));
+                painter.drawPath(m_endCapPath);
+            }
+            painter.restore();
+
+            if (!m_label.isEmpty()) {
+                const QFont font = makeFont(m_fontSize, false);
+                painter.setFont(font);
+                const QFontMetricsF fm(font);
+                const QRectF textBounds = fm.boundingRect(QRectF(0, 0, 1000, 200), Qt::AlignCenter, m_label);
+                const qreal pillW = textBounds.width() + 10.0;
+                const qreal pillH = textBounds.height() + 2.0;
+                const QRectF pillRect(m_labelX - pillW / 2.0, m_labelY - pillH / 2.0, pillW, pillH);
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(255, 255, 255));
+                painter.drawRoundedRect(pillRect, 3.0, 3.0);
+                painter.setPen(QColor(m_textColor));
+                painter.drawText(pillRect, Qt::AlignCenter, m_label);
+            }
+        }
+    }
+
+private:
+    QString m_kind;
+    int m_x = 0;
+    int m_y = 0;
+    int m_width = 1;
+    int m_height = 1;
+    int m_logicalX = 0;
+    int m_logicalY = 0;
+    int m_logicalWidth = 1;
+    int m_logicalHeight = 1;
+    double m_centerX = 0.0;
+    double m_centerY = 0.0;
+    double m_rotation = 0.0;
+    double m_opacity = 1.0;
+    QPainterPath m_bodyPath;
+    QList<QPainterPath> m_detailPaths;
+    QString m_fill;
+    QString m_stroke;
+    double m_strokeWidth = 2.0;
+    QString m_strokeStyle;
+    QString m_text;
+    QRectF m_textBox;
+    QString m_textColor;
+    int m_fontSize = 14;
+    QString m_fontWeight;
+    QString m_textAlign;
+    double m_originX = 0.0;
+    double m_originY = 0.0;
+    QPainterPath m_mainPath;
+    QPainterPath m_hitPath;
+    QPainterPath m_startCapPath;
+    bool m_startCapFilled = false;
+    QPainterPath m_endCapPath;
+    bool m_endCapFilled = false;
+    QString m_label;
+    double m_labelX = 0.0;
+    double m_labelY = 0.0;
+};
+
+QWidget *widgetAtWithHitTest(QWidget *parent, const QPoint &posInParent)
+{
+    const QObjectList &children = parent->children();
+    for (int i = int(children.size()) - 1; i >= 0; --i) {
+        QWidget *child = qobject_cast<QWidget *>(children.at(i));
+        if (!child || child->isHidden() || child->isWindow())
+            continue;
+        const QPoint childPos = child->mapFromParent(posInParent);
+        if (!child->rect().contains(childPos))
+            continue;
+        if (QWidget *deep = widgetAtWithHitTest(child, childPos))
+            return deep;
+        if (auto *graphic = dynamic_cast<VfGraphicWidget *>(child)) {
+            if (!graphic->hitTest(QPointF(childPos)))
+                continue;
+        }
+        if (!child->testAttribute(Qt::WA_TransparentForMouseEvents))
+            return child;
+    }
+    return nullptr;
+
+}
+
 } // namespace
 
 struct Ui::Private
@@ -722,6 +1442,7 @@ struct Ui::Private
     void drain(const QJSValue &pending);
     void scheduleTimers();
     void syncStatusBar();
+    void syncGraphics();
     void onDialogFinished(const QString &id);
     void applyView();
     void setShown(int index, bool shown);
@@ -735,6 +1456,7 @@ struct Ui::Private
     void build();
     bool raiseBusinessEvent(const QString &name, const QJSValue &args);
     QAbstractAnimation *createVisibility(int effect, QWidget *target, bool showing);
+    bool paintCustomEffect(int effect, QPainter *painter, const QRect &rect, const QVariantMap &props);
 };
 
 Ui::Ui(QObject *parent)
@@ -838,6 +1560,10 @@ QString Ui::widgetDump() const
         one.insert(QStringLiteral("enabled"), !control.widget->testAttribute(Qt::WA_ForceDisabled));
         one.insert(QStringLiteral("props"), props);
         one.insert(QStringLiteral("visible"), !control.widget->isHidden());
+        if (control.stateImageWidget) {
+            one.insert(QStringLiteral("visualState"), control.stateImageWidget->visualState());
+            one.insert(QStringLiteral("stateImage"), control.stateImageWidget->currentStateImage());
+        }
         all.insert(control.id, one);
     }
     return QString::fromUtf8(QJsonDocument(all).toJson(QJsonDocument::Compact));
@@ -1083,6 +1809,9 @@ bool Ui::eventFilter(QObject *watched, QEvent *event)
 
     switch (event->type()) {
     case QEvent::Resize:
+        if (watched == &d->window) {
+            d->syncGraphics();
+        }
         if (watched == &d->window)
             d->syncStatusBar();
         break;
@@ -1095,41 +1824,58 @@ bool Ui::eventFilter(QObject *watched, QEvent *event)
             d->dispatch(id, QStringLiteral("mouseenter"));
         break;
     case QEvent::Leave:
+        if (d->pressed == index) {
+            d->pressed = -1;
+            d->doubleClick = false;
+        }
         if (index > 0)
             d->dispatch(id, QStringLiteral("mouseleave"));
         break;
     case QEvent::MouseButtonPress:
     case QEvent::MouseButtonDblClick: {
         auto *mouse = static_cast<QMouseEvent *>(event);
+        int hitIndex = (mouse->button() == Qt::LeftButton) ? d->controlAt(mouse->globalPosition().toPoint()) : -1;
+        if (hitIndex < 0 && mouse->button() == Qt::LeftButton && d->controls.at(index).widget->findChildren<QWidget *>().isEmpty() && !dynamic_cast<VfGraphicWidget *>(d->controls.at(index).widget))
+            hitIndex = index;
         // 没被里面的控件处理的事件会再传给外层，外层在这里认出“不是点在我自己身上”，不重复处理
-        if (mouse->button() != Qt::LeftButton || d->controlAt(mouse->globalPosition().toPoint()) != index)
+        if (hitIndex < 0 || (hitIndex != index && !dynamic_cast<VfGraphicWidget *>(watched)))
             break;
-        d->pressed = index;
+        if (d->pressed == hitIndex && event->type() == QEvent::MouseButtonPress)
+            break;
+        d->pressed = hitIndex;
         d->doubleClick = event->type() == QEvent::MouseButtonDblClick;
-        if (index > 0)
-            d->dispatch(id, QStringLiteral("mousedown"));
+        if (hitIndex > 0)
+            d->dispatch(d->controls.at(hitIndex).id, QStringLiteral("mousedown"));
         break;
     }
     case QEvent::MouseButtonRelease: {
         auto *mouse = static_cast<QMouseEvent *>(event);
-        if (mouse->button() != Qt::LeftButton || d->pressed != index)
+        if (mouse->button() != Qt::LeftButton || d->pressed < 0 || (d->pressed != index && !dynamic_cast<VfGraphicWidget *>(watched)))
             break;
-        const int target = d->controlAt(mouse->globalPosition().toPoint());
-        const bool doubleClick = d->doubleClick;
+        const int pressedIndex = d->pressed;
+        const QString pressedId = d->controls.at(pressedIndex).id;
+        const bool isGraphicWatched = dynamic_cast<VfGraphicWidget *>(watched) != nullptr;
+        const bool insideWidget = isGraphicWatched || d->controls.at(index).widget->rect().contains(mouse->position().toPoint());
+        int hitTarget = insideWidget ? d->controlAt(mouse->globalPosition().toPoint()) : -1;
+        if (hitTarget < 0 && insideWidget && !isGraphicWatched && d->controls.at(index).widget->findChildren<QWidget *>().isEmpty() && !dynamic_cast<VfGraphicWidget *>(d->controls.at(index).widget))
+            hitTarget = index;
+        const bool wasDoubleClick = d->doubleClick;
         d->pressed = -1;
         d->doubleClick = false;
-        if (target > 0)
-            d->dispatch(d->controls.at(target).id, QStringLiteral("mouseup"));
+        if (hitTarget > 0)
+            d->dispatch(d->controls.at(hitTarget).id, QStringLiteral("mouseup"));
+        else if (!isGraphicWatched && pressedIndex > 0)
+            d->dispatch(pressedId, QStringLiteral("mouseup"));
         // 在同一个控件上按下又松开，才算一次点击
-        if (target == index) {
-            if (index > 0)
-                d->dispatch(id, QStringLiteral("click"));
+        if (hitTarget == pressedIndex) {
+            if (pressedIndex > 0)
+                d->dispatch(pressedId, QStringLiteral("click"));
             d->dispatch(QString(), QStringLiteral("window.click"));
-            if (doubleClick && index > 0)
-                d->dispatch(id, QStringLiteral("dblclick"));
-            if (index > 0) {
-                if (QMenu *pop = d->popupMenus.value(d->controls.at(index).widget, nullptr)) {
-                    QWidget *w = d->controls.at(index).widget;
+            if (wasDoubleClick && pressedIndex > 0)
+                d->dispatch(pressedId, QStringLiteral("dblclick"));
+            if (pressedIndex > 0) {
+                if (QMenu *pop = d->popupMenus.value(d->controls.at(pressedIndex).widget, nullptr)) {
+                    QWidget *w = d->controls.at(pressedIndex).widget;
                     pop->popup(w->mapToGlobal(QPoint(0, w->height())));
                 }
             }
@@ -1157,9 +1903,13 @@ int Ui::Private::add(const QString &id, QWidget *widget, QList<QPair<QString, QB
     Control control;
     control.id = id;
     control.widget = widget;
+    control.stateImageWidget = dynamic_cast<StateImageWidget *>(widget);
+    control.paintEffectWidget = dynamic_cast<PaintEffectWidget *>(widget);
     control.props = std::move(props);
     control.effect = effect;
     control.designRect = widget->geometry();
+    control.designMinSize = widget->minimumSize();
+    control.designMaxSize = widget->maximumSize();
     // 对象名就是设计项目里的控件 ID，测试和调试都靠它找控件
     widget->setObjectName(id);
     widget->installEventFilter(q);
@@ -1278,7 +2028,7 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
     auto *grid = qobject_cast<QGridLayout *>(frame->layout());
     if (!grid) {
         grid = new QGridLayout(frame);
-        grid->setContentsMargins(4, 4, 4, 4);
+        grid->setContentsMargins(2, 2, 2, 2);
         grid->setSizeConstraint(QLayout::SetNoConstraint);
     }
     while (QLayoutItem *item = grid->takeAt(0)) {
@@ -1289,8 +2039,8 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
 
     const QVariantMap schema = props.property(QStringLiteral("schema")).toVariant().toMap();
     const QVariantList ctrls = schema.value(QStringLiteral("controls")).toList();
-    grid->setHorizontalSpacing(schema.value(QStringLiteral("column_spacing"), 8).toInt());
-    grid->setVerticalSpacing(schema.value(QStringLiteral("row_spacing"), 6).toInt());
+    grid->setHorizontalSpacing(schema.value(QStringLiteral("column_spacing"), 6).toInt());
+    grid->setVerticalSpacing(qMin(2, schema.value(QStringLiteral("row_spacing"), 2).toInt()));
 
     if (ctrls.isEmpty()) {
         const QString emptyText = props.property(QStringLiteral("emptyText")).toString();
@@ -1581,7 +2331,7 @@ int Ui::Private::controlAt(const QPoint &globalPos) const
                 return -1;
             continue;
         }
-        QWidget *widget = dlg->childAt(local);
+        QWidget *widget = widgetAtWithHitTest(dlg, local);
         if (!widget)
             widget = dlg;
         while (widget) {
@@ -1591,7 +2341,7 @@ int Ui::Private::controlAt(const QPoint &globalPos) const
             widget = widget->parentWidget();
         }
     }
-    QWidget *widget = window.childAt(window.mapFromGlobal(globalPos));
+    QWidget *widget = widgetAtWithHitTest(const_cast<QMainWindow *>(&window), window.mapFromGlobal(globalPos));
     while (widget) {
         const int index = byWidget.value(widget, -1);
         if (index >= 0)
@@ -1652,6 +2402,44 @@ void Ui::Private::syncStatusBar()
         statusBarControl->setGeometry(target);
     if (statusBarControl->layout())
         statusBarControl->layout()->activate();
+}
+
+void Ui::Private::syncGraphics()
+{
+    QWidget *root = window.centralWidget();
+    const int cw = root ? root->width() : window.width();
+    const int ch = root ? root->height() : window.height();
+    const QJSValue graphics = call("graphics", { cw, ch });
+    if (!graphics.isObject())
+        return;
+    bool hasGraphics = false;
+    for (int index = 1; index < controls.size(); ++index) {
+        Control &control = controls[index];
+        auto *graphic = dynamic_cast<VfGraphicWidget *>(control.widget);
+        if (!graphic)
+            continue;
+        hasGraphics = true;
+        const QJSValue g = graphics.property(control.id);
+        if (g.isUndefined() || g.isNull())
+            continue;
+        const QRect target(
+            qRound(g.property(QStringLiteral("x")).toNumber()),
+            qRound(g.property(QStringLiteral("y")).toNumber()),
+            qMax(1, qRound(g.property(QStringLiteral("width")).toNumber())),
+            qMax(1, qRound(g.property(QStringLiteral("height")).toNumber()))
+        );
+        if (!control.transitioning && graphic->geometry() != target) {
+            graphic->setGeometry(target);
+            control.designRect = target;
+        }
+        graphic->applySpec(g, !control.transitioning);
+    }
+    if (hasGraphics && root && !root->autoFillBackground()) {
+        QPalette pal = root->palette();
+        pal.setColor(QPalette::Window, Qt::white);
+        root->setPalette(pal);
+        root->setAutoFillBackground(true);
+    }
 }
 
 void Ui::Private::onDialogFinished(const QString &id)
@@ -1952,6 +2740,15 @@ void Ui::Private::applyView()
             } else if (auto *lbl = qobject_cast<QLabel *>(control.widget)) {
                 applyLabelVisualStyle(lbl);
             }
+            if (control.stateImageWidget) {
+                const QVariantMap propsMap = props.toVariant().toMap();
+                const QString visualState = view.property(QStringLiteral("visualState")).toString();
+                const QString stateImage = view.property(QStringLiteral("stateImage")).toString();
+                control.stateImageWidget->applyViewState(propsMap, visualState, stateImage, started);
+            }
+            if (control.paintEffectWidget) {
+                control.paintEffectWidget->applyProps(props.toVariant().toMap());
+            }
         }
         setShown(index, view.property(QStringLiteral("visible")).toBool());
         if (control.widget->layout()) {
@@ -1966,6 +2763,7 @@ void Ui::Private::applyView()
     else if ((!playing || manualClock) && clockTimer.isActive())
         clockTimer.stop();
     QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    syncGraphics();
 }
 
 // 显示或隐藏一个控件。指定了效果、并且有人提供了实现时，带着过渡动画做：
@@ -1991,6 +2789,12 @@ void Ui::Private::setShown(int index, bool shown)
     }
 
     widget->setVisible(true);
+    if (widget->parentWidget() && widget->parentWidget()->layout())
+        widget->parentWidget()->layout()->activate();
+    control.designRect = widget->geometry();
+    control.designMinSize = widget->minimumSize();
+    control.designMaxSize = widget->maximumSize();
+    widget->setMinimumHeight(0);
     control.transitioning = true;
     QAbstractAnimation *animation = createVisibility(control.effect, widget, shown);
     if (!animation) {
@@ -2029,8 +2833,12 @@ void Ui::Private::clearTransition(int index)
         animation->stop();
         animation->deleteLater();
     }
+    control.widget->setMinimumSize(control.designMinSize);
+    control.widget->setMaximumSize(control.designMaxSize);
     control.widget->setGeometry(control.designRect);
     control.widget->setGraphicsEffect(nullptr);
+    if (control.widget->parentWidget() && control.widget->parentWidget()->layout())
+        control.widget->parentWidget()->layout()->activate();
 }
 
 // 一次过渡结束：动画跑完、没有动画、超时，都走这里。已经被后来的一次取代的，不做任何事。
@@ -2757,6 +3565,33 @@ void Ui::Private::build()
         dispatch(QStringLiteral("historyList"), QStringLiteral("select"), value);
     });
 
+    // colorPanelToggleBtn：StateButton
+    auto *w_colorPanelToggleBtn = new StateImageWidget(body_w_inspectorDock);
+    w_colorPanelToggleBtn->configure(
+        QStringLiteral(":/vf/logic/components/StateButton/"),
+        { { QStringLiteral("normal"), QStringLiteral("normal.svg") }, { QStringLiteral("hover"), QStringLiteral("hover.svg") }, { QStringLiteral("pressed"), QStringLiteral("pressed.svg") }, { QStringLiteral("selected"), QStringLiteral("selected.svg") }, { QStringLiteral("disabled"), QStringLiteral("disabled.svg") } },
+        QMargins(8, 8, 8, 8),
+        120
+    );
+    add(QStringLiteral("colorPanelToggleBtn"), w_colorPanelToggleBtn, { { QStringLiteral("selected"), "selected" }, { QStringLiteral("text"), "text" } });
+
+    // colorPanel：容器
+    auto *w_colorPanel = new QFrame(body_w_inspectorDock);
+    w_colorPanel->setFrameShape(QFrame::NoFrame);
+    add(QStringLiteral("colorPanel"), w_colorPanel, {}, 1 /* 效果 PanelExpand */);
+
+    // colorPickerCanvas：ColorPicker
+    auto *w_colorPickerCanvas = new PaintEffectWidget(w_colorPanel);
+    w_colorPickerCanvas->configure(QStringLiteral("ColorPickerDraw"), [this](QPainter *painter, const QRect &rect, const QVariantMap &props) {
+        return paintCustomEffect(0, painter, rect, props);
+    });
+    add(QStringLiteral("colorPickerCanvas"), w_colorPickerCanvas, { { QStringLiteral("brightness"), "brightness" }, { QStringLiteral("hexColor"), "hexColor" }, { QStringLiteral("hue"), "hue" }, { QStringLiteral("saturation"), "saturation" } });
+
+    // colorHexLabel：Label
+    auto *w_colorHexLabel = new QLabel(w_colorPanel);
+    w_colorHexLabel->setProperty("wordWrap", true);
+    add(QStringLiteral("colorHexLabel"), w_colorHexLabel, { { QStringLiteral("text"), "text" }, { QStringLiteral("tone"), "vfTone" }, { QStringLiteral("align"), "vfAlign" } });
+
     // timelineDock：停靠面板（bottom）
     auto *w_timelineDock = new QDockWidget(QStringLiteral("时间轴"), &window);
     w_timelineDock->setFeatures(QDockWidget::NoDockWidgetFeatures);
@@ -3352,23 +4187,30 @@ void Ui::Private::build()
 
     // inspectorDock 的排版（vbox）
     auto *lay_body_w_inspectorDock = new QVBoxLayout(body_w_inspectorDock);
-    lay_body_w_inspectorDock->setContentsMargins(6, 6, 6, 6);
-    lay_body_w_inspectorDock->setSpacing(4);
-    w_toolOptHeader->setFixedHeight(18);
+    lay_body_w_inspectorDock->setContentsMargins(4, 4, 4, 4);
+    lay_body_w_inspectorDock->setSpacing(2);
+    w_toolOptHeader->setFixedHeight(16);
     w_toolOptHeader->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_body_w_inspectorDock->addWidget(w_toolOptHeader, 0);
-    w_toolOptionsForm->setFixedHeight(126);
+    w_toolOptionsForm->setFixedHeight(82);
     w_toolOptionsForm->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_body_w_inspectorDock->addWidget(w_toolOptionsForm, 0);
-    w_inspectorSep1->setFixedHeight(4);
+    w_inspectorSep1->setFixedHeight(2);
     w_inspectorSep1->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_body_w_inspectorDock->addWidget(w_inspectorSep1, 0);
-    w_inspectorTabs->setFixedHeight(24);
+    w_inspectorTabs->setFixedHeight(22);
     w_inspectorTabs->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_body_w_inspectorDock->addWidget(w_inspectorTabs, 0);
     w_inspectorStack->setMinimumHeight(86);
     w_inspectorStack->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
-    lay_body_w_inspectorDock->addWidget(w_inspectorStack, 1);
+    lay_body_w_inspectorDock->addWidget(w_inspectorStack, 2);
+    w_colorPanelToggleBtn->setFixedHeight(22);
+    w_colorPanelToggleBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    lay_body_w_inspectorDock->addWidget(w_colorPanelToggleBtn, 0);
+    w_colorPanel->setMinimumHeight(42);
+    w_colorPanel->setMaximumHeight(96);
+    w_colorPanel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    lay_body_w_inspectorDock->addWidget(w_colorPanel, 1);
 
     // inspectorTabs 的排版（grid）
     auto *lay_w_inspectorTabs = new QGridLayout(w_inspectorTabs);
@@ -3379,15 +4221,15 @@ void Ui::Private::build()
     lay_w_inspectorTabs->setColumnStretch(1, 1);
     lay_w_inspectorTabs->setColumnStretch(2, 1);
     lay_w_inspectorTabs->setRowStretch(0, 0);
-    lay_w_inspectorTabs->setRowMinimumHeight(0, 24);
+    lay_w_inspectorTabs->setRowMinimumHeight(0, 22);
     lay_w_inspectorTabs->setRowStretch(1, 1);
-    w_tabPropsBtn->setFixedHeight(24);
+    w_tabPropsBtn->setFixedHeight(22);
     w_tabPropsBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_w_inspectorTabs->addWidget(w_tabPropsBtn, 0, 0, 1, 1);
-    w_tabHistoryBtn->setFixedHeight(24);
+    w_tabHistoryBtn->setFixedHeight(22);
     w_tabHistoryBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_w_inspectorTabs->addWidget(w_tabHistoryBtn, 0, 1, 1, 1);
-    w_tabExportBtn->setFixedHeight(24);
+    w_tabExportBtn->setFixedHeight(22);
     w_tabExportBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_w_inspectorTabs->addWidget(w_tabExportBtn, 0, 2, 1, 1);
 
@@ -3404,9 +4246,9 @@ void Ui::Private::build()
 
     // layerPropsPage 的排版（form）
     auto *lay_w_layerPropsPage = new QGridLayout(w_layerPropsPage);
-    lay_w_layerPropsPage->setContentsMargins(2, 2, 2, 2);
-    lay_w_layerPropsPage->setHorizontalSpacing(2);
-    lay_w_layerPropsPage->setVerticalSpacing(2);
+    lay_w_layerPropsPage->setContentsMargins(0, 0, 0, 0);
+    lay_w_layerPropsPage->setHorizontalSpacing(1);
+    lay_w_layerPropsPage->setVerticalSpacing(1);
     lay_w_layerPropsPage->setColumnMinimumWidth(0, 68);
     lay_w_layerPropsPage->setColumnStretch(0, 0);
     lay_w_layerPropsPage->setColumnStretch(1, 1);
@@ -3429,27 +4271,27 @@ void Ui::Private::build()
 
     // exportPage 的排版（vbox）
     auto *lay_w_exportPage = new QVBoxLayout(w_exportPage);
-    lay_w_exportPage->setContentsMargins(2, 2, 2, 2);
-    lay_w_exportPage->setSpacing(4);
-    w_exportHintLabel->setFixedHeight(24);
+    lay_w_exportPage->setContentsMargins(0, 0, 0, 0);
+    lay_w_exportPage->setSpacing(2);
+    w_exportHintLabel->setFixedHeight(18);
     w_exportHintLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_w_exportPage->addWidget(w_exportHintLabel, 0);
-    w_exportBtn->setFixedHeight(28);
+    w_exportBtn->setFixedHeight(22);
     w_exportBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_w_exportPage->addWidget(w_exportBtn, 0);
-    w_exportResultLabel->setFixedHeight(24);
+    w_exportResultLabel->setFixedHeight(18);
     w_exportResultLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_w_exportPage->addWidget(w_exportResultLabel, 0);
     lay_w_exportPage->addStretch(1);
 
     // historyPage 的排版（vbox）
     auto *lay_w_historyPage = new QVBoxLayout(w_historyPage);
-    lay_w_historyPage->setContentsMargins(2, 2, 2, 2);
-    lay_w_historyPage->setSpacing(4);
-    w_historyToolbar->setFixedHeight(26);
+    lay_w_historyPage->setContentsMargins(0, 0, 0, 0);
+    lay_w_historyPage->setSpacing(2);
+    w_historyToolbar->setFixedHeight(22);
     w_historyToolbar->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_w_historyPage->addWidget(w_historyToolbar, 0);
-    w_historyList->setMinimumHeight(48);
+    w_historyList->setMinimumHeight(38);
     w_historyList->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     lay_w_historyPage->addWidget(w_historyList, 1);
 
@@ -3458,18 +4300,29 @@ void Ui::Private::build()
     lay_w_historyToolbar->setContentsMargins(0, 0, 0, 0);
     lay_w_historyToolbar->setSpacing(4);
     w_undoBtn->setMinimumHeight(0);
-    w_undoBtn->setFixedWidth(78);
+    w_undoBtn->setFixedWidth(82);
     w_undoBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Ignored);
     lay_w_historyToolbar->addWidget(w_undoBtn, 0);
     w_redoBtn->setMinimumHeight(0);
-    w_redoBtn->setFixedWidth(78);
+    w_redoBtn->setFixedWidth(82);
     w_redoBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Ignored);
     lay_w_historyToolbar->addWidget(w_redoBtn, 0);
     w_clearHistoryBtn->setMinimumHeight(0);
-    w_clearHistoryBtn->setFixedWidth(80);
+    w_clearHistoryBtn->setFixedWidth(84);
     w_clearHistoryBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Ignored);
     lay_w_historyToolbar->addWidget(w_clearHistoryBtn, 0);
     lay_w_historyToolbar->addStretch(1);
+
+    // colorPanel 的排版（vbox）
+    auto *lay_w_colorPanel = new QVBoxLayout(w_colorPanel);
+    lay_w_colorPanel->setContentsMargins(2, 2, 2, 2);
+    lay_w_colorPanel->setSpacing(2);
+    w_colorPickerCanvas->setMinimumHeight(24);
+    w_colorPickerCanvas->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    lay_w_colorPanel->addWidget(w_colorPickerCanvas, 1);
+    w_colorHexLabel->setFixedHeight(12);
+    w_colorHexLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    lay_w_colorPanel->addWidget(w_colorHexLabel, 0);
 
     // timelineDock 的排版（vbox）
     auto *lay_body_w_timelineDock = new QVBoxLayout(body_w_timelineDock);
@@ -3702,10 +4555,31 @@ bool Ui::Private::raiseBusinessEvent(const QString &name, const QJSValue &args)
 // 显示隐藏的过渡：有人提供了实现，就让它创建动画并返回；没有就返回空，由调用方直接切到结束状态。
 QAbstractAnimation *Ui::Private::createVisibility(int effect, QWidget *target, bool showing)
 {
-    Q_UNUSED(effect);
-    Q_UNUSED(target);
-    Q_UNUSED(showing);
+    switch (effect) {
+    case 1: // PanelExpand
+        if (auto *implementation = effects.panelExpand())
+            return implementation->createTransition(target, showing);
+        break;
+    default:
+        break;
+    }
     return nullptr;
+}
+
+// 控件自绘效果：有人提供了实现，就调用它的 paint 并返回 true；没有就返回 false，由调用方显示占位框。
+bool Ui::Private::paintCustomEffect(int effect, QPainter *painter, const QRect &rect, const QVariantMap &props)
+{
+    switch (effect) {
+    case 0: // ColorPickerDraw
+        if (auto *implementation = effects.colorPickerDraw()) {
+            implementation->paint(painter, rect, props);
+            return true;
+        }
+        break;
+    default:
+        break;
+    }
+    return false;
 }
 
 // 业务接口的实现

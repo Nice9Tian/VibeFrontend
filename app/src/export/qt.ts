@@ -9,11 +9,14 @@ import {
   allWindowIds,
   BUILTIN_TYPES,
   businessEvent,
+  ensureComponentSvgFiles,
   isBusinessState,
   isPartitionedWindow,
   layoutOf,
+  paintEffectForNode,
   requestEvent,
   STANDARD_COMPONENTS,
+  visibleEffectForNode,
   type ComponentDecl,
   type DockArea,
   type LayoutSpec,
@@ -23,6 +26,7 @@ import {
   type Project,
   type QtMapping,
   type SizePolicy,
+  type StateImagesDecl,
 } from "../model.ts";
 import * as code from "./qt-code.ts";
 import type { RuntimeData } from "./qt-runtime.ts";
@@ -145,7 +149,8 @@ export interface ControlPlan {
   /** 子控件挂载的父变量名（例如 QDockWidget 内部装内容的 QWidget） */
   bodyVariable: string;
   parentVariable: string;
-  kind: "component" | "container" | "external" | "placeholder" | "dock" | "dialog";
+  kind: "component" | "container" | "external" | "placeholder" | "dock" | "dialog" | "shape" | "line" | "stateImage" | "paintEffect";
+  rotation?: number;
   /** 设计项目里的类型名 */
   type: string;
   qtClass: string;
@@ -161,6 +166,10 @@ export interface ControlPlan {
   events: Array<{ event: string; signal: string; type?: "string" | "number" | "boolean" }>;
   /** 显示隐藏时播放的效果在 effects 里的下标，没有是 -1 */
   effect: number;
+  /** 自绘效果在 effects 里的下标，没有是 -1 */
+  paintEffect: number;
+  paintEffectName?: string;
+  stateImages?: StateImagesDecl;
   /** 占位时显示的文字 */
   placeholder: string | null;
   hasChildren: boolean;
@@ -227,6 +236,7 @@ function sanitize(id: string): string {
 // ---------- 导出 ----------
 
 export function exportQt(project: Project, assets: QtAssets, previous: Manifest | null): QtExport {
+  ensureComponentSvgFiles(project);
   const problems: Problem[] = [];
   const error = (message: string, nodeId?: string) => problems.push({ level: "error", message, nodeId });
   const hint = (message: string, nodeId?: string) => problems.push({ level: "hint", message, nodeId });
@@ -375,7 +385,8 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
     variables.add(variable);
 
     const object = logic.objects?.[id];
-    const effectName = object?.effects?.visible;
+    const effectName = visibleEffectForNode(project, id);
+    const paintEffName = paintEffectForNode(project, id);
     const isStatusBar = id === root?.statusBar;
     const isCentral = id === root?.central;
     const plan: ControlPlan = {
@@ -394,6 +405,8 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
       fixed: [],
       events: [],
       effect: effectName ? effects.findIndex((effect) => effect.name === effectName) : -1,
+      paintEffect: paintEffName ? effects.findIndex((effect) => effect.name === paintEffName) : -1,
+      ...(paintEffName ? { paintEffectName: paintEffName } : {}),
       placeholder: null,
       hasChildren: (node.children?.length ?? 0) > 0,
       childIds: [...(node.children ?? [])],
@@ -445,9 +458,36 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
         plan.placeholder = id;
       }
     } else {
+      if (node.type === "Shape") {
+      plan.kind = "shape";
+      plan.qtClass = "VfGraphicWidget";
+      if (typeof node.rotation === "number" && node.rotation !== 0) plan.rotation = node.rotation;
+    } else if (node.type === "Line") {
+      plan.kind = "line";
+      plan.qtClass = "VfGraphicWidget";
+    } else {
       const decl: ComponentDecl | undefined = project.components.get(node.type)?.decl ?? STANDARD_COMPONENTS.get(node.type)?.decl;
       const qt: QtMapping | undefined = decl?.qt;
-      if (qt && QT_CLASS.test(qt.widget)) {
+      if (decl?.stateImages && typeof decl.stateImages === "object" && decl.stateImages.normal) {
+        plan.kind = "stateImage";
+        plan.qtClass = "StateImageWidget";
+        plan.stateImages = decl.stateImages;
+        const propNames = [...new Set([
+          ...Object.keys(decl.props ?? {}),
+          ...Object.keys(node.props ?? {}),
+          ...Object.keys(object?.props ?? {}),
+        ])].filter((name) => name !== "visible" && name !== "enabled").sort();
+        plan.props = propNames.map((name): [string, string] => [name, name]);
+      } else if (paintEffName && !qt) {
+        plan.kind = "paintEffect";
+        plan.qtClass = "PaintEffectWidget";
+        const propNames = [...new Set([
+          ...Object.keys(decl?.props ?? {}),
+          ...Object.keys(node.props ?? {}),
+          ...Object.keys(object?.props ?? {}),
+        ])].filter((name) => name !== "visible" && name !== "enabled").sort();
+        plan.props = propNames.map((name): [string, string] => [name, name]);
+      } else if (qt && QT_CLASS.test(qt.widget)) {
         plan.kind = "component";
         plan.qtClass = qt.widget;
         plan.props = Object.keys(qt.props ?? {}).map((name): [string, string] => [name, qt.props![name]]);
@@ -479,6 +519,10 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
         unmappedTypes.add(node.type);
       }
     }
+    }
+    if (node.type !== "Shape" && node.type !== "Line" && typeof node.rotation === "number" && node.rotation !== 0) {
+      hint(`控件 ${id} 设置了旋转（${node.rotation}°），普通控件导出成 Qt 时暂不处理旋转（仅基础图形 Shape 支持导出旋转）`, id);
+    }
     controls.push(plan);
     for (const child of node.children ?? []) visit(child, plan.bodyVariable);
   };
@@ -498,11 +542,7 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
   for (const child of topIds) visit(child, rootParentVar);
 
   for (const type of [...unmappedTypes].sort()) {
-    if (type === "Shape" || type === "Line") {
-      hint(`${type === "Shape" ? "基础图形" : "线条"}还不能导出成 Qt，导出后是一个占位框；事件、状态和逻辑照常工作`);
-    } else {
-      hint(`控件类型 ${type} 没有写在 Qt 里对应什么（component.json 的 qt），导出后是一个占位框；事件、状态和逻辑照常工作`);
-    }
+    hint(`控件类型 ${type} 没有写在 Qt 里对应什么（component.json 的 qt），导出后是一个占位框；事件、状态和逻辑照常工作`);
   }
   for (const name of [...unmappedProps].sort()) {
     hint(`属性 ${name} 在 Qt 里没有对应的属性，导出后不起作用`);
@@ -561,6 +601,67 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
   };
   for (const path of Object.keys(assets.generated).sort()) files.set(path, code.fill(assets.generated[path], fills[path] ?? {}));
   for (const path of Object.keys(assets.scaffold).sort()) scaffold.set(path, code.fill(assets.scaffold[path], fills[path] ?? {}));
+
+  // 状态图片控件的 SVG 资源文件：写入 ui_binding/logic/components/<type>/ 并加入 qt_add_resources
+  const extraResourceFiles: string[] = [];
+  for (const type of [...project.components.keys()].sort()) {
+    const comp = project.components.get(type)!;
+    if (!comp.decl.stateImages || !comp.svgFiles) continue;
+    for (const svgName of Object.keys(comp.svgFiles).sort()) {
+      const relInBinding = `logic/components/${comp.decl.type}/${svgName}`;
+      files.set(`ui_binding/${relInBinding}`, comp.svgFiles[svgName].replace(/\r\n/g, "\n"));
+      extraResourceFiles.push(relInBinding);
+    }
+  }
+  if (extraResourceFiles.length > 0 && files.has("ui_binding/CMakeLists.txt")) {
+    const cmake = files.get("ui_binding/CMakeLists.txt")!;
+    files.set(
+      "ui_binding/CMakeLists.txt",
+      cmake.replace(
+        "FILES logic/runtime.js logic/project.json)",
+        `FILES logic/runtime.js logic/project.json ${extraResourceFiles.join(" ")})`,
+      ),
+    );
+  }
+
+  // 如果项目从素材库带入了已配对的客户端效果文件（.designer/paired-effects.json），在导出时放入 scaffold
+  const g = globalThis as {
+    process?: { versions?: { node?: string }; getBuiltinModule?: (id: string) => unknown };
+  };
+  if (project.root && g.process?.versions?.node && typeof g.process.getBuiltinModule === "function") {
+    try {
+      const fs = g.process.getBuiltinModule("node:fs") as {
+        existsSync(p: string): boolean;
+        readFileSync(p: string, enc: "utf8"): string;
+      };
+      const pathMod = g.process.getBuiltinModule("node:path") as { join(...parts: string[]): string };
+      const pairedPath = pathMod.join(project.root, ".designer/paired-effects.json");
+      if (fs.existsSync(pairedPath)) {
+        const parsed = JSON.parse(fs.readFileSync(pairedPath, "utf8")) as {
+          effects?: Record<string, { hash?: string; qtFiles?: Record<string, string> }>;
+        };
+        const isSafeSegment = (seg: string): boolean => {
+          if (!seg || typeof seg !== "string") return false;
+          const trimmed = seg.trim();
+          if (!trimmed || trimmed !== seg || seg === "." || seg === "..") return false;
+          return !/[/\\:\u0000-\u001f<>|?*]/.test(seg);
+        };
+        for (const eff of effects) {
+          if (!isSafeSegment(eff.name)) continue;
+          const paired = parsed.effects?.[eff.name];
+          if (paired && paired.hash === eff.hash && paired.qtFiles && typeof paired.qtFiles === "object") {
+            for (const [fName, content] of Object.entries(paired.qtFiles)) {
+              if (!isSafeSegment(fName) || typeof content !== "string") continue;
+              scaffold.set(`ui_effects/${fName}`, content.replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
+            }
+          }
+        }
+      }
+    } catch {
+      // 忽略
+    }
+  }
+
   files.set("INTERFACE.md", code.interfaceDoc(context));
   files.set("business_interface/BusinessInterface.h", code.businessInterfaceHeader(context));
   files.set("ui_interface/UiEffects.h", code.uiEffectsHeader(context));
