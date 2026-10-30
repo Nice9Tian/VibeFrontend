@@ -20,11 +20,14 @@ interface Box {
   height: number;
 }
 
-const SIZES: Array<{ width: number; height: number }> = [
+const SIZES: Array<{ width: number; height: number; note?: string }> = [
   { width: 1280, height: 800 },
   { width: 1440, height: 900 },
   { width: 1024, height: 720 },
   { width: 800, height: 600 },
+  { width: 1280, height: 800, note: "从 800x600 恢复到 1280x800" },
+  { width: 800, height: 600, note: "从 1280x800 直接缩放到 800x600" },
+  { width: 1280, height: 800, note: "再次从 800x600 恢复到 1280x800" },
 ];
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -663,7 +666,7 @@ async function main(): Promise<number> {
   let failed = false;
 
   const labels = [
-    ...SIZES.map((size) => `窗口尺寸 ${size.width}x${size.height}`),
+    ...SIZES.map((size) => `窗口尺寸 ${size.width}x${size.height}${size.note ? `（${size.note}）` : ""}`),
     ...(hasNewProjectBtn ? [`窗口尺寸 ${SIZES[SIZES.length - 1].width}x${SIZES[SIZES.length - 1].height}（打开新建项目对话框）`] : []),
   ];
 
@@ -716,7 +719,7 @@ async function main(): Promise<number> {
     for (const msg of mismatches) console.log(msg);
   }
 
-  console.log(`总结：四个实测场景下 DOM 与 Qt 最大偏差 = ${globalMaxDiff}px（阈值 3px），结果：${failed ? "未通过" : "全部通过"}`);
+  console.log(`总结：${labels.length} 个实测场景下 DOM 与 Qt 最大偏差 = ${globalMaxDiff}px（阈值 3px），结果：${failed ? "未通过" : "全部通过"}`);
   return failed ? 1 : 0;
 }
 

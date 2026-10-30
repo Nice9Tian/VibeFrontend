@@ -701,6 +701,7 @@
       "type": "Flow",
       "width": 1256,
       "height": 28,
+      "size": { "horizontal": "expanding" },
       "layout": { "kind": "flow", "padding": 0, "columnGap": 6, "rowGap": 4 },
       "children": [
         "playToggleBtn",
@@ -828,6 +829,7 @@
       "type": "HBox",
       "width": 1256,
       "height": 26,
+      "size": { "horizontal": "expanding", "vertical": "fixed" },
       "layout": { "kind": "hbox", "padding": 0, "gap": 8 },
       "children": ["timelineTrackLabel", "timelineScrollBar", "timelineOffsetLabel"]
     },

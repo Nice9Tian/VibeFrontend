@@ -1366,6 +1366,9 @@
         "type": "Flow",
         "width": 1256,
         "height": 28,
+        "size": {
+          "horizontal": "expanding"
+        },
         "layout": {
           "kind": "flow",
           "padding": 0,
@@ -1558,6 +1561,10 @@
         "type": "HBox",
         "width": 1256,
         "height": 26,
+        "size": {
+          "horizontal": "expanding",
+          "vertical": "fixed"
+        },
         "layout": {
           "kind": "hbox",
           "padding": 0,

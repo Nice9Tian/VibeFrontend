@@ -409,41 +409,28 @@ public:
     {
         return qBound(m_minContainerH, doLayout(QRect(0, 0, width, 0), false), m_maxContainerH);
     }
+    int rawHeightForWidth(int width) const
+    {
+        return doLayout(QRect(0, 0, width, 0), false);
+    }
+    int minContainerH() const { return m_minContainerH; }
+    int maxContainerH() const { return m_maxContainerH; }
+    bool autoHeight() const { return m_autoHeight; }
 
-    QSize sizeHint() const override { return minimumSize(); }
-    QSize minimumSize() const override
+    QSize sizeHint() const override
     {
         const int w = parentWidget() && parentWidget()->width() > 0 ? parentWidget()->width() : 400;
         return QSize(m_padLeft + m_padRight, heightForWidth(w));
+    }
+    QSize minimumSize() const override
+    {
+        return QSize(m_padLeft + m_padRight, m_minContainerH);
     }
 
     void setGeometry(const QRect &rect) override
     {
         QLayout::setGeometry(rect);
-        const int rawH = doLayout(rect, true);
-        if (m_autoHeight) {
-            if (QWidget *pw = parentWidget()) {
-                if (auto *dock = qobject_cast<QDockWidget *>(pw->parentWidget())) {
-                    const int hdrH = dock->titleBarWidget() ? dock->titleBarWidget()->height() : 0;
-                    const int dockTargetH = qBound(m_minContainerH, hdrH + rawH, m_maxContainerH);
-                    const int bodyTargetH = qMax(0, dockTargetH - hdrH);
-                    if (pw->height() != bodyTargetH)
-                        pw->setFixedHeight(bodyTargetH);
-                    if (dock->height() != dockTargetH) {
-                        dock->setFixedHeight(dockTargetH);
-                        if (dock->parentWidget() && dock->parentWidget()->layout())
-                            dock->parentWidget()->layout()->activate();
-                    }
-                } else {
-                    const int targetH = qBound(m_minContainerH, rawH, m_maxContainerH);
-                    if (pw->height() != targetH) {
-                        pw->setFixedHeight(targetH);
-                        if (pw->parentWidget() && pw->parentWidget()->layout())
-                            pw->parentWidget()->layout()->activate();
-                    }
-                }
-            }
-        }
+        doLayout(rect, true);
     }
 
 private:
@@ -1426,6 +1413,7 @@ struct Ui::Private
     bool doubleClick = false;
     bool started = false;             // app.start 触发之前，显示和隐藏不播放效果
     bool manualClock = false;         // 显式调用 setClock 时停止自动定时器避免竞态
+    bool syncingLayout = false;
     // 界面销毁后，还没放完的效果再回调时靠它知道不能再碰界面
     std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 
@@ -1441,6 +1429,8 @@ struct Ui::Private
     void dispatch(const QString &control, const QString &event, const QJSValue &value = QJSValue());
     void drain(const QJSValue &pending);
     void scheduleTimers();
+    void syncFlowDocks();
+    void syncWindowLayout();
     void syncStatusBar();
     void syncGraphics();
     void onDialogFinished(const QString &id);
@@ -1494,6 +1484,7 @@ Ui::Ui(QObject *parent)
         " }"
     );
     d->window.setStyleSheet(globalQss);
+    d->window.installEventFilter(this);
     d->applyView();
 }
 
@@ -1501,6 +1492,7 @@ Ui::~Ui()
 {
     *d->alive = false;
     d->clockTimer.stop();
+    d->window.removeEventFilter(this);
     if (d->statusBar)
         d->statusBar->removeEventFilter(this);
     for (const Control &control : d->controls) {
@@ -1520,7 +1512,7 @@ Ui::~Ui()
 void Ui::show()
 {
     d->window.show();
-    d->syncStatusBar();
+    d->syncWindowLayout();
     start();
 }
 
@@ -1743,6 +1735,11 @@ void Ui::setDataFormField(const QString &id, const QString &fieldName, const QSt
 // 点击类事件只交给鼠标下最里面的那个控件；每次点击之后再触发一次全局事件 window.click。
 bool Ui::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == &d->window) {
+        if (event->type() == QEvent::Resize || event->type() == QEvent::Show)
+            d->syncWindowLayout();
+    }
+
     if (watched == d->statusBar) {
         if (event->type() == QEvent::Resize || event->type() == QEvent::Show || event->type() == QEvent::LayoutRequest)
             d->syncStatusBar();
@@ -2393,6 +2390,45 @@ void Ui::Private::scheduleTimers()
     }
 }
 
+void Ui::Private::syncFlowDocks()
+{
+    const int winW = window.width();
+    if (winW <= 0)
+        return;
+    for (int index = 1; index < controls.size(); ++index) {
+        auto *dock = qobject_cast<QDockWidget *>(controls.at(index).widget);
+        if (!dock || dock->isHidden())
+            continue;
+        QWidget *body = dock->widget();
+        if (!body)
+            continue;
+        auto *flow = dynamic_cast<VfFlowLayout *>(body->layout());
+        if (!flow || !flow->autoHeight())
+            continue;
+        const int hdrH = dock->titleBarWidget() ? dock->titleBarWidget()->height() : 0;
+        const int rawH = flow->rawHeightForWidth(winW);
+        const int dockTargetH = qBound(flow->minContainerH(), hdrH + rawH, flow->maxContainerH());
+        const int bodyTargetH = qMax(0, dockTargetH - hdrH);
+        if (body->minimumHeight() != bodyTargetH || body->maximumHeight() != bodyTargetH)
+            body->setFixedHeight(bodyTargetH);
+        if (dock->minimumHeight() != dockTargetH || dock->maximumHeight() != dockTargetH)
+            dock->setFixedHeight(dockTargetH);
+    }
+}
+
+void Ui::Private::syncWindowLayout()
+{
+    if (syncingLayout)
+        return;
+    syncingLayout = true;
+    syncFlowDocks();
+    if (window.layout())
+        window.layout()->activate();
+    syncStatusBar();
+    syncGraphics();
+    syncingLayout = false;
+}
+
 void Ui::Private::syncStatusBar()
 {
     if (!statusBar || !statusBarControl)
@@ -2763,7 +2799,7 @@ void Ui::Private::applyView()
     else if ((!playing || manualClock) && clockTimer.isActive())
         clockTimer.stop();
     QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
-    syncGraphics();
+    syncWindowLayout();
 }
 
 // 显示或隐藏一个控件。指定了效果、并且有人提供了实现时，带着过渡动画做：
@@ -4331,7 +4367,7 @@ void Ui::Private::build()
     w_timelineTransportFlow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     lay_body_w_timelineDock->addWidget(w_timelineTransportFlow, 0);
     w_timelineTrackRow->setFixedHeight(26);
-    w_timelineTrackRow->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    w_timelineTrackRow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     lay_body_w_timelineDock->addWidget(w_timelineTrackRow, 0);
     lay_body_w_timelineDock->addStretch(1);
 

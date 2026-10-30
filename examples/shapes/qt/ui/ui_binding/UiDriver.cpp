@@ -112,7 +112,6 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             continue;
         }
         if (verb == QLatin1String("layout")) {
-            QApplication::processEvents();
             output.append(QStringLiteral("layout ") + ui.layoutDump());
             continue;
         }
@@ -286,12 +285,8 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
         if (verb == QLatin1String("resize")) {
             const int w = id.section(QLatin1Char('x'), 0, 0).toInt();
             const int h = id.section(QLatin1Char('x'), 1, 1).toInt();
-            if (w > 0 && h > 0) {
+            if (w > 0 && h > 0)
                 ui.window()->resize(w, h);
-                QApplication::processEvents();
-                waitMs(30);
-                QApplication::processEvents();
-            }
             continue;
         }
         if (verb == QLatin1String("request")) {

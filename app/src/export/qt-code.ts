@@ -541,6 +541,11 @@ function emitLayoutForContainer(
       const stretch = c.size?.stretch ?? (c.size?.vertical === "expanding" ? 1 : 0);
       if (stretch > 0) anyStretch = true;
       const hFixed = c.size?.fixedWidth !== undefined || c.size?.horizontal === "fixed";
+      const hPolicy = hFixed
+        ? "QSizePolicy::Fixed"
+        : c.size?.horizontal === "expanding"
+          ? "QSizePolicy::Expanding"
+          : "QSizePolicy::Ignored";
       if (hFixed) {
         lines.push(`    ${cv}->setFixedWidth(${prefWidthPlan(c)});`);
       } else {
@@ -551,7 +556,7 @@ function emitLayoutForContainer(
         lines.push(`    ${cv}->setMinimumHeight(${Math.round(c.size?.minHeight ?? 0)});`);
         if (c.size?.maxHeight !== undefined) lines.push(`    ${cv}->setMaximumHeight(${Math.round(c.size.maxHeight)});`);
         lines.push(
-          `    ${cv}->setSizePolicy(${hFixed ? "QSizePolicy::Fixed" : "QSizePolicy::Ignored"}, QSizePolicy::Ignored);`,
+          `    ${cv}->setSizePolicy(${hPolicy}, QSizePolicy::Ignored);`,
           `    ${layVar}->addWidget(${cv}, ${stretch}${hFixed ? ", Qt::AlignLeft" : ""});`,
         );
       } else if (
@@ -559,6 +564,8 @@ function emitLayoutForContainer(
         c.size?.fixedHeight === undefined &&
         c.size?.vertical !== "fixed"
       ) {
+        if (c.size?.minHeight !== undefined) lines.push(`    ${cv}->setMinimumHeight(${Math.round(c.size.minHeight)});`);
+        if (c.size?.maxHeight !== undefined) lines.push(`    ${cv}->setMaximumHeight(${Math.round(c.size.maxHeight)});`);
         lines.push(
           `    ${cv}->setSizePolicy(${hFixed ? "QSizePolicy::Fixed" : "QSizePolicy::Expanding"}, QSizePolicy::Preferred);`,
           `    ${layVar}->addWidget(${cv}, 0${hFixed ? ", Qt::AlignLeft" : ""});`,
@@ -567,7 +574,7 @@ function emitLayoutForContainer(
         const bh = clampHeightPlan(c, prefHeightPlan(c));
         lines.push(
           `    ${cv}->setFixedHeight(${bh});`,
-          `    ${cv}->setSizePolicy(${hFixed ? "QSizePolicy::Fixed" : "QSizePolicy::Ignored"}, QSizePolicy::Fixed);`,
+          `    ${cv}->setSizePolicy(${hPolicy}, QSizePolicy::Fixed);`,
           `    ${layVar}->addWidget(${cv}, 0${hFixed ? ", Qt::AlignLeft" : ""});`,
         );
       }
