@@ -1085,6 +1085,22 @@ var VF = (function(exports) {
 		if (type === "Line") return LINE_DECL;
 		return (_ref = (_project$components$g = (_project$components$g2 = project.components.get(type)) === null || _project$components$g2 === void 0 ? void 0 : _project$components$g2.decl) !== null && _project$components$g !== void 0 ? _project$components$g : (_STANDARD_COMPONENTS$ = STANDARD_COMPONENTS.get(type)) === null || _STANDARD_COMPONENTS$ === void 0 ? void 0 : _STANDARD_COMPONENTS$.decl) !== null && _ref !== void 0 ? _ref : null;
 	}
+	/**
+	* 统一获取一个画布节点的全部直接子节点 ID（按 docks → central → statusBar → children 顺序去重）。
+	*/
+	function childrenOfNode(n) {
+		var _n$docks, _n$children;
+		if (!n) return [];
+		const list = [];
+		const add = (cid) => {
+			if (cid && !list.includes(cid)) list.push(cid);
+		};
+		for (const cid of (_n$docks = n.docks) !== null && _n$docks !== void 0 ? _n$docks : []) add(cid);
+		add(n.central);
+		add(n.statusBar);
+		for (const cid of (_n$children = n.children) !== null && _n$children !== void 0 ? _n$children : []) add(cid);
+		return list;
+	}
 	function allWindowIds(scene) {
 		var _scene$windows;
 		const result = [];
@@ -1103,8 +1119,8 @@ var VF = (function(exports) {
 			const menuBar = (_scene$nodes$winId = scene.nodes[winId]) === null || _scene$nodes$winId === void 0 ? void 0 : _scene$nodes$winId.menuBar;
 			if (!menuBar) continue;
 			for (const menu of (_menuBar$menus = menuBar.menus) !== null && _menuBar$menus !== void 0 ? _menuBar$menus : []) {
-				var _menu$items;
-				for (const item of (_menu$items = menu.items) !== null && _menu$items !== void 0 ? _menu$items : []) list.push({
+				var _menu$items3;
+				for (const item of (_menu$items3 = menu.items) !== null && _menu$items3 !== void 0 ? _menu$items3 : []) list.push({
 					windowId: winId,
 					menuId: menu.id,
 					item
@@ -2292,17 +2308,10 @@ var VF = (function(exports) {
 			return this.project.scene.root;
 		}
 		isInsideSubtree(rootId, targetId) {
-			var _n$children, _n$docks;
 			if (rootId === targetId) return true;
 			const n = this.project.scene.nodes[rootId];
 			if (!n) return false;
-			const children = [
-				...(_n$children = n.children) !== null && _n$children !== void 0 ? _n$children : [],
-				...(_n$docks = n.docks) !== null && _n$docks !== void 0 ? _n$docks : [],
-				...n.central ? [n.central] : [],
-				...n.statusBar ? [n.statusBar] : []
-			];
-			for (const cid of children) if (this.isInsideSubtree(cid, targetId)) return true;
+			for (const cid of childrenOfNode(n)) if (this.isInsideSubtree(cid, targetId)) return true;
 			return false;
 		}
 		stateSnapshot() {

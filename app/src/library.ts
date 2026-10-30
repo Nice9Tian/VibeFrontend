@@ -8,6 +8,7 @@ import {
   BUILTIN_TYPES,
   CONTAINER_DECL,
   declFor,
+  STANDARD_COMPONENTS,
   type ComponentDecl,
   type Problem,
   type Project,
@@ -93,6 +94,11 @@ export function isSafePathSegment(seg: string): boolean {
   if (seg === "." || seg === "..") return false;
   if (/[/\\:\u0000-\u001f<>|?*]/.test(seg)) return false;
   return true;
+}
+
+/** 判断一个名字是否为保留的内置节点类型或标准控件名（收藏与改名均不可占用）。 */
+export function isReservedComponentName(name: string): boolean {
+  return BUILTIN_TYPES.includes(name) || STANDARD_COMPONENTS.has(name);
 }
 
 /** 从控件文件表中解析 component.json。 */
@@ -207,6 +213,7 @@ export function reconcileProjectLibrary(
   const libById = new Map<string, LibraryItem>(library.map((item) => [item.id, item]));
   const localHashes = new Map<string, string>();
   for (const [type, files] of Object.entries(projectComponents)) {
+    if (isReservedComponentName(type)) continue;
     localHashes.set(type, structHashFromFiles(files));
   }
 
@@ -337,7 +344,7 @@ export function relinkOrphanedOrigin(
 ): OriginsFile {
   const next: Record<string, OriginRecord> = { ...origins.origins };
   const rec = next[missingType];
-  if (!rec || !isSafePathSegment(targetLocalType)) return origins;
+  if (!rec || !isSafePathSegment(targetLocalType) || isReservedComponentName(targetLocalType)) return origins;
   delete next[missingType];
   next[targetLocalType] = { ...rec };
   return { version: 1, origins: next };
@@ -392,7 +399,7 @@ export function prepareLibraryComponentForProject(
   // 规则 1：检查是否有来源记录指向 fav.id（含文件夹改名后按基准哈希或接口签名找回的情况）
   for (const [type, rec] of Object.entries(nextOrigins)) {
     if (rec.libraryId !== fav.id) continue;
-    if (nextComponents[type]) {
+    if (nextComponents[type] && !isReservedComponentName(type)) {
       const localHash = structHashFromFiles(nextComponents[type]);
       if (localHash === fav.hash && rec.baseHash !== fav.hash) {
         nextOrigins[type] = { libraryId: fav.id, baseHash: fav.hash };
@@ -408,7 +415,7 @@ export function prepareLibraryComponentForProject(
     }
     // 来源记录中的类型已被改名，尝试按基准哈希、收藏哈希或原声明 type 找回
     for (const [candidateType, files] of Object.entries(nextComponents)) {
-      if (nextOrigins[candidateType]) continue;
+      if (nextOrigins[candidateType] || isReservedComponentName(candidateType)) continue;
       const h = structHashFromFiles(files);
       const declType = parseComponentDecl(files, candidateType).type;
       if (h === rec.baseHash || h === fav.hash || declType === type) {
@@ -430,7 +437,7 @@ export function prepareLibraryComponentForProject(
 
   // 规则 2：本项目中没有来源记录、但结构哈希与收藏当前哈希相同的控件（名字可以不同）
   for (const [candidateType, files] of Object.entries(nextComponents)) {
-    if (nextOrigins[candidateType]) continue;
+    if (nextOrigins[candidateType] || isReservedComponentName(candidateType)) continue;
     const h = structHashFromFiles(files);
     if (h === fav.hash) {
       nextOrigins[candidateType] = { libraryId: fav.id, baseHash: fav.hash };
@@ -445,8 +452,8 @@ export function prepareLibraryComponentForProject(
     }
   }
 
-  // 规则 3：本项目中没有同名控件
-  if (!nextComponents[safeFavType]) {
+  // 规则 3：本项目中没有同名控件（且名字不是保留的内置类型或标准控件名）
+  if (!nextComponents[safeFavType] && !isReservedComponentName(safeFavType)) {
     const copiedFiles = rewriteComponentIdentity(fav.files, safeFavType, fav.label);
     nextComponents[safeFavType] = copiedFiles;
     nextOrigins[safeFavType] = { libraryId: fav.id, baseHash: fav.hash };
@@ -460,9 +467,9 @@ export function prepareLibraryComponentForProject(
     };
   }
 
-  // 规则 4：本项目中有同名控件，但结构不同且无对应来源记录 → 以新名字（如 Button_2）复制进来
+  // 规则 4：本项目中有同名控件（或与内置/标准控件重名），但结构不同且无对应来源记录 → 以新名字（如 Button_2）复制进来
   let index = 2;
-  while (nextComponents[`${safeFavType}_${index}`]) index++;
+  while (nextComponents[`${safeFavType}_${index}`] || isReservedComponentName(`${safeFavType}_${index}`)) index++;
   const newType = `${safeFavType}_${index}`;
   const copiedFiles = rewriteComponentIdentity(fav.files, newType, `${fav.label}（收藏）`);
   nextComponents[newType] = copiedFiles;
@@ -837,8 +844,8 @@ async function promptRenameProjectComponent(
   if (!host) return;
   const rawNext = window.prompt("重命名控件类型（字母、数字、下划线）：", oldKey)?.trim() ?? "";
   if (!rawNext || rawNext === oldKey) return;
-  if (!isSafePathSegment(rawNext) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(rawNext) || BUILTIN_TYPES.includes(rawNext)) {
-    host.toast("控件类型名不合法，只能使用字母、数字和下划线且不能与内置类型重名");
+  if (!isSafePathSegment(rawNext) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(rawNext) || isReservedComponentName(rawNext)) {
+    host.toast("控件类型名不合法，只能使用字母、数字和下划线且不能与内置类型或标准控件重名");
     return;
   }
   const project = host.getProject();
@@ -1346,27 +1353,10 @@ export async function renderLibraryPalette(): Promise<void> {
   }
   libContainer.replaceChildren(...libElements);
 
-  // 2. 更新“项目素材”：过滤掉已经在“收藏的素材”中显示的控件，并增强右键菜单（收藏素材、重命名控件、复制引用、查看使用位置）
+  // 2. 更新“项目素材”：标准控件常驻在最前，其后是未在“收藏的素材”中显示的本项目自定义控件
   const projElements: HTMLElement[] = [];
-  for (const component of project.components.values()) {
-    if (component.error) continue;
-    const type = component.decl.type;
-    const folder = component.folder ?? type;
-    if (
-      BUILTIN_TYPES.includes(type) ||
-      reconciled.linkedLocalTypes.has(type) ||
-      reconciled.linkedLocalTypes.has(folder)
-    ) {
-      continue;
-    }
 
-    const el = document.createElement("div");
-    el.className = "palette-item";
-    el.dataset.type = type;
-    el.textContent = component.decl.label ?? type;
-    const title = component.decl.description ?? "";
-    el.title = `${title}${title ? "\n" : ""}拖进设计窗口；或者点一下，再在设计窗口里拖出大小`;
-
+  const bindPaletteDrag = (el: HTMLElement, type: string) => {
     el.addEventListener("pointerdown", (down) => {
       if (!host || down.button !== 0) return;
       if (host.getMode() !== "edit") {
@@ -1405,6 +1395,55 @@ export async function renderLibraryPalette(): Promise<void> {
       document.addEventListener("pointermove", place);
       document.addEventListener("pointerup", up);
     });
+  };
+
+  for (const stdComp of STANDARD_COMPONENTS.values()) {
+    const type = stdComp.decl.type;
+    const el = document.createElement("div");
+    el.className = "palette-item";
+    el.dataset.type = type;
+    el.textContent = `${stdComp.decl.label ?? type}（标准）`;
+    const title = stdComp.decl.description ?? "";
+    el.title = `${title}${title ? "\n" : ""}拖进设计窗口；或者点一下，再在设计窗口里拖出大小`;
+    bindPaletteDrag(el, type);
+    el.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      if (!host) return;
+      host.openMenu(e.clientX, e.clientY, [
+        {
+          label: "复制引用",
+          action: () => host?.copyComponentRef(type),
+        },
+        {
+          label: "查看使用位置",
+          action: () => highlightComponentUsages(type),
+        },
+      ]);
+    });
+    projElements.push(el);
+  }
+
+  for (const component of project.components.values()) {
+    if (component.error) continue;
+    const type = component.decl.type;
+    const folder = component.folder ?? type;
+    if (
+      isReservedComponentName(type) ||
+      isReservedComponentName(folder) ||
+      reconciled.linkedLocalTypes.has(type) ||
+      reconciled.linkedLocalTypes.has(folder)
+    ) {
+      continue;
+    }
+
+    const el = document.createElement("div");
+    el.className = "palette-item";
+    el.dataset.type = type;
+    el.textContent = component.decl.label ?? type;
+    const title = component.decl.description ?? "";
+    el.title = `${title}${title ? "\n" : ""}拖进设计窗口；或者点一下，再在设计窗口里拖出大小`;
+
+    bindPaletteDrag(el, type);
 
     el.addEventListener("contextmenu", (e) => {
       e.preventDefault();

@@ -1,23 +1,29 @@
 // 编辑器界面：素材栏、图层、设计窗口（编辑模式 / 预览模式）、文档与 YAML 页签、问题栏。
 import { isMap, parseDocument, type Document } from "yaml";
 import { listDir, readText, watchProject, writeText } from "./fs";
-import { initDocView, syncDocView } from "./docview";
+import { initDocView, syncDocView, syncPreviewSelectionToTextarea } from "./docview";
 import { initLibrary, renderLibraryPalette } from "./library";
 import { initPreviewLauncher, initStandalonePreviewWindow, syncStandalonePreviewTitle } from "./previewwindow";
 import {
   allWindowIds,
   appendSection,
   BUILTIN_TYPES,
+  childrenOfNode,
   computeSceneLayout,
   CONTAINER_DECL,
   declFor,
   EXTERNAL_DECL,
   getSection,
+  isPartitionedWindow,
   LAYOUT_TYPE_KINDS,
   loadProject,
   LOGIC_PATH,
   MOUSE_EVENTS,
+  parentOfNode,
   parseDocRef,
+  remapNodeChildren,
+  removeNodeReferences,
+  renameNodeReferences,
   replaceSection,
   SCENE_PATH,
   sectionNameFor,
@@ -121,23 +127,11 @@ function node(id: string): SceneNode | undefined {
 }
 
 function childrenOf(n: SceneNode | undefined): string[] {
-  if (!n) return [];
-  const list: string[] = [];
-  const add = (cid: string | undefined) => {
-    if (cid && !list.includes(cid)) list.push(cid);
-  };
-  for (const cid of n.docks ?? []) add(cid);
-  add(n.central);
-  add(n.statusBar);
-  for (const cid of n.children ?? []) add(cid);
-  return list;
+  return childrenOfNode(n);
 }
 
 function parentOf(id: string): string | null {
-  for (const [parentId, parent] of Object.entries(project.scene.nodes)) {
-    if (childrenOf(parent).includes(id)) return parentId;
-  }
-  return null;
+  return parentOfNode(project.scene, id);
 }
 
 /** 节点相对于设计窗口左上角的位置。根窗口在 (0, 0)。 */
@@ -839,7 +833,7 @@ function snapTargets(exclude: string | string[] | null): Rect[] {
   const excluded = new Set<string>();
   const collect = (id: string) => {
     excluded.add(id);
-    for (const child of node(id)?.children ?? []) collect(child);
+    for (const child of childrenOf(node(id))) collect(child);
   };
   for (const id of exclude === null ? [] : typeof exclude === "string" ? [exclude] : exclude) collect(id);
   const rects: Rect[] = [];
@@ -1093,7 +1087,7 @@ function interiorAttachable(id: string): boolean {
 /** 鼠标下面能从内部挂线的节点：最上面、最里面的那个。avoid 是线另一头挂着的节点，不让线两头挂在同一个东西上。 */
 function attachableAt(px: number, py: number, excludeId: string | null, avoid: string | null): string | null {
   const visit = (id: string): string | null => {
-    const children = node(id)?.children ?? [];
+    const children = childrenOf(node(id));
     for (let i = children.length - 1; i >= 0; i--) {
       const hit = visit(children[i]);
       if (hit) return hit;
@@ -1460,7 +1454,7 @@ overlay.addEventListener("pointermove", (e) => {
     gesture.moved = true;
     Object.assign(marqueeBox.style, { display: "block", left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
     // 框住的是起点所在的那一层里、和方框有交叠的东西
-    const hits = (node(gesture.scope)?.children ?? []).filter((child) => {
+    const hits = childrenOf(node(gesture.scope)).filter((child) => {
       const r = absRect(child);
       return r.x < rect.x + rect.width && r.x + r.width > rect.x && r.y < rect.y + rect.height && r.y + r.height > rect.y;
     });
@@ -1742,7 +1736,7 @@ document.addEventListener("keydown", (e) => {
   if (ctrl && key === "a") {
     e.preventDefault();
     // 全选：窗口里最外面一层的全部东西
-    setSelection([...(node(project.scene.root)?.children ?? [])]);
+    setSelection([...childrenOf(node(project.scene.root))]);
     return;
   }
   if (ctrl && e.key === "Enter") {
@@ -1943,7 +1937,7 @@ function copyNodes(ids: string[]): Clip {
     const n = node(id);
     if (!n || nodes[id]) return;
     nodes[id] = JSON.parse(JSON.stringify(n)) as SceneNode;
-    for (const child of n.children ?? []) collect(child);
+    for (const child of childrenOf(n)) collect(child);
   };
   for (const id of ids) collect(id);
   const roots = ids.filter((id) => nodes[id]);
@@ -1989,14 +1983,14 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
     // 先占住这个 ID，后面的 newId 才不会重复
     project.scene.nodes[fresh] = { type: n.type, width: 1, height: 1 };
     order.push(id);
-    for (const child of n.children ?? []) walk(child);
+    for (const child of childrenOf(n)) walk(child);
   };
   for (const root of clip.roots) walk(root);
 
   for (const oldId of order) {
     const source = clip.nodes[oldId];
     const copy = JSON.parse(JSON.stringify(source)) as SceneNode;
-    if (copy.children) copy.children = copy.children.map((child) => idMap.get(child)).filter((child): child is string => !!child);
+    remapNodeChildren(copy, (child) => idMap.get(child));
     if (copy.type === "Line" && copy.props) {
       for (const key of ["startNode", "endNode"]) {
         const target = copy.props[key];
@@ -2022,9 +2016,15 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
       copy.x = (copy.x ?? 0) + offset - origin.x;
       copy.y = (copy.y ?? 0) + offset - origin.y;
     }
-    parent.children ??= [];
-    if (index === undefined || index < 0) parent.children.push(fresh);
-    else parent.children.splice(index, 0, fresh);
+    if (copy.type === "Dock" && parentId === project.scene.root && isPartitionedWindow(parent)) {
+      parent.docks ??= [];
+      if (index === undefined || index < 0) parent.docks.push(fresh);
+      else parent.docks.splice(index, 0, fresh);
+    } else {
+      parent.children ??= [];
+      if (index === undefined || index < 0) parent.children.push(fresh);
+      else parent.children.splice(index, 0, fresh);
+    }
     placed.push(fresh);
   }
   return placed;
@@ -2036,7 +2036,7 @@ async function duplicateNodes(ids: string[]): Promise<void> {
   const clip = copyNodes(ids);
   const placed = pasteClip(clip, (rootId) => {
     const parentId = parentOf(rootId) ?? project.scene.root;
-    const siblings = node(parentId)?.children ?? [];
+    const siblings = childrenOf(node(parentId));
     return { parentId, index: siblings.indexOf(rootId) + 1 };
   }, PASTE_OFFSET);
   selectedIds = placed;
@@ -2074,7 +2074,7 @@ async function deleteNodes(ids: string[]): Promise<void> {
   const removed = new Set<string>();
   const collect = (target: string) => {
     removed.add(target);
-    for (const child of node(target)?.children ?? []) collect(child);
+    for (const child of childrenOf(node(target))) collect(child);
   };
   for (const id of ids) if (id !== project.scene.root) collect(id);
   if (removed.size === 0) return;
@@ -2090,9 +2090,7 @@ async function deleteNodes(ids: string[]): Promise<void> {
     if (startGone) writeAnchor(line.props, "start", { point: layout.start.point, node: null, side: "auto" }, origin);
     if (endGone) writeAnchor(line.props, "end", { point: layout.end.point, node: null, side: "auto" }, origin);
   }
-  for (const n of Object.values(project.scene.nodes)) {
-    if (n.children) n.children = n.children.filter((child) => !removed.has(child));
-  }
+  removeNodeReferences(project.scene, removed);
   for (const target of removed) delete project.scene.nodes[target];
   selectedId = null;
   selectedIds = [];
@@ -2151,8 +2149,13 @@ async function reorder(id: string, toFront: boolean): Promise<void> {
   const parentId = parentOf(id);
   if (!parentId) return;
   const parent = node(parentId)!;
-  const rest = parent.children!.filter((child) => child !== id);
-  parent.children = toFront ? [...rest, id] : [id, ...rest];
+  if (parent.docks?.includes(id)) {
+    const rest = parent.docks.filter((child) => child !== id);
+    parent.docks = toFront ? [...rest, id] : [id, ...rest];
+  } else if (parent.children?.includes(id)) {
+    const rest = parent.children.filter((child) => child !== id);
+    parent.children = toFront ? [...rest, id] : [id, ...rest];
+  }
   await saveScene();
 }
 
@@ -2188,15 +2191,7 @@ async function renameId(oldId: string, nextId: string): Promise<void> {
   const scene = project.scene;
   scene.nodes[nextId] = scene.nodes[oldId];
   delete scene.nodes[oldId];
-  for (const n of Object.values(scene.nodes)) {
-    if (n.children) n.children = n.children.map((child) => (child === oldId ? nextId : child));
-    // 挂在它上面的线跟着改名
-    if (n.type === "Line" && n.props) {
-      if (n.props.startNode === oldId) n.props.startNode = nextId;
-      if (n.props.endNode === oldId) n.props.endNode = nextId;
-    }
-  }
-  if (scene.root === oldId) scene.root = nextId;
+  renameNodeReferences(scene, oldId, nextId);
   selectedId = nextId;
   yamlDirty = false;
   await writeText(LOGIC_PATH, logicText);
@@ -3090,14 +3085,18 @@ $("selection-quote").addEventListener("click", () => {
 // 文档页签的“引用所选”：选中了文字就引用那几行，否则引用当前显示的整个小节或整份文档
 $("doc-quote").addEventListener("click", async () => {
   if (!docTarget) return toast("这个控件还没有说明，先点“创建说明”");
+  syncPreviewSelectionToTextarea();
+  const selStart = docText.selectionStart;
+  const selEnd = docText.selectionEnd;
+  const textSnapshot = docText.value;
   await saveDoc();
   const { path, section } = docTarget;
   const file = project.docs.get(path) ?? "";
   const offsets = section ? sectionOffsets(file, section) : null;
   const context: [string, string] | undefined = section ? ["section", section] : undefined;
-  if (docText.selectionStart !== docText.selectionEnd) {
+  if (selStart !== selEnd) {
     const firstLine = offsets ? lineAt(file, offsets.contentStart) : 1;
-    const range = selectionRange(docText.value, docText.selectionStart, docText.selectionEnd, firstLine);
+    const range = selectionRange(textSnapshot, selStart, selEnd, firstLine);
     void copyReference(linesReference(project, path, range, context));
   } else if (section) {
     const range = docSectionRange(file, section);

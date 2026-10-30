@@ -69,6 +69,26 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string }> = [
     name: "12. [审核问题3] 模态 QDialog 通过 Esc/关闭按钮(close:)关闭后同步状态并解除主窗口锁定",
     steps: "click:newProjectBtn;check;state;close:newProjectDialog;check;state;click:addLayerBtn;check;state",
   },
+  {
+    name: "13. [复审序列1] 新建项目 → 切换导出页签 → 触发动作完成 → 清理图层队列",
+    steps:
+      "click:newProjectBtn;input:projectNameInput:Clip01;click:confirmNewProjectBtn;check;state;click:tabExportBtn;mock:exportClip:success;click:exportBtn;check;state;click:removeLayerBtn;click:removeLayerBtn;check;state",
+  },
+  {
+    name: "14. [复审序列2] 空白项目名回退与帧率边界联动导出",
+    steps:
+      "click:newProjectBtn;input:projectNameInput:   ;select:presetCombo:1080p;click:confirmNewProjectBtn;check;state;click:tabExportBtn;mock:exportClip:real;click:exportBtn;check;state",
+  },
+  {
+    name: "15. [复审序列3] 请求事件 notifyStatus 与业务事件联动",
+    steps:
+      'request:notifyStatus:{"message":"渲染进度 45% (108 帧)"};check;state;click:nextFrameBtn;click:addLayerBtn;check;state',
+  },
+  {
+    name: "16. [复审序列4] 对话框开关往返与菜单栏停靠面板切换往返",
+    steps:
+      "click:newProjectBtn;check;state;click:cancelNewProjectBtn;check;state;click:newProjectBtn;close:newProjectDialog;check;state;click:menuToggleTimeline;check;state;click:menuToggleTimeline;check;state",
+  },
 ];
 
 async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string[]> {

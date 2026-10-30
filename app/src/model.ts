@@ -481,6 +481,95 @@ export function declFor(project: RuntimeProject, type: string): ComponentDecl | 
   return project.components.get(type)?.decl ?? STANDARD_COMPONENTS.get(type)?.decl ?? null;
 }
 
+/**
+ * 统一获取一个画布节点的全部直接子节点 ID（按 docks → central → statusBar → children 顺序去重）。
+ */
+export function childrenOfNode(n: SceneNode | undefined): string[] {
+  if (!n) return [];
+  const list: string[] = [];
+  const add = (cid: string | undefined) => {
+    if (cid && !list.includes(cid)) list.push(cid);
+  };
+  for (const cid of n.docks ?? []) add(cid);
+  add(n.central);
+  add(n.statusBar);
+  for (const cid of n.children ?? []) add(cid);
+  return list;
+}
+
+/** 查找某个节点在画布树中的父节点 ID（含主窗口的 docks / central / statusBar 分区）。 */
+export function parentOfNode(scene: Scene, id: string): string | null {
+  for (const [parentId, parent] of Object.entries(scene.nodes)) {
+    if (childrenOfNode(parent).includes(id)) return parentId;
+  }
+  return null;
+}
+
+/** 从画布所有节点引用（children / docks / central / statusBar / menuBar.dock / windows）中移除一组被删除的节点 ID。 */
+export function removeNodeReferences(scene: Scene, removed: ReadonlySet<string>): void {
+  if (scene.windows) {
+    scene.windows = scene.windows.filter((wid) => !removed.has(wid));
+  }
+  for (const n of Object.values(scene.nodes)) {
+    if (n.children) n.children = n.children.filter((cid) => !removed.has(cid));
+    if (n.docks) n.docks = n.docks.filter((cid) => !removed.has(cid));
+    if (n.central && removed.has(n.central)) delete n.central;
+    if (n.statusBar && removed.has(n.statusBar)) delete n.statusBar;
+    if (n.menuBar?.menus) {
+      for (const menu of n.menuBar.menus) {
+        for (const item of menu.items ?? []) {
+          if (item.dock && removed.has(item.dock)) delete item.dock;
+        }
+      }
+    }
+  }
+}
+
+/** 将画布中对 oldId 的所有结构引用（root / windows / children / docks / central / statusBar / menuBar.dock / Line 端点）统一重命名为 nextId。 */
+export function renameNodeReferences(scene: Scene, oldId: string, nextId: string): void {
+  if (scene.root === oldId) scene.root = nextId;
+  if (scene.windows) {
+    scene.windows = scene.windows.map((wid) => (wid === oldId ? nextId : wid));
+  }
+  for (const n of Object.values(scene.nodes)) {
+    if (n.children) n.children = n.children.map((cid) => (cid === oldId ? nextId : cid));
+    if (n.docks) n.docks = n.docks.map((cid) => (cid === oldId ? nextId : cid));
+    if (n.central === oldId) n.central = nextId;
+    if (n.statusBar === oldId) n.statusBar = nextId;
+    if (n.menuBar?.menus) {
+      for (const menu of n.menuBar.menus) {
+        for (const item of menu.items ?? []) {
+          if (item.dock === oldId) item.dock = nextId;
+        }
+      }
+    }
+    if (n.type === "Line" && n.props) {
+      if (n.props.startNode === oldId) n.props.startNode = nextId;
+      if (n.props.endNode === oldId) n.props.endNode = nextId;
+    }
+  }
+}
+
+/** 复制粘贴节点时，按映射函数统一重写节点内部的 children / docks / central / statusBar 子节点 ID。 */
+export function remapNodeChildren(n: SceneNode, mapId: (oldId: string) => string | undefined): void {
+  if (n.children) {
+    n.children = n.children.map(mapId).filter((cid): cid is string => Boolean(cid));
+  }
+  if (n.docks) {
+    n.docks = n.docks.map(mapId).filter((cid): cid is string => Boolean(cid));
+  }
+  if (n.central) {
+    const mapped = mapId(n.central);
+    if (mapped) n.central = mapped;
+    else delete n.central;
+  }
+  if (n.statusBar) {
+    const mapped = mapId(n.statusBar);
+    if (mapped) n.statusBar = mapped;
+    else delete n.statusBar;
+  }
+}
+
 // ---------- 窗口、菜单与排版计算 ----------
 
 export function allWindowIds(scene: Scene): string[] {

@@ -6,6 +6,7 @@ import {
   allStateLeaves,
   allWindowIds,
   businessEvent,
+  childrenOfNode,
   declFor,
   findCondition,
   findMenuItem,
@@ -381,8 +382,7 @@ export class Runtime {
     if (rootId === targetId) return true;
     const n = this.project.scene.nodes[rootId];
     if (!n) return false;
-    const children = [...(n.children ?? []), ...(n.docks ?? []), ...(n.central ? [n.central] : []), ...(n.statusBar ? [n.statusBar] : [])];
-    for (const cid of children) {
+    for (const cid of childrenOfNode(n)) {
       if (this.isInsideSubtree(cid, targetId)) return true;
     }
     return false;

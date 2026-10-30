@@ -1,6 +1,6 @@
 // “引用”：把界面上选中的东西变成一段可以贴给 Agent 的文字，精确到文件和行号。
 import { isMap, isScalar, parseDocument, type Node } from "yaml";
-import { LOGIC_PATH, parseDocRef, SCENE_PATH, sectionOffsets, STANDARD_COMPONENTS, type Project } from "./project";
+import { childrenOfNode, LOGIC_PATH, parseDocRef, SCENE_PATH, sectionOffsets, STANDARD_COMPONENTS, type Project } from "./model.ts";
 
 /** 行号从 1 开始，首尾都包含。 */
 export interface LineRange {
@@ -115,9 +115,11 @@ function reference(project: Project, fields: Array<[string, string]>): string {
 
 function parentChain(project: Project, id: string): string[] {
   const chain = [id];
+  const visited = new Set<string>([id]);
   for (;;) {
-    const parent = Object.entries(project.scene.nodes).find(([, n]) => n.children?.includes(chain[0]));
-    if (!parent) return chain;
+    const parent = Object.entries(project.scene.nodes).find(([, n]) => childrenOfNode(n).includes(chain[0]));
+    if (!parent || visited.has(parent[0])) return chain;
+    visited.add(parent[0]);
     chain.unshift(parent[0]);
   }
 }

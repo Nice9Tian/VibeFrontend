@@ -4,6 +4,7 @@ import {
   allStateLeaves,
   BUILTIN_TYPES,
   businessEvent,
+  childrenOfNode,
   declFor,
   EFFECT_KINDS,
   findCondition,
@@ -74,11 +75,45 @@ const FORBIDDEN_DOM_IDENTIFIERS = [
   "removeEventListener",
 ];
 
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  "return",
+  "case",
+  "throw",
+  "delete",
+  "void",
+  "typeof",
+  "yield",
+  "await",
+  "in",
+  "of",
+  "instanceof",
+  "new",
+  "else",
+  "do",
+]);
+
+const COND_PAREN_KEYWORDS = new Set(["if", "while", "for", "with"]);
+
+function canStartRegexLiteral(prevToken: string): boolean {
+  if (!prevToken) return true;
+  if (prevToken === "cond)") return true;
+  if (REGEX_PRECEDING_KEYWORDS.has(prevToken)) return true;
+  if (prevToken === ")" || prevToken === "]" || prevToken === "++" || prevToken === "--" || prevToken === "literal") {
+    return false;
+  }
+  if (/^[A-Za-z_$]/.test(prevToken) || /^[0-9]/.test(prevToken)) {
+    return false;
+  }
+  return true;
+}
+
 function stripCommentsAndStringText(source: string): string {
   let out = "";
   let i = 0;
   let braceDepth = 0;
+  let prevToken = "";
   const templateBraceStack: number[] = [];
+  const parenCondStack: boolean[] = [];
 
   const scanTemplateText = () => {
     while (i < source.length) {
@@ -89,22 +124,30 @@ function stripCommentsAndStringText(source: string): string {
       if (source[i] === "`") {
         i++;
         out += "''";
+        prevToken = "literal";
         return;
       }
       if (source[i] === "$" && source[i + 1] === "{") {
         i += 2;
         templateBraceStack.push(braceDepth);
         out += " ( ";
+        prevToken = "(";
         return;
       }
       i++;
     }
     out += "''";
+    prevToken = "literal";
   };
 
   while (i < source.length) {
     const ch = source[i];
     const next = source[i + 1];
+    if (/\s/.test(ch)) {
+      out += ch;
+      i++;
+      continue;
+    }
     if (ch === "/" && next === "/") {
       i += 2;
       while (i < source.length && source[i] !== "\n") i++;
@@ -117,6 +160,46 @@ function stripCommentsAndStringText(source: string): string {
       if (i < source.length) i += 2;
       out += " ";
       continue;
+    }
+    if (ch === "/" && canStartRegexLiteral(prevToken)) {
+      // 扫描正则表达式字面量 /pattern/flags（含 [...] 字符类与 \ 转义）
+      let j = i + 1;
+      let inCharClass = false;
+      let closed = false;
+      while (j < source.length) {
+        const c = source[j];
+        if (c === "\\") {
+          if (j + 1 < source.length && source[j + 1] !== "\n" && source[j + 1] !== "\r") {
+            j += 2;
+            continue;
+          }
+          break;
+        }
+        if (c === "\n" || c === "\r") break;
+        if (c === "[") {
+          inCharClass = true;
+          j++;
+          continue;
+        }
+        if (c === "]") {
+          inCharClass = false;
+          j++;
+          continue;
+        }
+        if (c === "/" && !inCharClass) {
+          j++;
+          while (j < source.length && /[A-Za-z]/.test(source[j])) j++;
+          closed = true;
+          break;
+        }
+        j++;
+      }
+      if (closed) {
+        out += " null ";
+        prevToken = "literal";
+        i = j;
+        continue;
+      }
     }
     if (ch === "'" || ch === '"') {
       const quote = ch;
@@ -133,6 +216,7 @@ function stripCommentsAndStringText(source: string): string {
         i++;
       }
       out += "''";
+      prevToken = "literal";
       continue;
     }
     if (ch === "`") {
@@ -144,6 +228,7 @@ function stripCommentsAndStringText(source: string): string {
     if (ch === "{") {
       braceDepth++;
       out += "{";
+      prevToken = "{";
       i++;
       continue;
     }
@@ -157,10 +242,55 @@ function stripCommentsAndStringText(source: string): string {
       }
       if (braceDepth > 0) braceDepth--;
       out += "}";
+      prevToken = "}";
       i++;
       continue;
     }
+    if (ch === "(") {
+      parenCondStack.push(COND_PAREN_KEYWORDS.has(prevToken));
+      out += "(";
+      prevToken = "(";
+      i++;
+      continue;
+    }
+    if (ch === ")") {
+      const isCond = parenCondStack.pop() ?? false;
+      out += ")";
+      prevToken = isCond ? "cond)" : ")";
+      i++;
+      continue;
+    }
+    if ((ch === "+" && next === "+") || (ch === "-" && next === "-")) {
+      out += ch + next;
+      prevToken = ch + next;
+      i += 2;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(ch) || (ch === "\\" && next === "u")) {
+      let start = i;
+      while (
+        i < source.length &&
+        (/[A-Za-z0-9_$]/.test(source[i]) ||
+          (source[i] === "\\" && source[i + 1] === "u") ||
+          (source[i - 1] === "u" && source[i] === "{") ||
+          (source[i] === "}" && /\\u\{[0-9a-fA-F]+$/.test(source.slice(start, i))))
+      ) {
+        i++;
+      }
+      const word = source.slice(start, i);
+      out += word;
+      prevToken = word;
+      continue;
+    }
+    if (/[0-9]/.test(ch)) {
+      let start = i;
+      while (i < source.length && /[0-9a-fA-FxXoObB._]/.test(source[i])) i++;
+      out += source.slice(start, i);
+      prevToken = "literal";
+      continue;
+    }
     out += ch;
+    prevToken = ch;
     i++;
   }
   return out;
@@ -352,6 +482,12 @@ export function check(project: Project): Problem[] {
 
   // 画布
   for (const [id, node] of Object.entries(scene.nodes)) {
+    const childIds = childrenOfNode(node);
+    for (const cid of childIds) {
+      if (!scene.nodes[cid]) {
+        error(`节点 ${id}：引用的子节点“${cid}”在画布中不存在`, id);
+      }
+    }
     if (node.layout) {
       const validLayouts = ["vbox", "hbox", "grid", "form", "stack"];
       if (!validLayouts.includes(node.layout.kind)) {
@@ -362,7 +498,7 @@ export function check(project: Project): Problem[] {
       error(`停靠面板 ${id}：dockArea 应为 left、right、top、bottom 之一，现在是“${node.dockArea}”`, id);
     }
     if (node.type === "External") {
-      if (node.children?.length) error(`外部容器 ${id} 不能包含子节点，里面的控件由业务提供`, id);
+      if (childIds.length) error(`外部容器 ${id} 不能包含子节点，里面的控件由业务提供`, id);
       continue;
     }
     if (node.type === "Shape" || node.type === "Line") {
@@ -370,7 +506,7 @@ export function check(project: Project): Problem[] {
       for (const key of Object.keys(node.props ?? {})) {
         if (!decl.props?.[key]) error(`${node.type === "Shape" ? "形状" : "线条"} ${id}：scene.json 中的属性“${key}”不在声明里`, id);
       }
-      if (node.children?.length) error(`${id}：形状和线条不能包含子节点`, id);
+      if (childIds.length) error(`${id}：形状和线条不能包含子节点`, id);
       for (const end of ["startNode", "endNode"]) {
         const target = node.props?.[end];
         if (typeof target === "string" && target !== "" && !scene.nodes[target]) {
@@ -400,11 +536,17 @@ export function check(project: Project): Problem[] {
     }
   }
 
-  // 逻辑 JS 函数：禁止使用网页元素
+  // 逻辑 JS 函数与动作脚本：禁止使用网页元素或浏览器对象
   for (const [fnName, source] of Object.entries(project.functions ?? {})) {
     const forbidden = findForbiddenDomUsage(source);
     if (forbidden) {
       error(`函数 ${fnName}：逻辑 JS 函数不能使用网页元素或浏览器对象“${forbidden}”`);
+    }
+  }
+  for (const [actName, source] of Object.entries(project.actionSources ?? {})) {
+    const forbidden = findForbiddenDomUsage(source);
+    if (forbidden) {
+      error(`动作 ${actName}：动作 JS 脚本不能使用网页元素或浏览器对象“${forbidden}”`);
     }
   }
 
