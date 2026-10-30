@@ -123,8 +123,8 @@ bool findDropPoint(Ui &ui, const QString &dockId, QDockWidget *target, const QSt
 {
     bool found = false;
     qint64 bestDist = 0;
-    for (int y = 1; y < target->height(); y += 3) {
-        for (int x = 1; x < target->width(); x += 3) {
+    for (int y = 1; y < target->height(); y += 5) {
+        for (int x = 1; x < target->width(); x += 5) {
             const QPoint global = target->mapToGlobal(QPoint(x, y));
             if (ui.dockDropAt(dockId, global) != wanted)
                 continue;

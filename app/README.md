@@ -129,7 +129,7 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 | `scripts/compare-layout.ts` | 在三个窗口尺寸下对比工具与 Qt 控件位置和大小的命令行入口 |
 | `scripts/test-editor.ts` | 编辑器纯函数（`history.ts`、`transform.ts` 等）的单元测试入口（`npm run test:editor`） |
 | `scripts/test-step2.ts` | 步骤 2 核心能力与复审项的回归测试入口（含无头浏览器实测） |
-| `scripts/test-dock.ts` | 步骤 3 Qt 停靠与浮动嵌入框回归测试入口（含模型单测、无头浏览器真实 DOM 交互、停靠变形后与 Qt 几何比对） |
+| `scripts/test-dock.ts` | 步骤 3 Qt 停靠与浮动嵌入框回归测试入口（含模型单测、无头浏览器真实 DOM 交互、停靠变形后与 Qt 几何比对）；用环境变量 `VF_ANIMEAN_EXE` 指定 Qt 程序，找不到时第 3 项不算通过 |
 | `scripts/test-library.ts` | 结构哈希、素材库复制、来源对账与安全路径校验的单元测试（`npm run test:library`） |
 | `scripts/test-docview.ts` | 文档所见即所得预览分块往返、XSS 防护与小节锁定的单元测试（`npm run test:docview`） |
 | `scripts/test-layout-edit.ts` | 布局、尺寸规则、停靠、菜单和状态归属编辑的纯函数测试与无头浏览器端到端验收（`npm run test:layout-edit`） |

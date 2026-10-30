@@ -27,6 +27,8 @@ class Ui;
 //   reject:控件ID            触发对话框按钮盒的取消或关闭对话框（DialogButtonBox reject / QDialog::reject）
 //   close:窗口ID             模拟用户按 Esc 或点标题栏关闭按钮关闭对话框（QDialog::reject）
 //   dock:动作:参数...        执行停靠面板操作（tabify / tab / float / restore / move / split / resize / resizeSplit / close / open）
+//                            拖动类操作发真实鼠标事件：按住面板的页签按钮，拖到松手会触发该操作的点；
+//                            这样的点不存在时（手势本身做不到）才直接调用逻辑层的操作
 //   clock:毫秒               把预览时钟推进或调整到指定毫秒数（触发 clock.tick）
 //   request:事件名[:JSON]    触发业务发给界面的请求事件
 //   mock:动作名:模式[:毫秒]  切换动作模拟方式（real / success / error）及可选延迟毫秒数
