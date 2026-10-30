@@ -248,8 +248,8 @@ test("回归：素材库为空时 reconcileProjectLibrary 不清空已有的来�
   assert.equal(rec.origins.origins.TransparentInput?.libraryId, "fav-from-another-machine");
 });
 
-// 7. [回归测试 - 阻塞问题 4.3 & 4.5] Agent 只改控件文件夹名而不改 component.json，或修改实现后再改文件夹名，来源记录仍能找回
-test("回归：只改控件文件夹名不改 component.json，以及修改实现后再改文件夹名，均能找回来源记录", () => {
+// 7. [回归测试 - 阻塞问题 4.3] Agent 只改控件文件夹名而不改 component.json，来源记录仍能自动找回
+test("回归：只改控件文件夹名不改 component.json 时，自动找回来源记录", () => {
   const { library, origins } = collectComponentInLibrary(
     "TransparentInput",
     baseFiles,
@@ -259,24 +259,50 @@ test("回归：只改控件文件夹名不改 component.json，以及修改实�
     () => "fav-input",
   );
 
-  // 情况 A：只把文件夹改名为 FancyInput，component.json 里的 type 仍为 TransparentInput
+  // 只把文件夹改名为 FancyInput，component.json 里的 type 仍为 TransparentInput
   const recFolderOnly = reconcileProjectLibrary({ FancyInput: baseFiles }, library, origins);
   assert.equal(recFolderOnly.origins.origins.FancyInput?.libraryId, "fav-input");
   assert.equal(recFolderOnly.matchedByLibraryId.get("fav-input")?.localType, "FancyInput");
+});
 
-  // 情况 B：先修改了 index.js（哈希已变），再把文件夹和 type 改名为 ModifiedFancyInput
-  const modifiedAndRenamed = rewriteComponentIdentity(
+// 10. [回归测试 - 复审新发现 1] 接口签名相同但哈希与原声明 type 均不同时，不能自动关联，只能归入 orphaned 待用户确认
+test("回归：接口签名相同的未关联控件不能被自动关联，只能归入 orphaned 待用户确认", () => {
+  const { library, origins } = collectComponentInLibrary(
+    "TransparentInput",
+    baseFiles,
+    "proj-1",
+    [],
+    emptyOrigins(),
+    () => "fav-input",
+  );
+
+  // 项目的控件 TransparentInput 被删除（或改了实现并同时改了文件夹与 type 名），
+  // 同时项目中存在另一个具有相同 component.json 接口签名但实现不同的控件 OtherInput
+  const otherInputFiles = rewriteComponentIdentity(
     {
       ...baseFiles,
-      "index.js": baseFiles["index.js"] + "// local edit before rename\n",
+      "index.js": baseFiles["index.js"] + "// different implementation in OtherInput\n",
     },
-    "ModifiedFancyInput",
-    "改过的花式输入框",
+    "OtherInput",
+    "另一个输入框",
   );
-  const recModifiedRenamed = reconcileProjectLibrary({ ModifiedFancyInput: modifiedAndRenamed }, library, origins);
-  assert.equal(recModifiedRenamed.origins.origins.ModifiedFancyInput?.libraryId, "fav-input");
-  assert.equal(recModifiedRenamed.matchedByLibraryId.get("fav-input")?.localType, "ModifiedFancyInput");
-  assert.equal(recModifiedRenamed.matchedByLibraryId.get("fav-input")?.status, "modified");
+
+  const rec = reconcileProjectLibrary({ OtherInput: otherInputFiles }, library, origins);
+  // 不能把 OtherInput 自动关联到 fav-input
+  assert.equal(rec.matchedByLibraryId.get("fav-input"), undefined);
+  assert.equal(rec.origins.origins.OtherInput, undefined);
+  assert.equal(rec.origins.origins.TransparentInput?.libraryId, "fav-input");
+  assert.equal(rec.originsChanged, false);
+  // 应归入 orphaned 待用户确认，且候选列表包含接口签名相同的 OtherInput
+  assert.equal(rec.orphaned.length, 1);
+  assert.equal(rec.orphaned[0].missingType, "TransparentInput");
+  assert.deepEqual(rec.orphaned[0].candidateTypes, ["OtherInput"]);
+
+  // 用户手动确认关联后，再对账即可关联并识别为本地已改（modified）
+  const confirmedOrigins = relinkOrphanedOrigin(rec.origins, "TransparentInput", "OtherInput");
+  const recAfterConfirm = reconcileProjectLibrary({ OtherInput: otherInputFiles }, library, confirmedOrigins);
+  assert.equal(recAfterConfirm.matchedByLibraryId.get("fav-input")?.localType, "OtherInput");
+  assert.equal(recAfterConfirm.matchedByLibraryId.get("fav-input")?.status, "modified");
 });
 
 // 8. [回归测试 - 阻塞问题 4.4] “更新为收藏版本”清理本地多出的额外文件，更新后状态回到 clean

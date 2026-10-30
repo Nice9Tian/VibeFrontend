@@ -5,6 +5,8 @@
 // - 标记保护：<!-- ui-section: ... -->、<!-- /ui-section --> 和 <!-- 🔒 ... --> 显示为不可删除的标签或锁图标；
 // - 原始 HTML 块显示为“请在源码模式中编辑”，保存时原样保留。
 
+import { invoke } from "@tauri-apps/api/core";
+
 const DOC_MODE_KEY = "vf.docMode";
 
 export type DocEditMode = "source" | "preview";
@@ -403,6 +405,80 @@ export function sanitizeUrl(rawUrl: string, isImage = false): string {
   return decoded;
 }
 
+const BASE64_TABLE = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+export function docAssetMimeType(relPath: string): string | null {
+  const ext = relPath.split(".").pop()?.toLowerCase() ?? "";
+  switch (ext) {
+    case "png":
+      return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    case "bmp":
+      return "image/bmp";
+    case "ico":
+      return "image/x-icon";
+    case "svg":
+      return "image/svg+xml";
+    default:
+      return null;
+  }
+}
+
+/**
+ * 把二进制图片字节（如 PNG、JPG）无损编码为 `data:image/...;base64,...` 地址。
+ */
+export function bytesToImageDataUrl(bytes: Uint8Array, relPath: string): string | null {
+  const mime = docAssetMimeType(relPath);
+  if (!mime) return null;
+  let b64 = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    const triple = (b0 << 16) | (b1 << 8) | b2;
+    b64 += BASE64_TABLE[(triple >> 18) & 0x3f];
+    b64 += BASE64_TABLE[(triple >> 12) & 0x3f];
+    b64 += i + 1 < bytes.length ? BASE64_TABLE[(triple >> 6) & 0x3f] : "=";
+    b64 += i + 2 < bytes.length ? BASE64_TABLE[triple & 0x3f] : "=";
+  }
+  return `data:${mime};base64,${b64}`;
+}
+
+/**
+ * 把相对于文档所在目录的图片路径解析为项目内规范相对路径（如 `assets/a.png`），
+ * 严格拒绝越出项目根目录的 `..`、绝对路径、盘符或控制字符。
+ */
+export function resolveDocImageRelPath(safeSrc: string, docPath?: string): string {
+  if (!safeSrc) return "";
+  if (/^(?:https?:|mailto:|data:|blob:|\/|#)/i.test(safeSrc)) return "";
+  const normalized = safeSrc.replace(/\\/g, "/");
+  if (normalized.startsWith("/") || /^[a-zA-Z]:/.test(normalized)) return "";
+  const effectiveDocPath = docPath ?? getCurrentDocPath();
+  const baseParts = effectiveDocPath
+    ? effectiveDocPath.replace(/\\/g, "/").split("/").slice(0, -1).filter(Boolean)
+    : [];
+  for (const part of normalized.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (baseParts.length === 0) return "";
+      baseParts.pop();
+    } else {
+      if (part.includes(":") || /[\u0000-\u001f\u007f]/.test(part)) return "";
+      baseParts.push(part);
+    }
+  }
+  if (baseParts.some((p) => !p || p === "." || p === ".." || p.includes(":") || /[\u0000-\u001f\u007f]/.test(p))) {
+    return "";
+  }
+  return baseParts.join("/");
+}
+
 /**
  * 把相对于文档所在目录的图片路径解析为浏览器可加载的地址，
  * 同时在 data-md-src 中保留原始相对路径以便往返。
@@ -410,22 +486,53 @@ export function sanitizeUrl(rawUrl: string, isImage = false): string {
 export function resolveDocImageSrc(safeSrc: string, docPath?: string): string {
   if (!safeSrc) return "";
   if (/^(?:https?:|mailto:|data:|blob:|\/|#)/i.test(safeSrc)) return safeSrc;
-  const effectiveDocPath = docPath ?? getCurrentDocPath();
-  const baseParts = effectiveDocPath
-    ? effectiveDocPath.replace(/\\/g, "/").split("/").slice(0, -1).filter(Boolean)
-    : [];
-  for (const part of safeSrc.replace(/\\/g, "/").split("/")) {
-    if (!part || part === ".") continue;
-    if (part === "..") {
-      if (baseParts.length === 0) return "";
-      baseParts.pop();
-    } else {
-      baseParts.push(part);
-    }
-  }
-  const relPath = baseParts.join("/");
+  const relPath = resolveDocImageRelPath(safeSrc, docPath);
   if (!relPath) return "";
   return `/__fs/read?path=${encodeURIComponent(relPath)}`;
+}
+
+function hasTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/**
+ * 在打包后的 Tauri 桌面版中，把带有 data-doc-rel 的相对路径图片通过后端命令加载为二进制 Data URL，
+ * 同时保留 data-md-src 以便所见即所得编辑往返时还原原始相对路径。
+ */
+export async function hydrateDocImagesInElement(
+  root: ParentNode,
+  customLoader?: (relPath: string) => Promise<string | null>,
+): Promise<void> {
+  if (isPreviewWindowLocation()) return;
+  const loader =
+    customLoader ??
+    (hasTauriRuntime()
+      ? (relPath: string) => invoke<string | null>("read_image_data_url", { path: relPath })
+      : null);
+  if (!loader) return;
+  const imgs: HTMLImageElement[] = [];
+  if (typeof HTMLImageElement !== "undefined" && root instanceof HTMLImageElement && root.hasAttribute("data-doc-rel")) {
+    imgs.push(root);
+  }
+  if ("querySelectorAll" in root && typeof root.querySelectorAll === "function") {
+    for (const img of Array.from(root.querySelectorAll<HTMLImageElement>("img.doc-img[data-doc-rel]"))) {
+      imgs.push(img);
+    }
+  }
+  await Promise.all(
+    imgs.map(async (img) => {
+      const relPath = img.getAttribute("data-doc-rel") ?? "";
+      if (!relPath || resolveDocImageRelPath(relPath, "") !== relPath || !docAssetMimeType(relPath)) return;
+      try {
+        const dataUrl = await loader(relPath);
+        if (dataUrl && /^data:image\/(?:png|jpe?g|gif|webp|bmp|x-icon|svg\+xml);base64,[a-z0-9+/=\s]+$/i.test(dataUrl)) {
+          img.setAttribute("src", dataUrl);
+        }
+      } catch {
+        // 忽略不存在或读取失败的图片
+      }
+    }),
+  );
 }
 
 /** 把行内 Markdown（图片、链接、行内代码、加粗、斜体）转为安全的 HTML。 */
@@ -452,9 +559,11 @@ export function inlineMarkdownToHtml(md: string, docPath?: string): string {
     const rawAlt = unescapeHtmlEntities(stripTokens(alt));
     const rawSrc = unescapeHtmlEntities(stripTokens(src));
     const safeSrc = sanitizeUrl(rawSrc, true);
+    const relPath = safeSrc ? resolveDocImageRelPath(safeSrc, docPath) : "";
     const resolvedSrc = safeSrc ? resolveDocImageSrc(safeSrc, docPath) : "";
+    const relAttr = relPath ? ` data-doc-rel="${escapeHtml(relPath)}"` : "";
     return pushToken(
-      `<img class="doc-img" alt="${escapeHtml(rawAlt)}" src="${escapeHtml(resolvedSrc)}" data-md-src="${escapeHtml(safeSrc)}" />`,
+      `<img class="doc-img" alt="${escapeHtml(rawAlt)}" src="${escapeHtml(resolvedSrc)}" data-md-src="${escapeHtml(safeSrc)}"${relAttr} />`,
     );
   });
 
@@ -806,6 +915,7 @@ function renderBlockElement(block: DocBlock, readOnly: boolean): HTMLElement {
     const match = HEADING_RE.exec(bodyRaw);
     const contentMd = match ? match[2] : bodyRaw;
     el.innerHTML = inlineMarkdownToHtml(contentMd, docPath);
+    void hydrateDocImagesInElement(el);
     bindEditableBlockEvents(block, el, blockReadOnly);
     block.el = el;
     return el;
@@ -820,6 +930,7 @@ function renderBlockElement(block: DocBlock, readOnly: boolean): HTMLElement {
       .map((l) => l.replace(/^>[ \t]?/, ""))
       .join("\n");
     el.innerHTML = inlineMarkdownToHtml(innerMd, docPath);
+    void hydrateDocImagesInElement(el);
     bindEditableBlockEvents(block, el, blockReadOnly);
     block.el = el;
     return el;
@@ -930,6 +1041,7 @@ function renderBlockElement(block: DocBlock, readOnly: boolean): HTMLElement {
   p.className = "doc-p";
   p.contentEditable = String(!blockReadOnly);
   p.innerHTML = inlineMarkdownToHtml(bodyRaw, docPath);
+  void hydrateDocImagesInElement(p);
   bindEditableBlockEvents(block, p, blockReadOnly);
   block.el = p;
   return p;
@@ -950,6 +1062,7 @@ function createListItemElement(
     li.style.marginLeft = `${Math.min(6, Math.floor(spaces / 2)) * 18}px`;
   }
   li.innerHTML = inlineMarkdownToHtml(itemMd, getCurrentDocPath());
+  void hydrateDocImagesInElement(li);
   li.addEventListener("focus", () => {
     activeEditableBlock = block;
     syncSelectionToTextarea(block);
@@ -1021,6 +1134,7 @@ function createTableCellElement(
   const cell = document.createElement(tag);
   cell.contentEditable = String(!readOnly);
   cell.innerHTML = inlineMarkdownToHtml(cellMd, getCurrentDocPath());
+  void hydrateDocImagesInElement(cell);
   cell.addEventListener("focus", () => {
     activeEditableBlock = block;
     syncSelectionToTextarea(block);

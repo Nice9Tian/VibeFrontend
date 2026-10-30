@@ -1,19 +1,23 @@
 // 测试文档所见即所得预览（docview.ts）的 Markdown 分块往返、XSS 防护、表格转义与小节末尾换行处理。
 // 运行：npm run test:docview
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { getSection, replaceSection } from "../src/model.ts";
 import {
+  bytesToImageDataUrl,
+  hydrateDocImagesInElement,
   inlineMarkdownToHtml,
   parseMarkdownBlocks,
   parseTableCells,
+  resolveDocImageRelPath,
   serializeBlocks,
 } from "../src/docview.ts";
 
 let passed = 0;
-function test(name: string, fn: () => void): void {
-  fn();
-  passed++;
-  console.log(`PASS ${name}`);
+const queue: Array<{ name: string; fn: () => void | Promise<void> }> = [];
+function test(name: string, fn: () => void | Promise<void>): void {
+  queue.push({ name, fn });
 }
 
 // 1. [回归测试 - 阻塞问题 1.1] 二次正则替换导致的 <img> 属性逃逸零点击 XSS 探针
@@ -141,4 +145,75 @@ test("相对路径图片按文档所在目录解析 src，同时 data-md-src 保
   assert.ok(html.includes('data-md-src="../assets/a.png"'), `data-md-src 应保留原始相对路径: ${html}`);
 });
 
+// 9. [回归测试 - 复审新发现 2] 相对路径图片在打包 Tauri 桌面版和二进制 PNG/JPG 下均能显示，开发模式按二进制返回且路径校验不放松
+test("回归：相对路径二进制 PNG/JPG 在 Tauri 桌面版与开发模式下均能正确加载且路径校验不放松", async () => {
+  // (a) inlineMarkdownToHtml 应同时生成 data-doc-rel 供 Tauri 桌面版按项目内相对路径读取二进制图片
+  const htmlPng = inlineMarkdownToHtml("![PNG图](../assets/icon.png)", "docs/按钮.md");
+  const htmlJpg = inlineMarkdownToHtml("![JPG图](./photo.jpg)", "docs/按钮.md");
+  assert.ok(htmlPng.includes('data-doc-rel="assets/icon.png"'), `应标记 data-doc-rel="assets/icon.png": ${htmlPng}`);
+  assert.ok(htmlJpg.includes('data-doc-rel="docs/photo.jpg"'), `应标记 data-doc-rel="docs/photo.jpg": ${htmlJpg}`);
+
+  // (b) 路径校验不放松：越出项目根目录的相对路径、绝对路径或盘符不得生成有效 src 或 data-doc-rel
+  const htmlEscape = inlineMarkdownToHtml("![越界](../../secret.png)", "docs/按钮.md");
+  assert.ok(htmlEscape.includes('src=""'), `越出项目根目录的路径应被拒绝: ${htmlEscape}`);
+  assert.equal(htmlEscape.includes("data-doc-rel="), false, `越出项目根目录的路径不应生成 data-doc-rel: ${htmlEscape}`);
+  assert.equal(resolveDocImageRelPath("../../secret.png", "docs/按钮.md"), "");
+  assert.equal(resolveDocImageRelPath("C:\\secret.png", "docs/按钮.md"), "");
+
+  // (c) 二进制 PNG / JPG（含非 UTF-8 字节 0x89, 0xff, 0xd8 等）编码为 Data URL 后字节完全无损，且 Tauri 桌面版水合后保留 data-md-src
+  const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x80]);
+  const jpgBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0xd9]);
+  const pngDataUrl = bytesToImageDataUrl(pngBytes, "assets/icon.png");
+  const jpgDataUrl = bytesToImageDataUrl(jpgBytes, "docs/photo.jpg");
+  assert.ok(pngDataUrl?.startsWith("data:image/png;base64,"), `PNG Data URL 前缀错误: ${pngDataUrl}`);
+  assert.ok(jpgDataUrl?.startsWith("data:image/jpeg;base64,"), `JPG Data URL 前缀错误: ${jpgDataUrl}`);
+  assert.deepEqual(new Uint8Array(Buffer.from(pngDataUrl!.split(",")[1], "base64")), pngBytes);
+  assert.deepEqual(new Uint8Array(Buffer.from(jpgDataUrl!.split(",")[1], "base64")), jpgBytes);
+
+  // 验证 hydrateDocImagesInElement 对合法相对路径写入 Data URL、保留 data-md-src，且拒绝非法路径
+  const makeMockImg = (rel: string, mdSrc: string) => {
+    const attrs = new Map<string, string>([
+      ["data-doc-rel", rel],
+      ["data-md-src", mdSrc],
+      ["src", `/__fs/read?path=${encodeURIComponent(rel)}`],
+    ]);
+    return {
+      getAttribute: (k: string) => attrs.get(k) ?? null,
+      setAttribute: (k: string, v: string) => {
+        attrs.set(k, v);
+      },
+    };
+  };
+  const mockPng = makeMockImg("assets/icon.png", "../assets/icon.png");
+  const mockJpg = makeMockImg("docs/photo.jpg", "./photo.jpg");
+  const mockEvil = makeMockImg("../outside.png", "../outside.png");
+  const mockRoot = {
+    querySelectorAll: () => [mockPng, mockJpg, mockEvil],
+  } as unknown as ParentNode;
+  await hydrateDocImagesInElement(mockRoot, async (rel) => {
+    if (rel === "assets/icon.png") return pngDataUrl;
+    if (rel === "docs/photo.jpg") return jpgDataUrl;
+    return "data:image/png;base64,AAAA";
+  });
+  assert.equal(mockPng.getAttribute("src"), pngDataUrl);
+  assert.equal(mockPng.getAttribute("data-md-src"), "../assets/icon.png");
+  assert.equal(mockJpg.getAttribute("src"), jpgDataUrl);
+  assert.equal(mockJpg.getAttribute("data-md-src"), "./photo.jpg");
+  assert.equal(mockEvil.getAttribute("src"), "/__fs/read?path=..%2Foutside.png");
+
+  // (d) vite.config.ts 开发模式读取接口不能再用 readFileSync(full, "utf8") 破坏二进制图片
+  const viteConfigText = fs.readFileSync(path.resolve("vite.config.ts"), "utf8");
+  assert.equal(
+    viteConfigText.includes('readFileSync(full, "utf8")'),
+    false,
+    "vite.config.ts 的 /__fs/read 不应再用 UTF-8 文本模式读取二进制图片",
+  );
+  assert.ok(viteConfigText.includes("image/png") && viteConfigText.includes("image/jpeg"), "vite.config.ts 应返回二进制图片 MIME 类型");
+});
+
+for (const item of queue) {
+  await item.fn();
+  passed++;
+  console.log(`PASS ${item.name}`);
+}
 console.log(`全部 ${passed} 项测试通过`);

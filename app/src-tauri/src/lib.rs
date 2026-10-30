@@ -99,6 +99,48 @@ fn project_root() -> Result<String, String> {
     Ok(dir.to_string_lossy().trim_start_matches(r"\\?\").to_string())
 }
 
+fn image_mime_for_path(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => Some("image/png"),
+        Some("jpg" | "jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        Some("bmp") => Some("image/bmp"),
+        Some("ico") => Some("image/x-icon"),
+        Some("svg") => Some("image/svg+xml"),
+        _ => None,
+    }
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((triple >> 6) & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(triple & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
 #[tauri::command]
 fn read_text(path: String) -> Result<Option<String>, String> {
     ensure_non_empty_rel(&path)?;
@@ -107,6 +149,19 @@ fn read_text(path: String) -> Result<Option<String>, String> {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("读取 {path} 失败：{e}")),
+    }
+}
+
+#[tauri::command]
+fn read_image_data_url(window: tauri::WebviewWindow, path: String) -> Result<Option<String>, String> {
+    ensure_writable_window(&window)?;
+    ensure_non_empty_rel(&path)?;
+    let full = resolve(&path)?;
+    let mime = image_mime_for_path(&full).ok_or_else(|| format!("不支持的图片格式：{path}"))?;
+    match std::fs::read(&full) {
+        Ok(bytes) => Ok(Some(format!("data:{mime};base64,{}", encode_base64(&bytes)))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("读取图片 {path} 失败：{e}")),
     }
 }
 
@@ -252,6 +307,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             project_root,
             read_text,
+            read_image_data_url,
             write_text,
             remove_file,
             list_dir,

@@ -158,6 +158,8 @@ export interface OrphanedOrigin {
   missingType: string;
   libraryItem: LibraryItem;
   baseHash: string;
+  /** 接口签名相同、待用户确认是否关联的候选本地控件类型 */
+  candidateTypes: string[];
 }
 
 export interface ReconcileResult {
@@ -232,13 +234,13 @@ export function reconcileProjectLibrary(
     }
   }
 
-  // 第二步：处理文件夹或类型被改名的来源记录
+  // 第二步：处理文件夹或类型被改名的来源记录（仅按结构哈希或保留的原声明 type 自动关联；接口签名相同的仅归入待用户确认）
+  const unresolvedOrigins: Array<{ missingType: string; fav: LibraryItem; baseHash: string }> = [];
   for (const [type, rec] of Object.entries({ ...nextOrigins })) {
     if (localHashes.has(type)) continue;
     const fav = libById.get(rec.libraryId);
     if (!fav) continue;
     let renamedTo: string | null = null;
-    // 优先按结构哈希或保留的原声明 type 精确匹配
     for (const [candidateType, candidateHash] of localHashes) {
       if (usedLocalTypes.has(candidateType)) continue;
       const candidateFiles = projectComponents[candidateType];
@@ -246,20 +248,6 @@ export function reconcileProjectLibrary(
       if (candidateHash === rec.baseHash || candidateHash === fav.hash || declaredType === type) {
         renamedTo = candidateType;
         break;
-      }
-    }
-    // 次选：若用户既改了控件实现（哈希已变）又改了文件夹/type 名，按 component.json 的接口签名匹配
-    if (!renamedTo) {
-      const favSig = componentInterfaceSignature(fav.files);
-      if (favSig) {
-        for (const [candidateType] of localHashes) {
-          if (usedLocalTypes.has(candidateType)) continue;
-          const candidateSig = componentInterfaceSignature(projectComponents[candidateType] ?? {});
-          if (candidateSig === favSig) {
-            renamedTo = candidateType;
-            break;
-          }
-        }
       }
     }
     if (renamedTo) {
@@ -273,7 +261,7 @@ export function reconcileProjectLibrary(
       usedLibIds.add(fav.id);
       originsChanged = true;
     } else {
-      orphaned.push({ missingType: type, libraryItem: fav, baseHash: rec.baseHash });
+      unresolvedOrigins.push({ missingType: type, fav, baseHash: rec.baseHash });
     }
   }
 
@@ -290,6 +278,28 @@ export function reconcileProjectLibrary(
         break;
       }
     }
+  }
+
+  // 第四步：把未能按结构哈希或原声明 type 自动找回的来源记录归入 orphaned，收集接口签名相同的待用户确认候选控件
+  for (const item of unresolvedOrigins) {
+    if (usedLibIds.has(item.fav.id)) continue;
+    const favSig = componentInterfaceSignature(item.fav.files);
+    const candidateTypes: string[] = [];
+    if (favSig) {
+      for (const [candidateType] of localHashes) {
+        if (usedLocalTypes.has(candidateType)) continue;
+        const candidateSig = componentInterfaceSignature(projectComponents[candidateType] ?? {});
+        if (candidateSig === favSig) {
+          candidateTypes.push(candidateType);
+        }
+      }
+    }
+    orphaned.push({
+      missingType: item.missingType,
+      libraryItem: item.fav,
+      baseHash: item.baseHash,
+      candidateTypes,
+    });
   }
 
   const matchedByLibraryId = new Map<string, MatchedLibraryComponent>();
@@ -1127,9 +1137,13 @@ export async function renderLibraryPalette(): Promise<void> {
     project.problems.push({ level: "hint", message: `${prefix}${h.message}` });
   }
   for (const orphan of reconciled.orphaned) {
+    const candidateHint =
+      orphan.candidateTypes.length > 0
+        ? `（发现同接口控件 ${orphan.candidateTypes.join("、")}，可在收藏素材右键菜单中确认关联或清理）`
+        : "（可在收藏素材右键菜单中重新关联或清理）";
     project.problems.push({
       level: "hint",
-      message: `${prefix}收藏控件“${orphan.libraryItem.label}”的来源记录（${orphan.missingType}）在本项目中找不到对应控件（可在收藏素材右键菜单中重新关联或清理）`,
+      message: `${prefix}收藏控件“${orphan.libraryItem.label}”的来源记录（${orphan.missingType}）在本项目中找不到对应控件${candidateHint}`,
     });
   }
   host.renderProblems();
@@ -1159,6 +1173,11 @@ export async function renderLibraryPalette(): Promise<void> {
       const badge = document.createElement("span");
       badge.className = `library-badge status-${matched.status}`;
       badge.textContent = statusBadgeText(matched.status);
+      el.append(badge);
+    } else if (!matched && orphanForFav && orphanForFav.candidateTypes.length > 0) {
+      const badge = document.createElement("span");
+      badge.className = "library-badge status-diverged";
+      badge.textContent = "待确认关联";
       el.append(badge);
     }
 
@@ -1250,10 +1269,15 @@ export async function renderLibraryPalette(): Promise<void> {
       }
 
       if (orphanForFav) {
-        const unlinkedCandidates = Object.keys(projectComponents).filter((k) => !reconciled.linkedLocalTypes.has(k));
-        for (const cand of unlinkedCandidates) {
+        const sigCandidates = new Set(orphanForFav.candidateTypes);
+        const orderedCandidates = [
+          ...orphanForFav.candidateTypes,
+          ...Object.keys(projectComponents).filter((k) => !reconciled.linkedLocalTypes.has(k) && !sigCandidates.has(k)),
+        ];
+        for (const cand of orderedCandidates) {
+          const isSigMatch = sigCandidates.has(cand);
           menuItems.push({
-            label: `关联来源记录到“${cand}”`,
+            label: isSigMatch ? `确认关联到同接口控件“${cand}”` : `关联来源记录到“${cand}”`,
             action: () => {
               void (async () => {
                 const updated = relinkOrphanedOrigin(reconciled.origins, orphanForFav.missingType, cand);
