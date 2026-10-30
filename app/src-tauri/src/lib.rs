@@ -183,6 +183,12 @@ fn remove_file(window: tauri::WebviewWindow, path: String) -> Result<(), String>
     let full = resolve(&path)?;
     if full.is_file() {
         std::fs::remove_file(&full).map_err(|e| format!("删除 {path} 失败：{e}"))?;
+        if let Some(parent) = full.parent() {
+            let comps_root = project_dir().join("components");
+            if parent != comps_root && parent.starts_with(&comps_root) {
+                let _ = std::fs::remove_dir(parent);
+            }
+        }
     }
     Ok(())
 }

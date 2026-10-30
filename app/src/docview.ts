@@ -730,6 +730,7 @@ export interface DocViewHost {
   };
   getSelectedId(): string | null;
   onViewFullDoc?: () => void;
+  onCommitDoc?: () => void;
 }
 
 let docHost: DocViewHost | null = null;
@@ -789,16 +790,20 @@ function getDocTextarea(): HTMLTextAreaElement | null {
 }
 
 /** 从预览视图把改动同步回 #doc-text，并触发它的 input 事件以便自动保存。 */
-function commitPreviewChanges(): void {
+function commitPreviewChanges(immediateFlush = false): void {
   const textarea = getDocTextarea();
   if (!textarea) return;
   const nextMarkdown = serializeBlocks(currentBlocks);
   lastRenderedSource = nextMarkdown;
-  if (textarea.value === nextMarkdown) return;
+  if (textarea.value === nextMarkdown) {
+    if (immediateFlush) docHost?.onCommitDoc?.();
+    return;
+  }
   updatingTextareaFromPreview = true;
   textarea.value = nextMarkdown;
   textarea.dispatchEvent(new Event("input"));
   updatingTextareaFromPreview = false;
+  if (immediateFlush) docHost?.onCommitDoc?.();
 }
 
 /** 在预览中选中某块时，把 #doc-text 的选区同步到该块对应的字符区间，使“引用所选”按钮准确算出该段行号。 */
@@ -1122,17 +1127,19 @@ function createListItemElement(
     if (readOnly) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (block.dirty) commitPreviewChanges(true);
       const nextLi = createListItemElement(block, listEl, "", readOnly, li.dataset.indent ?? "");
       li.after(nextLi);
       block.dirty = true;
-      commitPreviewChanges();
+      commitPreviewChanges(true);
       nextLi.focus();
     } else if (e.key === "Backspace" && (li.textContent ?? "") === "" && listEl.children.length > 1) {
       e.preventDefault();
+      if (block.dirty) commitPreviewChanges(true);
       const prev = (li.previousElementSibling ?? li.nextElementSibling) as HTMLElement | null;
       li.remove();
       block.dirty = true;
-      commitPreviewChanges();
+      commitPreviewChanges(true);
       prev?.focus();
     }
   });
@@ -1141,6 +1148,7 @@ function createListItemElement(
 
 function addTableRow(block: DocBlock, table: HTMLTableElement, readOnly: boolean): HTMLTableCellElement | null {
   if (readOnly || block.locked) return null;
+  if (block.dirty) commitPreviewChanges(true);
   const colCount = table.querySelectorAll("thead th").length || 2;
   const tbody = table.querySelector("tbody") ?? table.appendChild(document.createElement("tbody"));
   const tr = document.createElement("tr");
@@ -1152,13 +1160,14 @@ function addTableRow(block: DocBlock, table: HTMLTableElement, readOnly: boolean
   }
   tbody.append(tr);
   block.dirty = true;
-  commitPreviewChanges();
+  commitPreviewChanges(true);
   firstTd?.focus();
   return firstTd;
 }
 
 function addTableColumn(block: DocBlock, table: HTMLTableElement, readOnly: boolean): void {
   if (readOnly || block.locked) return;
+  if (block.dirty) commitPreviewChanges(true);
   const headTr = table.querySelector("thead tr");
   if (!headTr) return;
   const colIndex = headTr.children.length + 1;
@@ -1167,7 +1176,7 @@ function addTableColumn(block: DocBlock, table: HTMLTableElement, readOnly: bool
     tr.append(createTableCellElement(block, table, "td", "", readOnly));
   }
   block.dirty = true;
-  commitPreviewChanges();
+  commitPreviewChanges(true);
 }
 
 function createTableCellElement(
@@ -1247,6 +1256,7 @@ function bindEditableBlockEvents(block: DocBlock, el: HTMLElement, readOnly: boo
     if (readOnly || block.locked) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (block.dirty) commitPreviewChanges(true);
       // 支持在光标处切分段落：提取光标之后的 DOM 内容到新段落中
       let afterMd = "";
       const sel = window.getSelection();
@@ -1306,6 +1316,9 @@ export function convertBlockToHeading(
   readOnly = false,
 ): void {
   if (readOnly || block.locked || lastRenderedDisabled) return;
+  if (overrideText === undefined && block.dirty) {
+    commitPreviewChanges(true);
+  }
   const currentText = overrideText !== undefined
     ? overrideText
     : block.el
@@ -1325,7 +1338,7 @@ export function convertBlockToHeading(
   }
   block.dirty = true;
   const newEl = replaceBlockInDOM(block, readOnly);
-  commitPreviewChanges();
+  commitPreviewChanges(true);
   placeCaretAtEnd(newEl);
 }
 
@@ -1337,6 +1350,9 @@ export function convertBlockToList(
   readOnly = false,
 ): void {
   if (readOnly || block.locked || lastRenderedDisabled) return;
+  if (overrideText === undefined && block.dirty) {
+    commitPreviewChanges(true);
+  }
   let itemLines: Array<{ indent: string; text: string }>;
   if (overrideText !== undefined) {
     itemLines = [{ indent: "", text: overrideText }];
@@ -1362,7 +1378,7 @@ export function convertBlockToList(
   block.raw = `${formatted}${tail}`;
   block.dirty = true;
   const newEl = replaceBlockInDOM(block, readOnly);
-  commitPreviewChanges();
+  commitPreviewChanges(true);
   const firstLi = newEl.querySelector<HTMLElement>("li");
   if (firstLi) placeCaretAtEnd(firstLi);
 }
@@ -1393,13 +1409,14 @@ function insertNewParagraphAfter(target: DocBlock, readOnly: boolean, initialMd 
   currentBlocks.splice(idx + 1, 0, newBlock);
   const newEl = renderBlockElement(newBlock, readOnly);
   target.el?.after(newEl);
-  commitPreviewChanges();
+  commitPreviewChanges(true);
   if (initialMd) placeCaretAtStart(newEl);
   else newEl.focus();
 }
 
 function insertTableAfterActive(readOnly: boolean): void {
   if (readOnly || lastRenderedDisabled || activeEditableBlock?.locked) return;
+  if (currentBlocks.some((b) => b.dirty)) commitPreviewChanges(true);
   const tableBody = "| 列 1 | 列 2 |\n| --- | --- |\n| 内容 1 | 内容 2 |";
   const idx = activeEditableBlock ? currentBlocks.indexOf(activeEditableBlock) : -1;
   if (idx >= 0 && activeEditableBlock?.el) {
@@ -1447,13 +1464,14 @@ function insertTableAfterActive(readOnly: boolean): void {
       previewContainer.append(newEl);
     }
   }
-  commitPreviewChanges();
+  commitPreviewChanges(true);
 }
 
 /** 选中文字时浮出的小工具条：加粗、斜体、标题、列表、行内代码、链接、表格。 */
 function applyInlineFormat(kind: "bold" | "italic" | "code" | "link"): void {
   const block = activeEditableBlock;
   if (!block || !block.el || block.locked || lastRenderedDisabled) return;
+  if (block.dirty) commitPreviewChanges(true);
   if (kind === "bold") {
     document.execCommand("bold");
   } else if (kind === "italic") {
@@ -1487,7 +1505,7 @@ function applyInlineFormat(kind: "bold" | "italic" | "code" | "link"): void {
     }
   }
   block.dirty = true;
-  commitPreviewChanges();
+  commitPreviewChanges(true);
 }
 
 function buildFloatingToolbar(): HTMLElement {

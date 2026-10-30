@@ -84,6 +84,8 @@ export interface SceneNode {
   y?: number;
   width: number;
   height: number;
+  rotation?: number;
+  locked?: boolean;
   title?: string;
   props?: Record<string, Value>;
   children?: string[];
@@ -704,6 +706,51 @@ export interface ComputedBox {
 export function isPartitionedWindow(node: SceneNode | undefined): boolean {
   if (!node) return false;
   return Boolean(node.menuBar || node.statusBar || node.central || (node.docks && node.docks.length > 0));
+}
+
+/** 节点是否是分区主窗口直接挂载的分区节点（docks / central / statusBar）。 */
+export function isPartitionNode(scene: Scene, id: string): boolean {
+  const parentId = parentOfNode(scene, id);
+  if (!parentId) return false;
+  const parent = scene.nodes[parentId];
+  if (!parent || !isPartitionedWindow(parent)) return false;
+  return Boolean(parent.docks?.includes(id) || parent.central === id || parent.statusBar === id);
+}
+
+/** 节点的父容器是否启用了自动排版（VBox / HBox / Grid / Form / Stack 或 layout 字段）。 */
+export function isLayoutChildNode(scene: Scene, id: string): boolean {
+  const parentId = parentOfNode(scene, id);
+  if (!parentId) return false;
+  return layoutOf(scene.nodes[parentId]) !== null;
+}
+
+/**
+ * 节点的位置 (x, y) 是否由自动排版或窗口分区决定（而非自由坐标）。
+ * 对此类节点进行移动、缩放、旋转、对齐或分布时，不应向其写入无意义的 x、y 坐标。
+ */
+export function isLayoutPositionedNode(scene: Scene, id: string): boolean {
+  if (id === scene.root) return true;
+  const n = scene.nodes[id];
+  if (!n) return false;
+  if ((n.type === "Dialog" || n.type === "Window") && !parentOfNode(scene, id)) return true;
+  return isPartitionNode(scene, id) || isLayoutChildNode(scene, id);
+}
+
+/**
+ * 缩放节点后更新其宽高（受 SizePolicy 夹紧保护）；若节点在 size 中声明了 preferredWidth/Height 或 fixedWidth/Height，
+ * 同步更新对应字段，使排版计算立即反映缩放后的新尺寸。
+ */
+export function syncResizedNodeDimensions(node: SceneNode, width: number, height: number, minSize = 8): void {
+  const rawW = Math.max(minSize, Math.round(width));
+  const rawH = Math.max(minSize, Math.round(height));
+  if (node.size?.fixedWidth !== undefined) node.size.fixedWidth = rawW;
+  if (node.size?.fixedHeight !== undefined) node.size.fixedHeight = rawH;
+  const nextW = clampWidth(node, rawW);
+  const nextH = clampHeight(node, rawH);
+  node.width = nextW;
+  node.height = nextH;
+  if (node.size?.preferredWidth !== undefined) node.size.preferredWidth = nextW;
+  if (node.size?.preferredHeight !== undefined) node.size.preferredHeight = nextH;
 }
 
 /**

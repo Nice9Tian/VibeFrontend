@@ -719,6 +719,8 @@ export interface LibraryHost {
   getZoom(): number;
   readText(path: string): Promise<string | null>;
   writeText(path: string, content: string): Promise<void>;
+  removeFile?(path: string): Promise<void>;
+  onComponentRenamed?(oldTypes: string[], nextType: string): Promise<void>;
   listDir(path: string): Promise<Array<{ name: string; isDir: boolean }>>;
   reload(): Promise<void>;
   toast(message: string): void;
@@ -825,7 +827,13 @@ async function writeComponentFolder(
     if (!isSafePathSegment(rmName) || rmName in files) continue;
     const relPath = `components/${folder}/${rmName}`;
     deletedProjectFiles.add(relPath);
-    if (isTauriEnv()) {
+    if (host.removeFile) {
+      try {
+        await host.removeFile(relPath);
+      } catch {
+        // 忽略
+      }
+    } else if (isTauriEnv()) {
       try {
         await tauriInvoke("remove_file", { path: relPath });
       } catch {
@@ -864,16 +872,20 @@ async function promptRenameProjectComponent(
   // 清理旧目录中的文件
   await writeComponentFolder(oldKey, {}, Object.keys(files));
 
-  // 同步更新 scene.json 中使用该控件类型的节点
-  let sceneChanged = false;
-  for (const n of Object.values(project.scene.nodes)) {
-    if (n.type === oldKey || n.type === oldType) {
-      n.type = rawNext;
-      sceneChanged = true;
+  // 同步更新 scene.json 中使用该控件类型的节点，并更新历史栈中的组件类型引用
+  if (host.onComponentRenamed) {
+    await host.onComponentRenamed([oldKey, oldType], rawNext);
+  } else {
+    let sceneChanged = false;
+    for (const n of Object.values(project.scene.nodes)) {
+      if (n.type === oldKey || n.type === oldType) {
+        n.type = rawNext;
+        sceneChanged = true;
+      }
     }
-  }
-  if (sceneChanged) {
-    await host.writeText("ui/scene.json", JSON.stringify(project.scene, null, 2) + "\n");
+    if (sceneChanged) {
+      await host.writeText("ui/scene.json", JSON.stringify(project.scene, null, 2) + "\n");
+    }
   }
 
   // 同步更新 origins.json
