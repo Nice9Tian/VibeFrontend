@@ -28,10 +28,13 @@ if(ANIMEAN_WITH_PYTHON OR ANIMEAN_BUILD_PYTHON_MODULE)
     set(PYBIND11_FINDPYTHON ON)
     set(PYBIND11_TEST OFF CACHE BOOL "Build pybind11 tests" FORCE)
     add_subdirectory(external/pybind11)
+    if(NOT EXISTS "${ANIMEAN_PYTHON_HOME}" AND DEFINED Python_EXECUTABLE)
+        get_filename_component(ANIMEAN_PYTHON_HOME "${Python_EXECUTABLE}" DIRECTORY)
+    endif()
 endif()
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets OpenGLWidgets)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets OpenGLWidgets)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Widgets OpenGLWidgets)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets OpenGLWidgets)
 
 include(CTest)
 
@@ -52,12 +55,19 @@ add_library(animean_core STATIC
     algorithm/viewscale.h
     projectio.cpp
     projectio.h
+    selectionattention.cpp
+    selectionattention.h
 )
 target_include_directories(animean_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/algorithm
 )
-target_link_libraries(animean_core PUBLIC Qt${QT_VERSION_MAJOR}::Widgets)
+target_link_libraries(animean_core PUBLIC
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+)
+
+add_subdirectory(business)
 
 set(PROJECT_SOURCES
     centralpaintarea.cpp
@@ -68,8 +78,6 @@ set(PROJECT_SOURCES
     mainwindow.cpp
     mainwindow.h
     mainwindow.ui
-    selectionattention.cpp
-    selectionattention.h
     openglwidget.cpp
     openglwidget.h
     paintviewcontainer.cpp
@@ -133,7 +141,12 @@ target_include_directories(AnimeAn PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/pythonbind
 )
 
-target_link_libraries(AnimeAn PRIVATE animean_core Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::OpenGLWidgets)
+target_link_libraries(AnimeAn PRIVATE
+    animean_core
+    animean_business
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::OpenGLWidgets
+)
 
 if(BUILD_TESTING)
     add_executable(projectio_tests tests/projectio_tests.cpp)
@@ -147,10 +160,13 @@ if(BUILD_TESTING)
     add_executable(strokefit_tests tests/strokefit_tests.cpp)
     target_link_libraries(strokefit_tests PRIVATE animean_core)
     add_test(NAME strokefit_zoom_invariance COMMAND strokefit_tests)
+
+    add_executable(business_tests tests/business_tests.cpp)
+    target_link_libraries(business_tests PRIVATE animean_business)
+    add_test(NAME business_headless COMMAND business_tests)
 endif()
 
 if(ANIMEAN_WITH_PYTHON)
-    target_sources(AnimeAn PRIVATE pythonbind/python_bindings.cpp pythonbind/python_bindings.h)
     target_link_libraries(AnimeAn PRIVATE pybind11::embed)
     target_compile_definitions(AnimeAn PRIVATE
         ANIMEAN_WITH_PYTHON
@@ -162,13 +178,25 @@ if(ANIMEAN_WITH_PYTHON)
         ANIMEAN_PYTHON_DIR_NAME="${ANIMEAN_PYTHON_DIR_NAME}"
     )
 
+    set(_ANIMEAN_PYTHON_DLL_SOURCE_DIR "${ANIMEAN_PYTHON_HOME}")
+    if(NOT EXISTS "${_ANIMEAN_PYTHON_DLL_SOURCE_DIR}" AND DEFINED Python_EXECUTABLE)
+        get_filename_component(_ANIMEAN_PYTHON_DLL_SOURCE_DIR "${Python_EXECUTABLE}" DIRECTORY)
+    endif()
+
     foreach(ANIMEAN_PYTHON_DLL python312.dll python3.dll vcruntime140.dll vcruntime140_1.dll)
-        if(EXISTS "${ANIMEAN_PYTHON_HOME}/${ANIMEAN_PYTHON_DLL}")
+        if(EXISTS "${_ANIMEAN_PYTHON_DLL_SOURCE_DIR}/${ANIMEAN_PYTHON_DLL}")
             add_custom_command(TARGET AnimeAn POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${ANIMEAN_PYTHON_HOME}/${ANIMEAN_PYTHON_DLL}"
+                    "${_ANIMEAN_PYTHON_DLL_SOURCE_DIR}/${ANIMEAN_PYTHON_DLL}"
                     "$<TARGET_FILE_DIR:AnimeAn>"
             )
+            if(BUILD_TESTING AND TARGET business_tests)
+                add_custom_command(TARGET business_tests POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_ANIMEAN_PYTHON_DLL_SOURCE_DIR}/${ANIMEAN_PYTHON_DLL}"
+                        "$<TARGET_FILE_DIR:business_tests>"
+                )
+            endif()
         endif()
     endforeach()
 
@@ -260,10 +288,14 @@ if(ANIMEAN_WITH_PYTHON)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/childrenpanel/tool_controls"
             "$<TARGET_FILE_DIR:AnimeAn>/childrenpanel/tool_controls"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/pywheels"
-            "$<TARGET_FILE_DIR:AnimeAn>/pywheels"
     )
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/pywheels")
+        add_custom_command(TARGET AnimeAn POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/pywheels"
+                "$<TARGET_FILE_DIR:AnimeAn>/pywheels"
+        )
+    endif()
 endif()
 
 if(WIN32 AND QT_VERSION_MAJOR EQUAL 6)
