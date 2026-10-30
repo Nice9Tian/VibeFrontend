@@ -18,6 +18,7 @@ project/
     index.js
     style.css
   effects/<效果名>/          # 需要翻译的效果（第 9.4 节），没有可以不建
+  ui/presets.json           # 用户存下来的图形预设（第 10.4 节），没有可以不建
     effect.json
     index.js
 ```
@@ -95,7 +96,7 @@ User referenced "control=hintBox; type=Container (unconverted); path=panelWindow
 
 没有转换的容器（`type` 为 `Container`）也能参与逻辑：它支持 `visible` 属性和全部鼠标事件。
 
-另有一种工具自带的类型 `External`（外部容器），用法见第 9.3 节。
+另有几种工具自带的类型：`External`（外部容器）见第 9.3 节；`Shape`（基础图形）和 `Line`（线条）见第 10 节。
 
 ## 4. 控件的写法
 
@@ -497,3 +498,96 @@ objects:
 ```
 
 导出的文件夹里有一份 `AGENTS.md`，写明哪些文件是生成的、不能改，以及怎样接业务、怎样翻译效果；`INTERFACE.md` 列出全部接口和相对上一次导出的变化。可以参考仓库里的 `examples/minimal/`。
+
+## 10. 基础图形和线条
+
+除了控件，画布上还可以放基础图形和线条，用来画示意图、流程图。它们是工具自带的两种类型 `Shape` 和 `Line`，不需要 `components/` 里有文件夹。用户在工具里用画图工具画（参照 Figma 和 FigJam），Agent 也可以直接写进 `scene.json`。
+
+### 10.1 形状 `Shape`
+
+```json
+"decision1": {
+  "type": "Shape",
+  "x": 200, "y": 120, "width": 140, "height": 100,
+  "props": { "shape": "diamond", "fill": "#e2ecff", "stroke": "#2563eb", "text": "已登录？" }
+}
+```
+
+| 属性 | 类型 | 默认 | 含义 |
+| --- | --- | --- | --- |
+| `shape` | string | `rectangle` | 形状，见下表 |
+| `fill` | string | `#ffffff` | 填充色，`none` 表示不填 |
+| `stroke` | string | `#1f2430` | 描边色，`none` 表示不描边 |
+| `strokeWidth` | number | 2 | 描边粗细 |
+| `strokeStyle` | string | `solid` | `solid` 实线、`dashed` 虚线、`dotted` 点线 |
+| `radius` | number | 0 | 圆角，只对 `rectangle` 有效；很大的值（如 999）得到胶囊形 |
+| `sides` | number | 5 | 边数，只对 `polygon` 有效 |
+| `points`、`ratio` | number | 5、0.45 | 角数和内径比例，只对 `star` 有效 |
+| `opacity` | number | 1 | 不透明度，0 到 1 |
+| `text` | string | 空 | 写在形状里的字，可以换行 |
+| `textColor`、`fontSize`、`fontWeight`、`textAlign` | | `#1f2430`、14、`normal`、`center` | 文字的颜色、字号、粗细（`bold`）、对齐（`left`、`center`、`right`） |
+
+`shape` 可以是：
+
+| 分组 | 取值 |
+| --- | --- |
+| 基础图形 | `rectangle` 矩形、`ellipse` 椭圆、`diamond` 菱形、`triangle` 三角形、`triangleDown` 倒三角、`polygon` 多边形、`star` 星形、`plus` 十字、`arrowRight` 右箭头、`arrowLeft` 左箭头、`arrowBoth` 双向箭头、`chevron` 折角箭头、`speechBubble` 对话气泡、`cloud` 云、`text` 纯文字（没有轮廓） |
+| 流程图 | `hexagon` 六边形（准备）、`parallelogram` 平行四边形（输入输出）、`parallelogramLeft`、`trapezoid` 梯形（手动操作）、`manualInput` 手动输入、`cylinder` 圆柱（数据库）、`cylinderHorizontal` 横向圆柱、`document` 文档、`multiDocument` 多文档、`predefinedProcess` 预定义处理、`internalStorage` 内部存储、`file` 文件、`or` 或、`summingJunction` 求和 |
+
+### 10.2 线条 `Line`
+
+```json
+"connector1": {
+  "type": "Line",
+  "x": 0, "y": 0, "width": 1, "height": 1,
+  "props": {
+    "startNode": "start1", "startSide": "right",
+    "endNode": "decision1", "endSide": "auto",
+    "x1": 0, "y1": 0, "x2": 0, "y2": 0,
+    "route": "elbow", "endCap": "triangle", "label": "下一步"
+  }
+}
+```
+
+| 属性 | 类型 | 默认 | 含义 |
+| --- | --- | --- | --- |
+| `x1`、`y1`、`x2`、`y2` | number | 0、0、160、0 | 起点和终点，相对于线所在的父节点 |
+| `startNode`、`endNode` | string | 空 | 这一头挂在哪个节点上。挂着时位置由那个节点决定，节点移动时线跟着走；`x1` 等只在节点被删掉后使用 |
+| `startSide`、`endSide` | string | `auto` | 挂在节点的哪里：`top`、`right`、`bottom`、`left` 是那一边的中点；`auto` 是朝着另一头自动选边；`outline` 是外轮廓上的某一点，见下一行。形状的“边中点”和外轮廓都按形状真实的轮廓算（三角形的左边中点在斜边上），不按方框 |
+| `startAt`、`endAt` | string | 空 | `side` 为 `outline` 时，这一点在节点方框里的相对位置，`x,y` 形式，0 到 1，例如 `0.959,0.356`。节点缩放后按这个比例找回位置，再贴到轮廓上 |
+| `bends` | string | 空 | 折线手动调整过的拐点，`x,y;x,y` 的形式，相对于线的父节点，不含两头。空表示由工具自动走线。只对 `route: elbow` 有效 |
+| `route` | string | `straight` | `straight` 直线、`elbow` 折线（只走水平和竖直）、`curved` 曲线 |
+| `startCap`、`endCap` | string | `none` | 端头：`none`、`arrow` 线形箭头、`triangle` 实心箭头、`circle` 圆点、`diamond` 菱形、`bar` 短横 |
+| `stroke`、`strokeWidth`、`strokeStyle`、`opacity` | | 同形状 | 线的颜色、粗细、线型、不透明度 |
+| `label`、`textColor`、`fontSize` | | 空、`#1f2430`、12 | 线中间的文字 |
+
+- 线的 `x`、`y`、`width`、`height` 是工具算出来的外框，写个大概就行，工具保存时会重算。
+- 挂上去的节点可以是形状，也可以是任何控件和容器，但不能是线，也不能是窗口本身。
+- 线不能包含子节点；形状也不能。
+
+### 10.3 和逻辑一起用
+
+形状和线条也是普通的节点：有 ID，能收到第 5.5 节的鼠标事件，可以在 `app.logic.yaml` 的 `objects.<ID>.props` 里用表达式控制 `visible` 和除了位置以外的属性（例如 `fill: demo.color`、`text: panel.message`）。所以示意图也可以做成能点、能变的。
+
+### 10.4 预设
+
+工具素材栏里的“基础图形”“流程图”“线条”是工具自带的预设。用户在工具里把某个形状的样式“存为预设”后，存在 `ui/presets.json`：
+
+```json
+{
+  "version": 1,
+  "presets": [
+    {
+      "id": "user-abc123", "label": "判断 · 蓝", "group": "我的预设",
+      "type": "Shape", "idBase": "decision", "width": 140, "height": 100,
+      "props": { "shape": "diamond", "fill": "#e2ecff", "stroke": "#2563eb" }
+    }
+  ]
+}
+```
+
+用户要求“加一个预设”时，可以按这个格式往里加。`props` 里只放样式，不放 `text`、位置和挂接。
+
+### 10.5 导出
+
+形状和线条目前还不能导出成 Qt，导出后是占位框，事件和逻辑照常。

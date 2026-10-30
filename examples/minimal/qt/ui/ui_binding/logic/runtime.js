@@ -157,6 +157,241 @@ var VF = (function(exports) {
 		};
 	}
 	//#endregion
+	//#region \0@oxc-project+runtime@0.153.0/helpers/esm/typeof.js
+	function _typeof(o) {
+		"@babel/helpers - typeof";
+		return _typeof = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function(o) {
+			return typeof o;
+		} : function(o) {
+			return o && "function" == typeof Symbol && o.constructor === Symbol && o !== Symbol.prototype ? "symbol" : typeof o;
+		}, _typeof(o);
+	}
+	//#endregion
+	//#region \0@oxc-project+runtime@0.153.0/helpers/esm/toPrimitive.js
+	function toPrimitive(t, r) {
+		if ("object" != _typeof(t) || !t) return t;
+		var e = t[Symbol.toPrimitive];
+		if (void 0 !== e) {
+			var i = e.call(t, r || "default");
+			if ("object" != _typeof(i)) return i;
+			throw new TypeError("@@toPrimitive must return a primitive value.");
+		}
+		return ("string" === r ? String : Number)(t);
+	}
+	//#endregion
+	//#region \0@oxc-project+runtime@0.153.0/helpers/esm/toPropertyKey.js
+	function toPropertyKey(t) {
+		var i = toPrimitive(t, "string");
+		return "symbol" == _typeof(i) ? i : i + "";
+	}
+	//#endregion
+	//#region \0@oxc-project+runtime@0.153.0/helpers/esm/defineProperty.js
+	function _defineProperty(e, r, t) {
+		return (r = toPropertyKey(r)) in e ? Object.defineProperty(e, r, {
+			value: t,
+			enumerable: !0,
+			configurable: !0,
+			writable: !0
+		}) : e[r] = t, e;
+	}
+	//#endregion
+	//#region src/shapes.ts
+	/** 形状：一个可以填色、描边、写字的图形。 */
+	const SHAPE_DECL = {
+		type: "Shape",
+		label: "形状",
+		description: "矩形、椭圆、菱形、星形、流程图图形等。可以填色、描边、在里面写字",
+		defaultSize: {
+			width: 120,
+			height: 80
+		},
+		props: {
+			shape: {
+				type: "string",
+				default: "rectangle",
+				logic: true
+			},
+			fill: {
+				type: "string",
+				default: "#ffffff",
+				logic: true
+			},
+			stroke: {
+				type: "string",
+				default: "#1f2430",
+				logic: true
+			},
+			strokeWidth: {
+				type: "number",
+				default: 2,
+				logic: true
+			},
+			strokeStyle: {
+				type: "string",
+				default: "solid",
+				logic: true
+			},
+			radius: {
+				type: "number",
+				default: 0,
+				logic: true
+			},
+			opacity: {
+				type: "number",
+				default: 1,
+				logic: true
+			},
+			sides: {
+				type: "number",
+				default: 5,
+				logic: true
+			},
+			points: {
+				type: "number",
+				default: 5,
+				logic: true
+			},
+			ratio: {
+				type: "number",
+				default: .45,
+				logic: true
+			},
+			text: {
+				type: "string",
+				default: "",
+				logic: true
+			},
+			textColor: {
+				type: "string",
+				default: "#1f2430",
+				logic: true
+			},
+			fontSize: {
+				type: "number",
+				default: 14,
+				logic: true
+			},
+			fontWeight: {
+				type: "string",
+				default: "normal",
+				logic: true
+			},
+			textAlign: {
+				type: "string",
+				default: "center",
+				logic: true
+			}
+		},
+		children: false
+	};
+	/** 线条：直线、折线或曲线，两端可以挂在别的节点上，跟着它们走。 */
+	const LINE_DECL = {
+		type: "Line",
+		label: "线条",
+		description: "直线、箭头、连接线。两端可以挂在形状或控件上，被挂的东西移动时线跟着走",
+		defaultSize: {
+			width: 160,
+			height: 0
+		},
+		props: {
+			x1: {
+				type: "number",
+				default: 0
+			},
+			y1: {
+				type: "number",
+				default: 0
+			},
+			x2: {
+				type: "number",
+				default: 160
+			},
+			y2: {
+				type: "number",
+				default: 0
+			},
+			startNode: {
+				type: "string",
+				default: ""
+			},
+			startSide: {
+				type: "string",
+				default: "auto"
+			},
+			endNode: {
+				type: "string",
+				default: ""
+			},
+			endSide: {
+				type: "string",
+				default: "auto"
+			},
+			startAt: {
+				type: "string",
+				default: ""
+			},
+			endAt: {
+				type: "string",
+				default: ""
+			},
+			bends: {
+				type: "string",
+				default: ""
+			},
+			route: {
+				type: "string",
+				default: "straight",
+				logic: true
+			},
+			stroke: {
+				type: "string",
+				default: "#1f2430",
+				logic: true
+			},
+			strokeWidth: {
+				type: "number",
+				default: 2,
+				logic: true
+			},
+			strokeStyle: {
+				type: "string",
+				default: "solid",
+				logic: true
+			},
+			startCap: {
+				type: "string",
+				default: "none",
+				logic: true
+			},
+			endCap: {
+				type: "string",
+				default: "none",
+				logic: true
+			},
+			opacity: {
+				type: "number",
+				default: 1,
+				logic: true
+			},
+			label: {
+				type: "string",
+				default: "",
+				logic: true
+			},
+			textColor: {
+				type: "string",
+				default: "#1f2430",
+				logic: true
+			},
+			fontSize: {
+				type: "number",
+				default: 12,
+				logic: true
+			}
+		},
+		children: false
+	};
+	//#endregion
 	//#region src/model.ts
 	/** 未转换的容器。 */
 	const CONTAINER_DECL = {
@@ -252,45 +487,9 @@ var VF = (function(exports) {
 		var _project$components$g, _project$components$g2;
 		if (type === "Container" || type === "Window") return CONTAINER_DECL;
 		if (type === "External") return EXTERNAL_DECL;
+		if (type === "Shape") return SHAPE_DECL;
+		if (type === "Line") return LINE_DECL;
 		return (_project$components$g = (_project$components$g2 = project.components.get(type)) === null || _project$components$g2 === void 0 ? void 0 : _project$components$g2.decl) !== null && _project$components$g !== void 0 ? _project$components$g : null;
-	}
-	//#endregion
-	//#region \0@oxc-project+runtime@0.153.0/helpers/esm/typeof.js
-	function _typeof(o) {
-		"@babel/helpers - typeof";
-		return _typeof = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function(o) {
-			return typeof o;
-		} : function(o) {
-			return o && "function" == typeof Symbol && o.constructor === Symbol && o !== Symbol.prototype ? "symbol" : typeof o;
-		}, _typeof(o);
-	}
-	//#endregion
-	//#region \0@oxc-project+runtime@0.153.0/helpers/esm/toPrimitive.js
-	function toPrimitive(t, r) {
-		if ("object" != _typeof(t) || !t) return t;
-		var e = t[Symbol.toPrimitive];
-		if (void 0 !== e) {
-			var i = e.call(t, r || "default");
-			if ("object" != _typeof(i)) return i;
-			throw new TypeError("@@toPrimitive must return a primitive value.");
-		}
-		return ("string" === r ? String : Number)(t);
-	}
-	//#endregion
-	//#region \0@oxc-project+runtime@0.153.0/helpers/esm/toPropertyKey.js
-	function toPropertyKey(t) {
-		var i = toPrimitive(t, "string");
-		return "symbol" == _typeof(i) ? i : i + "";
-	}
-	//#endregion
-	//#region \0@oxc-project+runtime@0.153.0/helpers/esm/defineProperty.js
-	function _defineProperty(e, r, t) {
-		return (r = toPropertyKey(r)) in e ? Object.defineProperty(e, r, {
-			value: t,
-			enumerable: !0,
-			configurable: !0,
-			writable: !0
-		}) : e[r] = t, e;
 	}
 	//#endregion
 	//#region src/runtime.ts

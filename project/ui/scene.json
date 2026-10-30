@@ -58,7 +58,7 @@
     "lampC": {
       "type": "Lamp",
       "x": 319,
-      "y": 67,
+      "y": 66,
       "width": 120,
       "height": 124,
       "props": {
@@ -67,8 +67,8 @@
     },
     "allOnButton": {
       "type": "Button",
-      "x": 41,
-      "y": 205,
+      "x": 161,
+      "y": 253,
       "width": 110,
       "height": 36,
       "props": {

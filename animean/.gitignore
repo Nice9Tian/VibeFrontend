@@ -1,0 +1,16 @@
+/build
+/tools/python312
+CMakeLists.txt.user
+*.pyc
+/Layerorframe_refer
+/dist
+/refer_code
+out.txt
+build_full.log
+/.history
+/.scratch
+/.archive
+.dag_state.json
+
+# Local copies of related papers (copyrighted PDFs, not tracked)
+relation_papers/

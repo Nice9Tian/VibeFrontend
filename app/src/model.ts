@@ -1,6 +1,7 @@
 // 设计项目的数据结构，以及只依赖这些数据的查找函数。
 // 这里不碰网页和文件系统：工具界面、命令行导出和嵌进 Qt 的逻辑运行层共用这一份。
 import type { Value } from "./expr.ts";
+import { LINE_DECL, SHAPE_DECL, type ShapePreset } from "./shapes.ts";
 
 export const SCENE_PATH = "ui/scene.json";
 export const LOGIC_PATH = "logic/app.logic.yaml";
@@ -101,8 +102,8 @@ export const EXTERNAL_DECL: ComponentDecl = {
   children: false,
 };
 
-/** 工具自带、不需要 components/ 里有文件夹的类型。 */
-export const BUILTIN_TYPES = ["Window", "Container", "External"];
+/** 工具自带、不需要 components/ 里有文件夹的类型。Shape 和 Line 是基础图形和线条，见 shapes.ts。 */
+export const BUILTIN_TYPES = ["Window", "Container", "External", "Shape", "Line"];
 
 // ---------- 效果 ----------
 
@@ -196,6 +197,8 @@ export interface Project extends RuntimeProject {
   components: Map<string, LoadedComponent>;
   /** 效果名 → 效果 */
   effects: Map<string, LoadedEffect>;
+  /** 用户存下来的图形预设，来自 ui/presets.json */
+  presets: ShapePreset[];
   /** 导出成 Qt 时默认写到哪里，相对于项目文件夹；project.json 里没写就是空 */
   qtExportDir: string | null;
   problems: Problem[];
@@ -281,6 +284,8 @@ export function allConditions(logic: Logic): Array<{ id: string; def: ConditionD
 export function declFor(project: RuntimeProject, type: string): ComponentDecl | null {
   if (type === "Container" || type === "Window") return CONTAINER_DECL;
   if (type === "External") return EXTERNAL_DECL;
+  if (type === "Shape") return SHAPE_DECL;
+  if (type === "Line") return LINE_DECL;
   return project.components.get(type)?.decl ?? null;
 }
 
