@@ -34,6 +34,7 @@ import {
   updateLineBend,
 } from "../src/shapes.ts";
 import {
+  absRectInScene,
   addBendToLine,
   alignRects,
   alignSceneNodes,
@@ -44,15 +45,22 @@ import {
   distributeRects,
   distributeSceneNodes,
   filterUnlocked,
+  hasLockedInSubtree,
   isNodeLocked,
   moveBendOnLine,
+  nodeLocalToWorldInScene,
   normalizeRotation,
   pointInRotatedRect,
+  rectIntersectsRotatedRect,
   rotatePoint,
   scaleGroupItems,
   setNodeRotation,
   setNodesLocked,
   toggleNodesLocked,
+  visualBoundsInScene,
+  worldRotationInScene,
+  worldToNodeLocalInScene,
+  worldToParentDeltaInScene,
 } from "../src/transform.ts";
 
 function makeBaseScene(): Scene {
@@ -500,14 +508,221 @@ objects:
   assert.equal(onlyScene.scene.nodes.child1, undefined);
   assert.equal(onlyScene.logicText.includes("box1:"), true);
 
-  // 选择“一并删除 YAML 条目”时删除 box1 和 child1，但保留 box2 与文件注释
+  // 选择“一并删除 YAML 条目”时删除 box1 和 child1，连带清除首项 box1 头顶的注释，但保留 box2 与文件顶部注释
   const both = applyDeleteFromScene(scene, ["box1"], yamlText, true);
   assert.equal(both.scene.nodes.box1, undefined);
   assert.equal(both.logicText.includes("box1:"), false);
+  assert.equal(both.logicText.includes("# box1 的说明注释"), false);
   assert.equal(both.logicText.includes("child1:"), false);
   assert.equal(both.logicText.includes("box2:"), true);
   assert.equal(both.logicText.includes("# 顶部注释保留"), true);
   assert.equal(removeYamlObjects(yamlText, ["box2"]).includes("box2:"), false);
+});
+
+// 8. [阻塞 1 回归] 跨文件外部修改隔离、同文件外部修改两步撤销、以及 docs / presets 纳入版本栈
+test("版本恢复与外部修改协同：跨文件隔离与同文件外部修改不丢失", () => {
+  const s0 = makeBaseScene();
+  const s1 = applyMoveToScene(s0, ["box1"], 30, 20);
+  const l0 = `version: 1\nstate:\n  a: 1\n`;
+  const lExt = `version: 1\nstate:\n  a: 999\n`;
+  const d0 = { "docs/panel.md": "# 初始文档\n" };
+  const dExt = { "docs/panel.md": "# 外部修改后的文档\n" };
+
+  let history = createHistory(50);
+  // 用户只在画布上移动了 box1（S0 -> S1），未改 YAML 和文档
+  history = pushHistory(history, snapshotOf(s0, l0, d0, "[]"), snapshotOf(s1, l0, d0, "[]"), "移动 box1");
+
+  // 随后外部 Agent 修改了 app.logic.yaml (L0 -> L_ext) 和 docs/panel.md (D0 -> D_ext)
+  const currentAfterExt = snapshotOf(s1, lExt, dExt, "[]");
+  const u1 = undoHistory(history, currentAfterExt);
+  assert.ok(u1.snapshot);
+  history = u1.stack;
+  // 撤销画布移动只回退 sceneText 到 S0，外部修改后的 L_ext 与 D_ext 完整保留！
+  assert.equal(parseScene(u1.snapshot.sceneText).nodes.box1.x, 40);
+  assert.equal(u1.snapshot.logicText, lExt);
+  assert.deepEqual(u1.snapshot.docs, dExt);
+
+  // 重做画布移动：恢复 S1，同时继续保留 L_ext 与 D_ext
+  const r1 = redoHistory(history, u1.snapshot);
+  assert.ok(r1.snapshot);
+  history = r1.stack;
+  assert.equal(parseScene(r1.snapshot.sceneText).nodes.box1.x, 70);
+  assert.equal(r1.snapshot.logicText, lExt);
+  assert.deepEqual(r1.snapshot.docs, dExt);
+
+  // 同文件外部修改场景：画布当前为 S1，外部直接把 scene.json 改成了 S_ext (box1.x = 300)
+  const sExt = applyMoveToScene(s1, ["box1"], 230, 0);
+  assert.equal(sExt.nodes.box1.x, 300);
+  const snapExt = snapshotOf(sExt, lExt, dExt, "[]");
+
+  // 第一次 Ctrl+Z：先从外部状态 S_ext 退回到工具操作完成时的状态 S1 (box1.x = 70)，且把 S_ext 压入重做栈
+  const uSame1 = undoHistory(history, snapExt);
+  assert.ok(uSame1.snapshot);
+  history = uSame1.stack;
+  assert.equal(parseScene(uSame1.snapshot.sceneText).nodes.box1.x, 70);
+  assert.equal(canUndo(history), true, "第一次撤销仅回退外部修改，原操作仍在撤销栈中");
+  assert.equal(canRedo(history), true, "外部修改状态应被压入重做栈");
+
+  // 第二次 Ctrl+Z：从 S1 退回到初始状态 S0 (box1.x = 40)
+  const uSame2 = undoHistory(history, uSame1.snapshot);
+  assert.ok(uSame2.snapshot);
+  history = uSame2.stack;
+  assert.equal(parseScene(uSame2.snapshot.sceneText).nodes.box1.x, 40);
+  assert.equal(canUndo(history), false);
+
+  // 连续两次重做：先回到 S1 (70)，再回到 S_ext (300)
+  const rSame1 = redoHistory(history, uSame2.snapshot);
+  assert.ok(rSame1.snapshot);
+  history = rSame1.stack;
+  assert.equal(parseScene(rSame1.snapshot.sceneText).nodes.box1.x, 70);
+
+  const rSame2 = redoHistory(history, rSame1.snapshot);
+  assert.ok(rSame2.snapshot);
+  history = rSame2.stack;
+  assert.equal(parseScene(rSame2.snapshot.sceneText).nodes.box1.x, 300);
+
+  // 文档与预设修改也能独立入栈与撤销
+  const d2 = { "docs/panel.md": "# 新建小节后的文档\n" };
+  history = pushHistory(history, rSame2.snapshot, snapshotOf(sExt, lExt, d2, '[{"id":"p1"}]'), "新增说明与预设");
+  const uDoc = undoHistory(history, snapshotOf(sExt, lExt, d2, '[{"id":"p1"}]'));
+  assert.ok(uDoc.snapshot);
+  assert.deepEqual(uDoc.snapshot.docs, dExt);
+  assert.equal(uDoc.snapshot.presetsText, "[]");
+});
+
+// 9. [阻塞 2 回归] 父容器未锁定但内部含锁定子孙时，拒绝整棵删除，绝不产生孤儿节点
+test("锁定保护：父容器含已锁定子孙时禁止删除父容器", () => {
+  const scene = makeBaseScene();
+  // 仅锁定子控件 child1，父容器 box1 本身不设 locked
+  setNodesLocked(scene, ["child1"], true);
+  assert.equal(scene.nodes.box1.locked, undefined);
+  assert.equal(scene.nodes.child1.locked, true);
+  assert.equal(hasLockedInSubtree(scene, "box1"), true);
+  assert.equal(hasLockedInSubtree(scene, "box2"), false);
+
+  // 试图收集 box1 的待删子树时应因含锁定子孙而被整体拒绝
+  const toDelete = collectSubtreeIds(scene, ["box1"]);
+  assert.equal(toDelete.size, 0);
+
+  // applyDeleteFromScene 删除 ["box1"] 时，box1 与 child1 均完好保留
+  const yamlText = `version: 1\nobjects:\n  box1:\n    props:\n      visible: true\n  child1:\n    props:\n      visible: true\n`;
+  const res = applyDeleteFromScene(scene, ["box1"], yamlText, true);
+  assert.ok(res.scene.nodes.box1, "父容器 box1 不应被删掉");
+  assert.ok(res.scene.nodes.child1, "锁定子节点 child1 不应变成孤儿节点");
+  assert.ok(res.scene.nodes.window.children?.includes("box1"));
+  assert.equal(res.logicText.includes("box1:"), true);
+
+  // 同时选中含锁定子孙的 box1 与完全未锁定的 box2 删除时，只删除 box2，保留 box1 子树
+  const resMixed = applyDeleteFromScene(scene, ["box1", "box2"], yamlText, true);
+  assert.ok(resMixed.scene.nodes.box1);
+  assert.ok(resMixed.scene.nodes.child1);
+  assert.equal(resMixed.scene.nodes.box2, undefined);
+});
+
+// 10. [阻塞 3 回归] 子节点因祖先锁定而处于继承锁定状态时，解锁子节点能解除祖先锁定链
+test("继承锁定的子节点可以直接解锁", () => {
+  const scene = makeBaseScene();
+  // 锁定父容器 box1
+  setNodesLocked(scene, ["box1"], true);
+  assert.equal(isNodeLocked(scene, "box1"), true);
+  assert.equal(isNodeLocked(scene, "child1"), true);
+  assert.equal(scene.nodes.child1.locked, undefined);
+
+  // 对继承锁定的 child1 执行切换锁定，应当返回 false（已解锁）并解除父容器 box1 的锁定
+  const nowLocked = toggleNodesLocked(scene, ["child1"]);
+  assert.equal(nowLocked, false);
+  assert.equal(isNodeLocked(scene, "child1"), false);
+  assert.equal(isNodeLocked(scene, "box1"), false);
+});
+
+// 11. [阻塞 4 回归] 旋转节点的局部系缩放、视觉外包围盒、旋转框选碰撞、旋转父容器坐标换算与对齐分布
+test("旋转几何体系：旋转节点八方向缩放、旋转框选、旋转父容器与旋转后对齐分布", () => {
+  // (a) 旋转 90° 的节点拖右把手 "e"（在世界系中朝下 +y 方向拉 40px）：
+  // 节点局部右边缘沿世界 +y 扩展 40px，而对侧世界锚点（局部左边缘中点）在世界坐标系中保持不动
+  const box = { x: 100, y: 100, width: 100, height: 60 };
+  const centerBefore = { x: box.x + box.width / 2, y: box.y + box.height / 2 }; // (150, 130)
+  // 局部左边缘中点 (-50, 0) 绕中心顺时针转 90° 后在世界系中的位置为 (150, 80)
+  const westWorldBefore = rotatePoint({ x: box.x, y: centerBefore.y }, centerBefore, 90);
+  assert.deepEqual({ x: Math.round(westWorldBefore.x), y: Math.round(westWorldBefore.y) }, { x: 150, y: 80 });
+
+  const resized90 = computeResizeBox(box, "e", 0, 40, false, 8, 90);
+  assert.equal(resized90.width, 140);
+  assert.equal(resized90.height, 60);
+  const centerAfter = { x: resized90.x + resized90.width / 2, y: resized90.y + resized90.height / 2 };
+  const westWorldAfter = rotatePoint({ x: resized90.x, y: centerAfter.y }, centerAfter, 90);
+  assert.ok(Math.abs(westWorldAfter.x - westWorldBefore.x) <= 1, "旋转缩放后对侧锚点 X 不应漂移");
+  assert.ok(Math.abs(westWorldAfter.y - westWorldBefore.y) <= 1, "旋转缩放后对侧锚点 Y 不应漂移");
+
+  // (b) 旋转 45° 的节点拖右下角 "se"：左上角 "nw" 世界坐标锚点保持不变
+  const nwWorldBefore = rotatePoint({ x: box.x, y: box.y }, centerBefore, 45);
+  const resized45 = computeResizeBox(box, "se", 30, 30, false, 8, 45);
+  const center45After = { x: resized45.x + resized45.width / 2, y: resized45.y + resized45.height / 2 };
+  const nwWorldAfter = rotatePoint({ x: resized45.x, y: resized45.y }, center45After, 45);
+  assert.ok(Math.abs(nwWorldAfter.x - nwWorldBefore.x) <= 1);
+  assert.ok(Math.abs(nwWorldAfter.y - nwWorldBefore.y) <= 1);
+
+  // (c) 旋转框选（SAT 碰撞检测）：宽 100 高 20 的扁矩形（中心 100,100）旋转 90° 后变成竖条 (x:90..110, y:50..150)
+  const flatRect = { x: 50, y: 90, width: 100, height: 20 };
+  // 框选竖条顶部 (95..105, 52..58)：未旋转时不相交，旋转 90° 后相交
+  assert.equal(rectIntersectsRotatedRect({ x: 95, y: 52, width: 10, height: 6 }, flatRect, 0), false);
+  assert.equal(rectIntersectsRotatedRect({ x: 95, y: 52, width: 10, height: 6 }, flatRect, 90), true);
+  // 框选原左端 (52..58, 95..105)：未旋转时相交，旋转 90° 后不再相交
+  assert.equal(rectIntersectsRotatedRect({ x: 52, y: 95, width: 6, height: 10 }, flatRect, 0), true);
+  assert.equal(rectIntersectsRotatedRect({ x: 52, y: 95, width: 6, height: 10 }, flatRect, 90), false);
+
+  // (d) 旋转父容器与子节点的坐标换算
+  const scene = makeBaseScene();
+  setNodeRotation(scene.nodes.box1, 90);
+  assert.equal(worldRotationInScene(scene, "box1"), 90);
+  assert.equal(worldRotationInScene(scene, "child1"), 90);
+  const localPt = { x: 25, y: 20 };
+  const worldPt = nodeLocalToWorldInScene(scene, "box1", localPt);
+  const roundTrip = worldToNodeLocalInScene(scene, "box1", worldPt);
+  assert.ok(Math.abs(roundTrip.x - localPt.x) < 1e-6);
+  assert.ok(Math.abs(roundTrip.y - localPt.y) < 1e-6);
+
+  // 旋转父容器内移动子节点：世界位移 (20, 0) 换算为父容器局部位移后，子节点世界中心精确右移 20px
+  const childAbsBefore = absRectInScene(scene, "child1")!;
+  const localDelta = worldToParentDeltaInScene(scene, "child1", 20, 0);
+  scene.nodes.child1.x = (scene.nodes.child1.x ?? 0) + localDelta.x;
+  scene.nodes.child1.y = (scene.nodes.child1.y ?? 0) + localDelta.y;
+  const childAbsAfter = absRectInScene(scene, "child1")!;
+  assert.equal(Math.round(childAbsAfter.x - childAbsBefore.x), 20);
+  assert.equal(Math.round(childAbsAfter.y - childAbsBefore.y), 0);
+
+  // (e) 旋转节点的视觉外框与对齐：box1 (100x60 旋转 90° -> 视觉宽 60 高 100) 与 box2 左对齐后，两者视觉左边缘相等
+  alignSceneNodes(scene, ["box1", "box2"], "left");
+  const v1 = visualBoundsInScene(scene, "box1")!;
+  const v2 = visualBoundsInScene(scene, "box2")!;
+  assert.equal(Math.round(v1.x), Math.round(v2.x));
+});
+
+// 12. [应修 6 & 9 回归] 多选拖四角默认等比缩放、有效未锁定节点不足时对齐返回 false
+test("多选四角默认等比缩放与单节点对齐防归零保护", () => {
+  const scene = makeBaseScene();
+  // 选中 box1 (40,50,100x60) 与 box2 (200,120,80x40)，合围外框 240x110
+  // 拖右下角 "se" 且不传 keepAspect，即使 dx=240, dy=10 不成比例，四角把手也默认按比例等比放大 2 倍
+  const bounds = applyGroupResize(scene, ["box1", "box2"], "se", 240, 10);
+  assert.ok(bounds);
+  assert.equal(bounds.width, 480);
+  assert.equal(bounds.height, 220);
+  assert.equal(scene.nodes.box1.width, 200);
+  assert.equal(scene.nodes.box1.height, 120);
+
+  // 拖右边把手 "e" 默认只改宽度不改高度
+  const boundsEdge = applyGroupResize(scene, ["box1", "box2"], "e", -240, 50);
+  assert.ok(boundsEdge);
+  assert.equal(boundsEdge.width, 240);
+  assert.equal(boundsEdge.height, 220);
+
+  // 2 个节点中 1 个被锁定时，仅剩 1 个未锁定节点，alignSceneNodes 必须返回 false 且不把未锁定节点移到 (0, 0)
+  const scene2 = makeBaseScene();
+  setNodesLocked(scene2, ["box1"], true);
+  const prevX = scene2.nodes.box2.x;
+  const prevY = scene2.nodes.box2.y;
+  assert.equal(alignSceneNodes(scene2, ["box1", "box2"], "left"), false);
+  assert.equal(scene2.nodes.box2.x, prevX);
+  assert.equal(scene2.nodes.box2.y, prevY);
 });
 
 console.log(`\n全部 ${passed} 项编辑器单元测试通过。`);

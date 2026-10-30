@@ -1137,6 +1137,26 @@ body:not(.preview) #stage.show-grid {
   cursor: default;
 }
 
+#tool-bar .tool-rotate {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#tool-bar .tool-rotate input {
+  width: 52px;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}
+
 #delete-confirm {
   position: fixed;
   inset: 0;

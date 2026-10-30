@@ -17,92 +17,7 @@ export { insertLineBend, lineSegmentMidpoints, removeLineBend, updateLineBend };
 
 export const MIN_NODE_SIZE = 8;
 
-// ---------- 节点层级与绝对坐标 ----------
-
-export function parentOfInScene(scene: Scene, id: string): string | null {
-  for (const [parentId, parent] of Object.entries(scene.nodes)) {
-    if (parent.children?.includes(id)) return parentId;
-  }
-  return null;
-}
-
-export function absRectInScene(scene: Scene, id: string): Rect {
-  const n = scene.nodes[id];
-  if (!n) return { x: 0, y: 0, width: 0, height: 0 };
-  let x = 0;
-  let y = 0;
-  for (let cursor: string | null = id; cursor && cursor !== scene.root; cursor = parentOfInScene(scene, cursor)) {
-    const curr = scene.nodes[cursor];
-    x += curr?.x ?? 0;
-    y += curr?.y ?? 0;
-  }
-  return { x, y, width: n.width, height: n.height };
-}
-
-export function parentOriginInScene(scene: Scene, id: string): Point {
-  const parentId = parentOfInScene(scene, id);
-  if (!parentId || parentId === scene.root) return { x: 0, y: 0 };
-  const r = absRectInScene(scene, parentId);
-  return { x: r.x, y: r.y };
-}
-
-export function unionRectOf(rects: Rect[]): Rect | null {
-  let box: Rect | null = null;
-  for (const r of rects) {
-    if (!box) box = { ...r };
-    else {
-      const right = Math.max(box.x + box.width, r.x + r.width);
-      const bottom = Math.max(box.y + box.height, r.y + r.height);
-      box.x = Math.min(box.x, r.x);
-      box.y = Math.min(box.y, r.y);
-      box.width = right - box.x;
-      box.height = bottom - box.y;
-    }
-  }
-  return box;
-}
-
-// ---------- 锁定 ----------
-
-/** 节点自己或任一祖先被锁定时，视为已锁定。根窗口不可锁定。 */
-export function isNodeLocked(scene: Scene, id: string): boolean {
-  for (let cursor: string | null = id; cursor && cursor !== scene.root; cursor = parentOfInScene(scene, cursor)) {
-    if (scene.nodes[cursor]?.locked) return true;
-  }
-  return false;
-}
-
-/** 过滤出未锁定且不是根窗口的节点。 */
-export function filterUnlocked(scene: Scene, ids: string[]): string[] {
-  return ids.filter((id) => id !== scene.root && Boolean(scene.nodes[id]) && !isNodeLocked(scene, id));
-}
-
-/** 设置一组节点的锁定状态，返回是否有变化。 */
-export function setNodesLocked(scene: Scene, ids: string[], locked: boolean): boolean {
-  let changed = false;
-  for (const id of ids) {
-    if (id === scene.root) continue;
-    const n = scene.nodes[id];
-    if (!n) continue;
-    const current = Boolean(n.locked);
-    if (current === locked) continue;
-    if (locked) n.locked = true;
-    else delete n.locked;
-    changed = true;
-  }
-  return changed;
-}
-
-/** 切换一组节点的锁定状态：只要有一个未锁定就全部锁定，否则全部解锁。返回切换后的锁定状态。 */
-export function toggleNodesLocked(scene: Scene, ids: string[]): boolean {
-  const targets = ids.filter((id) => id !== scene.root && Boolean(scene.nodes[id]));
-  if (targets.length === 0) return false;
-  const shouldLock = targets.some((id) => !scene.nodes[id].locked);
-  setNodesLocked(scene, targets, shouldLock);
-  return shouldLock;
-}
-
-// ---------- 旋转 ----------
+// ---------- 旋转基础几何 ----------
 
 /** 把角度规整到 (-180, 180] 的整数度数。 */
 export function normalizeRotation(deg: number): number {
@@ -165,11 +80,270 @@ export function pointInRotatedRect(pt: Point, rect: Rect, deg = 0): boolean {
   return local.x >= rect.x && local.x <= rect.x + rect.width && local.y >= rect.y && local.y <= rect.y + rect.height;
 }
 
+/** 矩形 rect 绕中心顺时针旋转 deg 度后的四个顶点。 */
+export function rotatedRectCorners(rect: Rect, deg = 0): [Point, Point, Point, Point] {
+  const c = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  const raw: [Point, Point, Point, Point] = [
+    { x: rect.x, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y + rect.height },
+    { x: rect.x, y: rect.y + rect.height },
+  ];
+  if (!deg) return raw;
+  return [
+    rotatePoint(raw[0], c, deg),
+    rotatePoint(raw[1], c, deg),
+    rotatePoint(raw[2], c, deg),
+    rotatePoint(raw[3], c, deg),
+  ];
+}
+
+/** 矩形 rect 绕中心顺时针旋转 deg 度后的轴对齐外包框（AABB）。 */
+export function rotatedRectBounds(rect: Rect, deg = 0): Rect {
+  if (!deg) return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  const corners = rotatedRectCorners(rect, deg);
+  const xs = corners.map((p) => p.x);
+  const ys = corners.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+/** 判断轴对齐框 box（如框选框）是否与旋转了 deg 度的矩形 rect 相交（分离轴定理 SAT）。 */
+export function rectIntersectsRotatedRect(box: Rect, rect: Rect, deg = 0): boolean {
+  if (!deg) {
+    return (
+      rect.x < box.x + box.width &&
+      rect.x + rect.width > box.x &&
+      rect.y < box.y + box.height &&
+      rect.y + rect.height > box.y
+    );
+  }
+  const polyA: Point[] = [
+    { x: box.x, y: box.y },
+    { x: box.x + box.width, y: box.y },
+    { x: box.x + box.width, y: box.y + box.height },
+    { x: box.x, y: box.y + box.height },
+  ];
+  const polyB = rotatedRectCorners(rect, deg);
+  const axes: Point[] = [
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: polyB[1].x - polyB[0].x, y: polyB[1].y - polyB[0].y },
+    { x: polyB[3].x - polyB[0].x, y: polyB[3].y - polyB[0].y },
+  ];
+  for (const axis of axes) {
+    const len = Math.hypot(axis.x, axis.y);
+    if (len < 1e-9) continue;
+    const ux = axis.x / len;
+    const uy = axis.y / len;
+    let minA = Infinity;
+    let maxA = -Infinity;
+    for (const p of polyA) {
+      const proj = p.x * ux + p.y * uy;
+      if (proj < minA) minA = proj;
+      if (proj > maxA) maxA = proj;
+    }
+    let minB = Infinity;
+    let maxB = -Infinity;
+    for (const p of polyB) {
+      const proj = p.x * ux + p.y * uy;
+      if (proj < minB) minB = proj;
+      if (proj > maxB) maxB = proj;
+    }
+    if (maxA <= minB || maxB <= minA) return false;
+  }
+  return true;
+}
+
+// ---------- 节点层级与绝对坐标（支持父容器旋转） ----------
+
+export function parentOfInScene(scene: Scene, id: string): string | null {
+  for (const [parentId, parent] of Object.entries(scene.nodes)) {
+    if (parent.children?.includes(id)) return parentId;
+  }
+  return null;
+}
+
+/** 从节点自身往外到根窗口之前的祖先链 `[id, parentId, ...]`。 */
+export function ancestorChainInScene(scene: Scene, id: string): string[] {
+  const chain: string[] = [];
+  for (let cursor: string | null = id; cursor && cursor !== scene.root; cursor = parentOfInScene(scene, cursor)) {
+    if (chain.includes(cursor)) break;
+    chain.push(cursor);
+  }
+  return chain;
+}
+
+/** 节点在画布世界坐标系中的累计旋转角度（含祖先容器的旋转）。 */
+export function worldRotationInScene(scene: Scene, id: string): number {
+  let total = 0;
+  for (const curr of ancestorChainInScene(scene, id)) {
+    total += scene.nodes[curr]?.rotation ?? 0;
+  }
+  return normalizeRotation(total);
+}
+
+/** 把节点 id 内部局部坐标 `(0..width, 0..height)` 中的点转换到画布世界坐标。 */
+export function nodeLocalToWorldInScene(scene: Scene, id: string, localPt: Point): Point {
+  let pt = { x: localPt.x, y: localPt.y };
+  for (const curr of ancestorChainInScene(scene, id)) {
+    const n = scene.nodes[curr];
+    if (!n) continue;
+    if (n.rotation) {
+      pt = rotatePoint(pt, { x: n.width / 2, y: n.height / 2 }, n.rotation);
+    }
+    pt = { x: pt.x + (n.x ?? 0), y: pt.y + (n.y ?? 0) };
+  }
+  return pt;
+}
+
+/** 把画布世界坐标中的点转换到节点 id 内部未旋转局部坐标 `(0..width, 0..height)`。 */
+export function worldToNodeLocalInScene(scene: Scene, id: string, worldPt: Point): Point {
+  let pt = { x: worldPt.x, y: worldPt.y };
+  const chain = ancestorChainInScene(scene, id).reverse();
+  for (const curr of chain) {
+    const n = scene.nodes[curr];
+    if (!n) continue;
+    pt = { x: pt.x - (n.x ?? 0), y: pt.y - (n.y ?? 0) };
+    if (n.rotation) {
+      pt = rotatePoint(pt, { x: n.width / 2, y: n.height / 2 }, -n.rotation);
+    }
+  }
+  return pt;
+}
+
+/** 把世界坐标系中的位移 `(worldDx, worldDy)` 转换到节点 id 所在父容器的局部坐标系增量。 */
+export function worldToParentDeltaInScene(scene: Scene, id: string, worldDx: number, worldDy: number): Point {
+  const parentId = parentOfInScene(scene, id);
+  const parentRot = parentId && parentId !== scene.root ? worldRotationInScene(scene, parentId) : 0;
+  if (!parentRot) return { x: worldDx, y: worldDy };
+  return rotatePoint({ x: worldDx, y: worldDy }, { x: 0, y: 0 }, -parentRot);
+}
+
+/** 节点在世界坐标系中的未旋转基准框（以世界中心定位，宽高为节点自身宽高）。 */
+export function absRectInScene(scene: Scene, id: string): Rect {
+  const n = scene.nodes[id];
+  if (!n) return { x: 0, y: 0, width: 0, height: 0 };
+  if (id === scene.root) return { x: 0, y: 0, width: n.width, height: n.height };
+  const center = nodeLocalToWorldInScene(scene, id, { x: n.width / 2, y: n.height / 2 });
+  return {
+    x: center.x - n.width / 2,
+    y: center.y - n.height / 2,
+    width: n.width,
+    height: n.height,
+  };
+}
+
+/** 节点在世界坐标系中计入旋转后的视觉外包框（AABB），供吸附、框选、多选外框、对齐分布使用。 */
+export function visualBoundsInScene(scene: Scene, id: string): Rect {
+  const rect = absRectInScene(scene, id);
+  if (id === scene.root) return rect;
+  const rot = worldRotationInScene(scene, id);
+  return rotatedRectBounds(rect, rot);
+}
+
+export function parentOriginInScene(scene: Scene, id: string): Point {
+  const parentId = parentOfInScene(scene, id);
+  if (!parentId || parentId === scene.root) return { x: 0, y: 0 };
+  const r = absRectInScene(scene, parentId);
+  return { x: r.x, y: r.y };
+}
+
+export function unionRectOf(rects: Rect[]): Rect | null {
+  let box: Rect | null = null;
+  for (const r of rects) {
+    if (!box) box = { ...r };
+    else {
+      const right = Math.max(box.x + box.width, r.x + r.width);
+      const bottom = Math.max(box.y + box.height, r.y + r.height);
+      box.x = Math.min(box.x, r.x);
+      box.y = Math.min(box.y, r.y);
+      box.width = right - box.x;
+      box.height = bottom - box.y;
+    }
+  }
+  return box;
+}
+
+// ---------- 锁定 ----------
+
+/** 节点自己或任一祖先被锁定时，视为已锁定。根窗口不可锁定。 */
+export function isNodeLocked(scene: Scene, id: string): boolean {
+  for (let cursor: string | null = id; cursor && cursor !== scene.root; cursor = parentOfInScene(scene, cursor)) {
+    if (scene.nodes[cursor]?.locked) return true;
+  }
+  return false;
+}
+
+/** 检查节点自身、祖先或其子树中任一后代是否处于锁定状态。 */
+export function hasLockedInSubtree(scene: Scene, id: string): boolean {
+  if (isNodeLocked(scene, id)) return true;
+  const visit = (curr: string): boolean => {
+    const n = scene.nodes[curr];
+    if (!n) return false;
+    if (n.locked) return true;
+    for (const child of n.children ?? []) {
+      if (visit(child)) return true;
+    }
+    return false;
+  };
+  return visit(id);
+}
+
+/** 过滤出未锁定且不是根窗口的节点。 */
+export function filterUnlocked(scene: Scene, ids: string[]): string[] {
+  return ids.filter((id) => id !== scene.root && Boolean(scene.nodes[id]) && !isNodeLocked(scene, id));
+}
+
+/**
+ * 设置一组节点的锁定状态，返回是否有变化。
+ * 解锁（locked === false）时，若节点继承了祖先容器的锁定，一并解除祖先链上的锁定，确保节点真正解锁。
+ */
+export function setNodesLocked(scene: Scene, ids: string[], locked: boolean): boolean {
+  let changed = false;
+  for (const id of ids) {
+    if (id === scene.root) continue;
+    const n = scene.nodes[id];
+    if (!n) continue;
+    if (locked) {
+      if (!n.locked) {
+        n.locked = true;
+        changed = true;
+      }
+    } else {
+      for (let cursor: string | null = id; cursor && cursor !== scene.root; cursor = parentOfInScene(scene, cursor)) {
+        const currNode = scene.nodes[cursor];
+        if (currNode?.locked) {
+          delete currNode.locked;
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed;
+}
+
+/**
+ * 切换一组节点的锁定状态：按实际生效锁定状态（含父容器继承锁定）判断，
+ * 只要有一个未锁定就全部锁定，否则全部解锁。返回切换后的锁定状态。
+ */
+export function toggleNodesLocked(scene: Scene, ids: string[]): boolean {
+  const targets = ids.filter((id) => id !== scene.root && Boolean(scene.nodes[id]));
+  if (targets.length === 0) return false;
+  const shouldLock = targets.some((id) => !isNodeLocked(scene, id));
+  setNodesLocked(scene, targets, shouldLock);
+  return shouldLock;
+}
+
 // ---------- 缩放与多选整体缩放 ----------
 
 /**
  * 拖动八个方向手柄计算新的外框。
  * keepAspect 为真且拖的是四角手柄时保持原长宽比。
+ * rotationDeg 非 0 时，先把屏幕增量 (dx, dy) 逆旋转到节点局部坐标系，并保持对侧边/角在世界坐标中固定不漂移。
  */
 export function computeResizeBox(
   orig: Rect,
@@ -178,26 +352,51 @@ export function computeResizeBox(
   dy: number,
   keepAspect = false,
   minSize = MIN_NODE_SIZE,
+  rotationDeg = 0,
 ): Rect {
+  let ldx = dx;
+  let ldy = dy;
+  if (rotationDeg) {
+    const rad = (-rotationDeg * Math.PI) / 180;
+    ldx = dx * Math.cos(rad) - dy * Math.sin(rad);
+    ldy = dx * Math.sin(rad) + dy * Math.cos(rad);
+  }
   let width = orig.width;
   let height = orig.height;
-  if (handle.includes("e")) width = orig.width + dx;
-  if (handle.includes("w")) width = orig.width - dx;
-  if (handle.includes("s")) height = orig.height + dy;
-  if (handle.includes("n")) height = orig.height - dy;
+  if (handle.includes("e")) width = orig.width + ldx;
+  if (handle.includes("w")) width = orig.width - ldx;
+  if (handle.includes("s")) height = orig.height + ldy;
+  if (handle.includes("n")) height = orig.height - ldy;
   if (keepAspect && handle.length === 2) {
     const ratio = orig.width / Math.max(1, orig.height);
     if (Math.abs(width / Math.max(1, orig.width)) >= Math.abs(height / Math.max(1, orig.height))) {
-      height = width / ratio;
+      height = Math.round((width * orig.height) / Math.max(1, orig.width));
     } else {
-      width = height * ratio;
+      width = Math.round(height * ratio);
     }
   }
   width = Math.max(minSize, width);
   height = Math.max(minSize, height);
+  if (!rotationDeg) {
+    return {
+      x: orig.x + (handle.includes("w") ? orig.width - width : 0),
+      y: orig.y + (handle.includes("n") ? orig.height - height : 0),
+      width,
+      height,
+    };
+  }
+  const dW = width - orig.width;
+  const dH = height - orig.height;
+  const localShift = {
+    x: handle.includes("e") ? dW / 2 : handle.includes("w") ? -dW / 2 : 0,
+    y: handle.includes("s") ? dH / 2 : handle.includes("n") ? -dH / 2 : 0,
+  };
+  const worldShift = rotatePoint(localShift, { x: 0, y: 0 }, rotationDeg);
+  const origCenter = { x: orig.x + orig.width / 2, y: orig.y + orig.height / 2 };
+  const newCenter = { x: origCenter.x + worldShift.x, y: origCenter.y + worldShift.y };
   return {
-    x: orig.x + (handle.includes("w") ? orig.width - width : 0),
-    y: orig.y + (handle.includes("n") ? orig.height - height : 0),
+    x: newCenter.x - width / 2,
+    y: newCenter.y - height / 2,
     width,
     height,
   };
@@ -277,14 +476,17 @@ export function scaleGroupItems(
   return out;
 }
 
-/** 直接在 Scene 上对多选节点执行整体缩放，返回缩放后的整体外框。 */
+/**
+ * 直接在 Scene 上对多选节点执行整体缩放，返回缩放后的整体外框。
+ * 拖动四角手柄（handle.length === 2）时默认保持整体长宽比，按住 Shift 可自由变形。
+ */
 export function applyGroupResize(
   scene: Scene,
   ids: string[],
   handle: string,
   dx: number,
   dy: number,
-  keepAspect = false,
+  keepAspect = handle.length === 2,
   minSize = MIN_NODE_SIZE,
 ): Rect | null {
   const unlocked = filterUnlocked(scene, ids);
@@ -299,7 +501,7 @@ export function applyGroupResize(
       lineProps: n.type === "Line" ? { ...n.props } : undefined,
     };
   });
-  const startBounds = unionRectOf(items.map((item) => item.abs));
+  const startBounds = unionRectOf(unlocked.map((id) => visualBoundsInScene(scene, id)));
   if (!startBounds) return null;
   const nextBounds = computeResizeBox(startBounds, handle, dx, dy, keepAspect, minSize);
   const scaled = scaleGroupItems(items, startBounds, nextBounds, minSize);
@@ -410,54 +612,62 @@ export function distributeRects(
   return result;
 }
 
-/** 在 Scene 上对齐选中的节点（单选时相对于父容器对齐，多选时相对于选中外框对齐）。 */
+/**
+ * 在 Scene 上对齐选中的节点（要求至少 2 个未锁定的非线条节点，按旋转后的视觉外框对齐）。
+ */
 export function alignSceneNodes(scene: Scene, ids: string[], kind: AlignKind): boolean {
   const unlocked = filterUnlocked(scene, ids).filter((id) => scene.nodes[id]?.type !== "Line");
-  if (unlocked.length === 0) return false;
-  const items: AlignItem[] = unlocked.map((id) => ({
-    id,
-    rect: absRectInScene(scene, id),
-    parentOrigin: parentOriginInScene(scene, id),
-  }));
-  let referenceBounds: Rect | undefined;
-  if (items.length === 1) {
-    const parentId = parentOfInScene(scene, items[0].id) ?? scene.root;
-    referenceBounds =
-      parentId === scene.root
-        ? { x: 0, y: 0, width: scene.nodes[scene.root].width, height: scene.nodes[scene.root].height }
-        : absRectInScene(scene, parentId);
-  }
-  const next = alignRects(items, kind, referenceBounds);
+  if (unlocked.length < 2) return false;
+  const visualMap = new Map<string, Rect>();
+  const items: AlignItem[] = unlocked.map((id) => {
+    const v = visualBoundsInScene(scene, id);
+    visualMap.set(id, v);
+    return { id, rect: v };
+  });
+  const next = alignRects(items, kind);
   let changed = false;
   for (const [id, pos] of next) {
     const n = scene.nodes[id];
-    if (!n) continue;
-    if ((n.x ?? 0) !== pos.x || (n.y ?? 0) !== pos.y) {
-      n.x = pos.x;
-      n.y = pos.y;
+    const oldV = visualMap.get(id);
+    if (!n || !oldV) continue;
+    const wdx = pos.x - oldV.x;
+    const wdy = pos.y - oldV.y;
+    const pDelta = worldToParentDeltaInScene(scene, id, wdx, wdy);
+    const nx = Math.round((n.x ?? 0) + pDelta.x);
+    const ny = Math.round((n.y ?? 0) + pDelta.y);
+    if ((n.x ?? 0) !== nx || (n.y ?? 0) !== ny) {
+      n.x = nx;
+      n.y = ny;
       changed = true;
     }
   }
   return changed;
 }
 
-/** 在 Scene 上等距分布选中的节点（至少 3 个未锁定的非线条节点）。 */
+/** 在 Scene 上等距分布选中的节点（至少 3 个未锁定的非线条节点，按旋转后的视觉外框等距分布）。 */
 export function distributeSceneNodes(scene: Scene, ids: string[], axis: DistributeAxis): boolean {
   const unlocked = filterUnlocked(scene, ids).filter((id) => scene.nodes[id]?.type !== "Line");
   if (unlocked.length < 3) return false;
-  const items: AlignItem[] = unlocked.map((id) => ({
-    id,
-    rect: absRectInScene(scene, id),
-    parentOrigin: parentOriginInScene(scene, id),
-  }));
+  const visualMap = new Map<string, Rect>();
+  const items: AlignItem[] = unlocked.map((id) => {
+    const v = visualBoundsInScene(scene, id);
+    visualMap.set(id, v);
+    return { id, rect: v };
+  });
   const next = distributeRects(items, axis);
   let changed = false;
   for (const [id, pos] of next) {
     const n = scene.nodes[id];
-    if (!n) continue;
-    if ((n.x ?? 0) !== pos.x || (n.y ?? 0) !== pos.y) {
-      n.x = pos.x;
-      n.y = pos.y;
+    const oldV = visualMap.get(id);
+    if (!n || !oldV) continue;
+    const wdx = pos.x - oldV.x;
+    const wdy = pos.y - oldV.y;
+    const pDelta = worldToParentDeltaInScene(scene, id, wdx, wdy);
+    const nx = Math.round((n.x ?? 0) + pDelta.x);
+    const ny = Math.round((n.y ?? 0) + pDelta.y);
+    if ((n.x ?? 0) !== nx || (n.y ?? 0) !== ny) {
+      n.x = nx;
+      n.y = ny;
       changed = true;
     }
   }

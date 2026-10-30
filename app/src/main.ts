@@ -64,6 +64,10 @@ import {
   type Side,
 } from "./shapes";
 import {
+  applyAddNodeToScene,
+  applyDeleteFromScene,
+  applyMoveToScene,
+  applyPropsToScene,
   canRedo,
   canUndo,
   collectSubtreeIds,
@@ -71,24 +75,33 @@ import {
   nodesWithYamlEntries,
   pushHistory,
   redoHistory,
-  removeYamlObjects,
   restoreHistoryVersion,
   undoHistory,
+  type HistorySnapshot,
 } from "./history";
 import {
+  absRectInScene,
   addBendToLine,
   alignSceneNodes,
+  computeResizeBox,
   computeRotationAngle,
   deleteBendFromLine,
   distributeSceneNodes,
   filterUnlocked,
+  hasLockedInSubtree,
   isNodeLocked,
   moveBendOnLine,
+  nodeLocalToWorldInScene,
+  normalizeRotation,
   pointInRotatedRect,
+  rectIntersectsRotatedRect,
   rotatePoint,
   scaleGroupItems,
   setNodeRotation,
   toggleNodesLocked,
+  visualBoundsInScene,
+  worldRotationInScene,
+  worldToNodeLocalInScene,
   type AlignKind,
   type DistributeAxis,
   type MultiResizeItem,
@@ -151,16 +164,19 @@ function parentOf(id: string): string | null {
   return null;
 }
 
-/** 节点相对于设计窗口左上角的位置。根窗口在 (0, 0)。 */
+/** 节点相对于设计窗口左上角的位置（含旋转父容器对子节点中心位置的变换）。根窗口在 (0, 0)。 */
 function absRect(id: string): { x: number; y: number; width: number; height: number } {
-  const n = node(id)!;
-  let x = 0;
-  let y = 0;
-  for (let cursor: string | null = id; cursor && cursor !== project.scene.root; cursor = parentOf(cursor)) {
-    x += node(cursor)?.x ?? 0;
-    y += node(cursor)?.y ?? 0;
-  }
-  return { x, y, width: n.width, height: n.height };
+  return absRectInScene(project.scene, id);
+}
+
+/** 节点在设计窗口里的视觉外包围盒（含自身与祖先容器旋转后的轴对齐外框）。 */
+function visualRect(id: string): { x: number; y: number; width: number; height: number } {
+  return visualBoundsInScene(project.scene, id);
+}
+
+/** 节点在设计窗口世界坐标系下的总旋转角（度）。 */
+function worldRotation(id: string): number {
+  return worldRotationInScene(project.scene, id);
 }
 
 /** 找出某个点下面最上层、最深的节点；只点到窗口空白处时返回 null。 */
@@ -184,9 +200,46 @@ function canHoldChildren(id: string): boolean {
 
 // ---------- 写文件 ----------
 
-// 画布与逻辑操作的撤销和重做：保存操作前的快照（含 scene.json 与 app.logic.yaml）
+// 画布、逻辑、说明文档与预设操作的撤销和重做
 const HISTORY_LIMIT = 200;
 let history = createHistory(HISTORY_LIMIT);
+
+function currentPresetsText(presets = project.presets): string {
+  return JSON.stringify({ version: 1, presets }, null, 2) + "\n";
+}
+
+function currentSnapshot(): HistorySnapshot {
+  return {
+    sceneText: project.sceneText,
+    logicText: project.logicText,
+    docs: Object.fromEntries(project.docs),
+    presetsText: currentPresetsText(),
+  };
+}
+
+async function applyHistorySnapshot(target: HistorySnapshot): Promise<void> {
+  if (target.logicText !== project.logicText) {
+    window.clearTimeout(yamlTimer);
+    yamlDirty = false;
+    await writeText(LOGIC_PATH, target.logicText);
+  }
+  if (target.sceneText !== project.sceneText) {
+    await writeText(SCENE_PATH, target.sceneText);
+  }
+  if (target.docs) {
+    for (const [docPath, content] of Object.entries(target.docs)) {
+      if ((project.docs.get(docPath) ?? "") !== content) {
+        window.clearTimeout(docTimer);
+        docDirty = false;
+        await writeText(docPath, content);
+      }
+    }
+  }
+  if (target.presetsText !== undefined && target.presetsText !== currentPresetsText()) {
+    await writeText(PRESETS_PATH, target.presetsText);
+  }
+  await reload();
+}
 
 async function saveScene(options: { history?: boolean; nextLogicText?: string; label?: string } = {}): Promise<void> {
   normalizeLines();
@@ -195,14 +248,16 @@ async function saveScene(options: { history?: boolean; nextLogicText?: string; l
   const logicChanged = nextLogic !== project.logicText;
   if (text === project.sceneText && !logicChanged) return;
   if (options.history !== false) {
+    const before = currentSnapshot();
     history = pushHistory(
       history,
-      { sceneText: project.sceneText, logicText: project.logicText },
-      { sceneText: text, logicText: nextLogic },
+      before,
+      { ...before, sceneText: text, logicText: nextLogic },
       options.label ?? "画布修改",
     );
   }
   if (logicChanged) {
+    window.clearTimeout(yamlTimer);
     yamlDirty = false;
     await writeText(LOGIC_PATH, nextLogic);
   }
@@ -213,50 +268,33 @@ async function saveScene(options: { history?: boolean; nextLogicText?: string; l
 }
 
 async function undo(): Promise<void> {
-  const res = undoHistory(history, { sceneText: project.sceneText, logicText: project.logicText });
+  await flushEditors();
+  const res = undoHistory(history, currentSnapshot());
   if (!res.snapshot) return toast("没有可以撤销的画布操作");
   history = res.stack;
-  if (res.snapshot.logicText !== project.logicText) {
-    yamlDirty = false;
-    await writeText(LOGIC_PATH, res.snapshot.logicText);
-  }
-  if (res.snapshot.sceneText !== project.sceneText) {
-    await writeText(SCENE_PATH, res.snapshot.sceneText);
-  }
-  await reload();
+  await applyHistorySnapshot(res.snapshot);
 }
 
 async function redo(): Promise<void> {
-  const res = redoHistory(history, { sceneText: project.sceneText, logicText: project.logicText });
+  await flushEditors();
+  const res = redoHistory(history, currentSnapshot());
   if (!res.snapshot) return toast("没有可以重做的画布操作");
   history = res.stack;
-  if (res.snapshot.logicText !== project.logicText) {
-    yamlDirty = false;
-    await writeText(LOGIC_PATH, res.snapshot.logicText);
-  }
-  if (res.snapshot.sceneText !== project.sceneText) {
-    await writeText(SCENE_PATH, res.snapshot.sceneText);
-  }
-  await reload();
+  await applyHistorySnapshot(res.snapshot);
 }
 
 async function restoreVersion(index: number): Promise<void> {
-  const res = restoreHistoryVersion(history, index, { sceneText: project.sceneText, logicText: project.logicText });
+  await flushEditors();
+  const res = restoreHistoryVersion(history, index, currentSnapshot());
   if (!res.snapshot) return;
   history = res.stack;
-  if (res.snapshot.logicText !== project.logicText) {
-    yamlDirty = false;
-    await writeText(LOGIC_PATH, res.snapshot.logicText);
-  }
-  if (res.snapshot.sceneText !== project.sceneText) {
-    await writeText(SCENE_PATH, res.snapshot.sceneText);
-  }
-  await reload();
+  await applyHistorySnapshot(res.snapshot);
   toast("已恢复到所选版本");
 }
 
 /** 用保留注释和格式的方式修改 YAML。 */
-async function editLogic(mutate: (doc: Document) => void): Promise<boolean> {
+async function editLogic(mutate: (doc: Document) => void, label = "修改逻辑"): Promise<boolean> {
+  await flushEditors();
   const doc = parseDocument(project.logicText);
   if (doc.errors.length > 0) {
     toast("YAML 有语法错误，请先在 YAML 页签中修正");
@@ -265,13 +303,15 @@ async function editLogic(mutate: (doc: Document) => void): Promise<boolean> {
   mutate(doc);
   const nextText = doc.toString(YAML_OUTPUT);
   if (nextText !== project.logicText) {
+    const before = currentSnapshot();
     history = pushHistory(
       history,
-      { sceneText: project.sceneText, logicText: project.logicText },
-      { sceneText: project.sceneText, logicText: nextText },
-      "修改逻辑",
+      before,
+      { ...before, logicText: nextText },
+      label,
     );
   }
+  window.clearTimeout(yamlTimer);
   yamlDirty = false;
   await writeText(LOGIC_PATH, nextText);
   await reload();
@@ -541,14 +581,19 @@ function outlineOf(id: string): Point[] {
   return points;
 }
 
+/** 节点外轮廓在设计窗口世界坐标系下的顶点序列（含自身与父容器旋转）。 */
+function worldOutlineOf(id: string): Point[] {
+  return outlineOf(id).map((pt) => nodeLocalToWorldInScene(project.scene, id, pt));
+}
+
 /** 外轮廓上离 p 最近的点（设计窗口里的绝对坐标）。 */
 function nearestOnOutline(id: string, p: Point): { point: Point; distance: number } {
   const r = absRect(id);
-  const pts = outlineOf(id);
+  const pts = worldOutlineOf(id);
   let best = { point: { x: r.x, y: r.y }, distance: Infinity };
   for (let i = 0; i < pts.length; i++) {
-    const a = { x: r.x + pts[i].x, y: r.y + pts[i].y };
-    const b = { x: r.x + pts[(i + 1) % pts.length].x, y: r.y + pts[(i + 1) % pts.length].y };
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const length2 = dx * dx + dy * dy;
@@ -564,12 +609,12 @@ function nearestOnOutline(id: string, p: Point): { point: Point; distance: numbe
 function outlineRayHit(id: string, direction: Point): Point | null {
   const r = absRect(id);
   const c = { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-  const pts = outlineOf(id);
+  const pts = worldOutlineOf(id);
   let best: Point | null = null;
   let bestT = -1;
   for (let i = 0; i < pts.length; i++) {
-    const a = { x: r.x + pts[i].x, y: r.y + pts[i].y };
-    const b = { x: r.x + pts[(i + 1) % pts.length].x, y: r.y + pts[(i + 1) % pts.length].y };
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
     const ex = b.x - a.x;
     const ey = b.y - a.y;
     const denominator = direction.x * ey - direction.y * ex;
@@ -584,13 +629,23 @@ function outlineRayHit(id: string, direction: Point): Point | null {
   return best;
 }
 
-/** 节点某一边的“中点”：形状按真实轮廓，其余按方框。 */
+/** 节点某一边在世界坐标系下的法向方向（含旋转）。 */
+function sideDirectionOf(id: string, side: Side): Point {
+  const dir = sideDirection(side);
+  const rot = worldRotation(id);
+  return rot ? rotatePoint(dir, { x: 0, y: 0 }, rot) : dir;
+}
+
+/** 节点某一边的“中点”：形状按真实轮廓，其余按方框（均含旋转变换）。 */
 function sideAnchorOf(id: string, side: Side): Point {
+  const rotDir = sideDirectionOf(id, side);
   if (node(id)?.type === "Shape") {
-    const hit = outlineRayHit(id, sideDirection(side));
+    const hit = outlineRayHit(id, rotDir);
     if (hit) return hit;
   }
-  return sideAnchor(absRect(id), side);
+  const r = absRect(id);
+  const localAnchor = sideAnchor({ x: 0, y: 0, width: r.width, height: r.height }, side);
+  return nodeLocalToWorldInScene(project.scene, id, localAnchor);
 }
 
 /** "0.250,1.000" → 相对于节点方框的位置（0 到 1）。 */
@@ -602,18 +657,22 @@ function parseAt(value: Value | undefined): Point | null {
 
 /**
  * 线的一头挂在节点上时，它在哪里、朝哪个方向出去。
- * side 为 outline 时挂在外轮廓的某一点（at 记着它在方框里的相对位置，节点缩放后跟着走，再贴回轮廓上）；
+ * side 为 outline 时挂在外轮廓的某一点（at 记着它在方框里的相对位置，节点缩放或旋转后跟着走，再贴回轮廓上）；
  * 为 top、right、bottom、left 时挂在那一边的中点；为 auto 时朝着另一头自动选边。
  */
 function resolveAttach(id: string, sideValue: string, at: Point | null, other: Point): Endpoint {
   const rect = absRect(id);
+  const localRect = { x: 0, y: 0, width: rect.width, height: rect.height };
   if (sideValue === "outline" && at) {
-    const guess = { x: rect.x + at.x * rect.width, y: rect.y + at.y * rect.height };
+    const guess = nodeLocalToWorldInScene(project.scene, id, { x: at.x * rect.width, y: at.y * rect.height });
     const point = nearestOnOutline(id, guess).point;
-    return { point, direction: sideDirection(autoSide(rect, point)) };
+    const localPt = worldToNodeLocalInScene(project.scene, id, point);
+    const localSide = autoSide(localRect, localPt);
+    return { point, direction: sideDirectionOf(id, localSide) };
   }
-  const side: Side = SIDES.includes(sideValue as Side) ? (sideValue as Side) : autoSide(rect, other);
-  return { point: sideAnchorOf(id, side), direction: sideDirection(side) };
+  const localOther = worldToNodeLocalInScene(project.scene, id, other);
+  const side: Side = SIDES.includes(sideValue as Side) ? (sideValue as Side) : autoSide(localRect, localOther);
+  return { point: sideAnchorOf(id, side), direction: sideDirectionOf(id, side) };
 }
 
 /** 一条线两端现在在哪里（设计窗口的绝对坐标）。挂着节点的一头跟着节点走。 */
@@ -719,28 +778,18 @@ function normalizeLines(): void {
   }
 }
 
-/** 一个点在不在节点上。形状和线条按图形本身判断，别的按方框（支持旋转后的方框）。 */
+/** 一个点在不在节点上。形状和线条按图形本身判断，别的按方框（支持自身及父容器旋转后的方框）。 */
 function containsPoint(id: string, px: number, py: number): boolean {
   const n = node(id);
+  if (!n) return false;
   const entry = mounted.get(id);
-  const r = absRect(id);
-  let testX = px;
-  let testY = py;
-  if (n?.rotation) {
-    const unrot = rotatePoint(
-      { x: px, y: py },
-      { x: r.x + r.width / 2, y: r.y + r.height / 2 },
-      -n.rotation,
-    );
-    testX = unrot.x;
-    testY = unrot.y;
-  }
-  if (n && entry?.hit && (n.type === "Shape" || n.type === "Line")) {
+  const localPt = worldToNodeLocalInScene(project.scene, id, { x: px, y: py });
+  if (entry?.hit && (n.type === "Shape" || n.type === "Line")) {
     if (n.type === "Line") return entry.hit.isPointInStroke(new DOMPoint(px, py));
-    const local = new DOMPoint(testX - r.x, testY - r.y);
+    const local = new DOMPoint(localPt.x, localPt.y);
     return entry.hit.isPointInFill(local) || entry.hit.isPointInStroke(local);
   }
-  return pointInRotatedRect({ x: px, y: py }, r, n?.rotation ?? 0);
+  return pointInRotatedRect({ x: px, y: py }, absRect(id), worldRotation(id));
 }
 
 // ---------- 工具、吸附和样式的设置 ----------
@@ -777,7 +826,7 @@ function snapOptions(e: { ctrlKey: boolean; metaKey: boolean }): SnapOptions {
   return { threshold: 6, objects: snapSettings.objects && !off, grid: off ? 0 : snapSettings.grid };
 }
 
-/** 吸附时参考的方框：除了正在动的这些（和它们里面的东西）以外的全部节点，以及窗口本身。线条不算。 */
+/** 吸附时参考的方框：除了正在动的这些（和它们里面的东西）以外的全部节点（按旋转后的视觉外包围盒计算），以及窗口本身。线条不算。 */
 function snapTargets(exclude: string | string[] | null): Rect[] {
   const excluded = new Set<string>();
   const collect = (id: string) => {
@@ -788,7 +837,7 @@ function snapTargets(exclude: string | string[] | null): Rect[] {
   const rects: Rect[] = [];
   for (const [id, n] of Object.entries(project.scene.nodes)) {
     if (excluded.has(id) || n.type === "Line") continue;
-    rects.push(id === project.scene.root ? { x: 0, y: 0, width: n.width, height: n.height } : absRect(id));
+    rects.push(id === project.scene.root ? { x: 0, y: 0, width: n.width, height: n.height } : visualRect(id));
   }
   return rects;
 }
@@ -853,11 +902,11 @@ const bendHandles = document.createElement("div");
 bendHandles.id = "bend-handles";
 overlay.append(ghost, guidesLayer, outlines, selectionBox, bendHandles, ...endpointHandles, marqueeBox);
 
-/** 多选时的外框：所有选中的东西合起来的方框。 */
+/** 多选时的外框：所有选中的东西（按旋转后的视觉外包围盒）合起来的方框。 */
 function unionRect(ids: string[]): Rect | null {
   let box: Rect | null = null;
   for (const id of ids) {
-    const r = absRect(id);
+    const r = visualRect(id);
     if (!box) box = { ...r };
     else {
       const right = Math.max(box.x + box.width, r.x + r.width);
@@ -935,6 +984,8 @@ function updateSelectionBox(): void {
   if (!selectedId || !n) {
     selectionBox.style.display = "none";
     selectionBox.style.transform = "";
+    selectionTag.style.transform = "";
+    sizeLabel.style.transform = "";
     selectionBox.classList.remove("locked");
     rotateHandle.style.display = "none";
     positionShapeBar();
@@ -944,7 +995,7 @@ function updateSelectionBox(): void {
     // 多选：每个东西一个细框，外面一个合起来的框，支持整体移动和整体按比例缩放
     for (const id of selectedIds) {
       const r = absRect(id);
-      const eachNode = node(id);
+      const eachRot = worldRotation(id);
       const box = document.createElement("div");
       box.className = "multi-outline";
       Object.assign(box.style, {
@@ -952,7 +1003,7 @@ function updateSelectionBox(): void {
         top: `${r.y}px`,
         width: `${r.width}px`,
         height: `${r.height}px`,
-        transform: eachNode?.rotation ? `rotate(${eachNode.rotation}deg)` : "",
+        transform: eachRot ? `rotate(${eachRot}deg)` : "",
         transformOrigin: "center center",
       });
       outlines.append(box);
@@ -969,6 +1020,8 @@ function updateSelectionBox(): void {
       height: `${all.height}px`,
       transform: "",
     });
+    selectionTag.style.transform = "";
+    sizeLabel.style.transform = "";
     selectionBox.classList.remove("line");
     selectionBox.classList.add("multi");
     selectionBox.classList.toggle("locked", allLocked);
@@ -985,7 +1038,9 @@ function updateSelectionBox(): void {
   const r = absRect(selectedId);
   const isRoot = selectedId === project.scene.root;
   const locked = isNodeLocked(project.scene, selectedId);
-  const rot = n.rotation ?? 0;
+  const rot = worldRotation(selectedId);
+  const nodeRot = n.rotation ?? 0;
+  const flipLabels = Math.abs(normalizeRotation(rot)) > 90;
   Object.assign(selectionBox.style, {
     display: "",
     left: `${r.x}px`,
@@ -995,9 +1050,11 @@ function updateSelectionBox(): void {
     transform: rot ? `rotate(${rot}deg)` : "",
     transformOrigin: "center center",
   });
+  selectionTag.style.transform = flipLabels ? "rotate(180deg)" : "";
+  sizeLabel.style.transform = flipLabels ? "translateX(-50%) rotate(180deg)" : "";
   selectionBox.classList.toggle("line", isLine);
   selectionBox.classList.toggle("locked", locked);
-  selectionTag.textContent = `${selectedId} · ${typeLabel(selectedId)}${rot ? ` · ${rot}°` : ""}${locked ? " · 已锁定" : ""}`;
+  selectionTag.textContent = `${selectedId} · ${typeLabel(selectedId)}${nodeRot ? ` · ${nodeRot}°` : ""}${locked ? " · 已锁定" : ""}`;
   selectionTag.style.display = isRoot ? "none" : "";
   // 根窗口只能从右边和下边调整尺寸；线条用两端的圆点调整；已锁定的节点不显示缩放和旋转把手
   for (const handle of selectionBox.querySelectorAll<HTMLElement>(".handle")) {
@@ -1064,9 +1121,10 @@ function drawGuides(guides: Guide[]): void {
 function drawAttachHint(anchor: Anchor | null): void {
   if (!anchor?.node) return;
   const r = absRect(anchor.node);
-  if (node(anchor.node)?.type === "Shape") {
-    // 形状：把真实的外轮廓描出来
-    const points = outlineOf(anchor.node).map((p) => `${r.x + p.x},${r.y + p.y}`).join(" ");
+  const rot = worldRotation(anchor.node);
+  if (node(anchor.node)?.type === "Shape" || rot !== 0) {
+    // 形状或旋转后的节点：把真实的外轮廓描出来
+    const points = worldOutlineOf(anchor.node).map((p) => `${p.x},${p.y}`).join(" ");
     svgChild(guidesLayer, "polygon", { points, class: "attach-box" });
   } else {
     svgChild(guidesLayer, "rect", { x: r.x - 2, y: r.y - 2, width: r.width + 4, height: r.height + 4, class: "attach-box" });
@@ -1120,7 +1178,7 @@ function nearestSideAnchor(px: number, py: number, excludeId: string | null, avo
   let bestDistance = 12;
   for (const [id, n] of Object.entries(project.scene.nodes)) {
     if (id === project.scene.root || id === excludeId || id === avoid || n.type === "Line") continue;
-    const r = absRect(id);
+    const r = visualRect(id);
     if (px < r.x - 20 || px > r.x + r.width + 20 || py < r.y - 20 || py > r.y + r.height + 20) continue;
     for (const side of SIDES) {
       const p = sideAnchorOf(id, side);
@@ -1140,12 +1198,14 @@ function nearestEdge(px: number, py: number, excludeId: string | null, avoid: st
   let bestDistance = 10;
   for (const [id, n] of Object.entries(project.scene.nodes)) {
     if (id === project.scene.root || id === excludeId || id === avoid || n.type === "Line") continue;
-    const r = absRect(id);
-    if (px < r.x - 12 || px > r.x + r.width + 12 || py < r.y - 12 || py > r.y + r.height + 12) continue;
+    const vr = visualRect(id);
+    if (px < vr.x - 12 || px > vr.x + vr.width + 12 || py < vr.y - 12 || py > vr.y + vr.height + 12) continue;
     const hit = nearestOnOutline(id, { x: px, y: py });
     if (hit.distance <= bestDistance) {
       bestDistance = hit.distance;
-      const at = { x: (hit.point.x - r.x) / Math.max(1, r.width), y: (hit.point.y - r.y) / Math.max(1, r.height) };
+      const r = absRect(id);
+      const localHit = worldToNodeLocalInScene(project.scene, id, hit.point);
+      const at = { x: localHit.x / Math.max(1, r.width), y: localHit.y / Math.max(1, r.height) };
       best = { point: hit.point, node: id, side: "outline", at };
     }
   }
@@ -1233,7 +1293,7 @@ type Gesture =
   | { kind: "rotate"; id: string; center: Point; startPointer: Point; startRotation: number; moved: boolean }
   | { kind: "marquee"; start: Point; scope: string; base: string[]; clicked: string | null; moved: boolean }
   | { kind: "bend"; id: string; index: number; points: Point[]; start: Point; horizontal: boolean; moved: boolean }
-  | { kind: "waybend"; id: string; index: number; moved: boolean }
+  | { kind: "waybend"; id: string; index: number; start: Point; moved: boolean }
   | { kind: "draw"; preset: ShapePreset | null; nodeType: string | null; start: Point; rect: Rect | null; parentId: string; targets: Rect[] }
   | { kind: "line"; preset: ShapePreset; start: Anchor; end: Anchor | null; parentId: string; rawStart: Point; rawEnd: Point | null }
   | { kind: "endpoint"; id: string; which: "start" | "end"; moved: boolean };
@@ -1249,10 +1309,10 @@ function capturePointer(e: PointerEvent): void {
 }
 const MIN_SIZE = 8;
 
-/** 落在哪个能装东西的节点里：从鼠标下最里面的节点往外找。 */
+/** 落在哪个能装东西且未锁定的节点里：从鼠标下最里面的节点往外找。 */
 function containerAt(px: number, py: number): string {
   for (let hit = hitTest(px, py); hit; hit = parentOf(hit)) {
-    if (canHoldChildren(hit)) return hit;
+    if (canHoldChildren(hit) && !isNodeLocked(project.scene, hit)) return hit;
   }
   return project.scene.root;
 }
@@ -1320,16 +1380,15 @@ overlay.addEventListener("pointerdown", (e) => {
     const entry = mounted.get(selectedId);
     if (entry) paintGraphic(selectedId, entry, { ...designRuntime.view(selectedId).props, ...n.props });
     updateSelectionBox();
-    gesture = { kind: "waybend", id: selectedId, index: insertIdx, moved: true };
+    gesture = { kind: "waybend", id: selectedId, index: insertIdx, start: pt, moved: true };
     capturePointer(e);
     return;
   }
 
-  // 直线或曲线：拖动已有拐点
+  // 直线或曲线：拖动已有拐点（不在 pointerdown 立即捕获指针，保留浏览器原生双击目标以支持双击删除拐点）
   const bendIndex = target.dataset.bendIndex;
   if (bendIndex !== undefined && selectedId && !isNodeLocked(project.scene, selectedId)) {
-    gesture = { kind: "waybend", id: selectedId, index: Number(bendIndex), moved: false };
-    capturePointer(e);
+    gesture = { kind: "waybend", id: selectedId, index: Number(bendIndex), start: pt, moved: false };
     return;
   }
 
@@ -1358,7 +1417,7 @@ overlay.addEventListener("pointerdown", (e) => {
         const eachNode = node(each)!;
         return {
           id: each,
-          abs: absRect(each),
+          abs: visualRect(each),
           parentOrigin: parentOrigin(each),
           isLine: eachNode.type === "Line",
           lineProps: eachNode.type === "Line" ? { ...eachNode.props } : undefined,
@@ -1512,40 +1571,23 @@ overlay.addEventListener("pointermove", (e) => {
     const dy = Math.round((e.clientY - gesture.start.y) / viewZoom());
     if (dx === 0 && dy === 0 && !gesture.moved) return;
     gesture.moved = true;
-    const { orig, abs } = gesture;
-    {
-      const handle = gesture.handle;
-      let width = orig.width;
-      let height = orig.height;
-      if (handle.includes("e")) width = orig.width + dx;
-      if (handle.includes("w")) width = orig.width - dx;
-      if (handle.includes("s")) height = orig.height + dy;
-      if (handle.includes("n")) height = orig.height - dy;
-      // 按住 Shift 拖角：保持长宽比
-      if (e.shiftKey && handle.length === 2) {
-        const ratio = orig.width / Math.max(1, orig.height);
-        if (Math.abs(width / orig.width) >= Math.abs(height / Math.max(1, orig.height))) height = width / ratio;
-        else width = height * ratio;
-      }
-      width = Math.max(MIN_SIZE, width);
-      height = Math.max(MIN_SIZE, height);
-      let box: Rect = {
-        x: abs.x + (handle.includes("w") ? orig.width - width : 0),
-        y: abs.y + (handle.includes("n") ? orig.height - height : 0),
-        width,
-        height,
-      };
-      if (gesture.id !== project.scene.root && !(e.shiftKey && handle.length === 2)) {
-        const snapped = snapResize(box, handle, gesture.targets, options);
-        box = snapped.rect;
-        drawGuides(snapped.guides);
-      }
-      n.width = Math.max(MIN_SIZE, Math.round(box.width));
-      n.height = Math.max(MIN_SIZE, Math.round(box.height));
+    const { orig, abs, handle } = gesture;
+    const isRoot = gesture.id === project.scene.root;
+    const rot = isRoot ? 0 : worldRotation(gesture.id);
+    const keepAspect = e.shiftKey && handle.length === 2;
+    let box = computeResizeBox(abs, handle, dx, dy, keepAspect, rot, MIN_SIZE);
+    if (!isRoot && rot === 0 && !keepAspect) {
+      const snapped = snapResize(box, handle, gesture.targets, options);
+      box = snapped.rect;
+      drawGuides(snapped.guides);
+    }
+    n.width = Math.max(MIN_SIZE, Math.round(box.width));
+    n.height = Math.max(MIN_SIZE, Math.round(box.height));
+    if (!isRoot) {
       n.x = Math.round(orig.x + box.x - abs.x);
       n.y = Math.round(orig.y + box.y - abs.y);
-      showSize(n.width, n.height);
     }
+    showSize(n.width, n.height);
     applyLiveGeometry(gesture.id);
     return;
   }
@@ -1556,26 +1598,10 @@ overlay.addEventListener("pointermove", (e) => {
     if (dx === 0 && dy === 0 && !gesture.moved) return;
     gesture.moved = true;
     const { origBox, handle } = gesture;
-    let width = origBox.width;
-    let height = origBox.height;
-    if (handle.includes("e")) width = origBox.width + dx;
-    if (handle.includes("w")) width = origBox.width - dx;
-    if (handle.includes("s")) height = origBox.height + dy;
-    if (handle.includes("n")) height = origBox.height - dy;
-    if (e.shiftKey && handle.length === 2) {
-      const ratio = origBox.width / Math.max(1, origBox.height);
-      if (Math.abs(width / origBox.width) >= Math.abs(height / Math.max(1, origBox.height))) height = width / ratio;
-      else width = height * ratio;
-    }
-    width = Math.max(MIN_SIZE, width);
-    height = Math.max(MIN_SIZE, height);
-    let box: Rect = {
-      x: origBox.x + (handle.includes("w") ? origBox.width - width : 0),
-      y: origBox.y + (handle.includes("n") ? origBox.height - height : 0),
-      width,
-      height,
-    };
-    if (!(e.shiftKey && handle.length === 2)) {
+    // 多选整体缩放：四角拖拽默认保持长宽比（按比例缩放），按住 Shift 可自由变形
+    const keepAspect = handle.length === 2 ? !e.shiftKey : false;
+    let box = computeResizeBox(origBox, handle, dx, dy, keepAspect, 0, MIN_SIZE);
+    if (!keepAspect) {
       const snapped = snapResize(box, handle, gesture.targets, options);
       box = snapped.rect;
       drawGuides(snapped.guides);
@@ -1638,11 +1664,11 @@ overlay.addEventListener("pointermove", (e) => {
     if (!gesture.moved && rect.width < 3 && rect.height < 3) return;
     gesture.moved = true;
     Object.assign(marqueeBox.style, { display: "block", left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
-    // 框住的是起点所在的那一层里、未锁定且和方框有交叠的东西
+    // 框住的是起点所在的那一层里、未锁定且和方框（含旋转后精确有向矩形）有交叠的东西
     const hits = (node(gesture.scope)?.children ?? []).filter((child) => {
       if (isNodeLocked(project.scene, child)) return false;
       const r = absRect(child);
-      return r.x < rect.x + rect.width && r.x + r.width > rect.x && r.y < rect.y + rect.height && r.y + r.height > rect.y;
+      return rectIntersectsRotatedRect(rect, r, worldRotation(child));
     });
     const next = [...gesture.base];
     for (const hit of hits) if (!next.includes(hit)) next.push(hit);
@@ -1674,6 +1700,8 @@ overlay.addEventListener("pointermove", (e) => {
   if (gesture.kind === "waybend") {
     const n = node(gesture.id);
     if (!n) return;
+    if (!gesture.moved && Math.hypot(pt.x - gesture.start.x, pt.y - gesture.start.y) < 2) return;
+    if (!gesture.moved) capturePointer(e);
     const snapped = snapPoint(pt.x, pt.y, snapTargets(gesture.id), options);
     drawGuides(snapped.guides);
     gesture.moved = true;
@@ -1829,17 +1857,24 @@ overlay.addEventListener("pointerup", (e) => {
 
 overlay.addEventListener("dblclick", (e) => {
   if (tool.kind !== "select") return;
-  const target = e.target as HTMLElement;
-  const bendIndex = target.dataset.bendIndex;
-  if (bendIndex !== undefined && selectedId && !isNodeLocked(project.scene, selectedId)) {
+  const pt = stagePoint(e);
+  if (selectedId && !isNodeLocked(project.scene, selectedId)) {
     const n = node(selectedId);
     if (n && n.type === "Line") {
-      n.props = deleteBendFromLine(n.props ?? {}, Number(bendIndex));
-      void saveScene();
-      return;
+      const target = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-bend-index]");
+      let idx = target?.dataset.bendIndex !== undefined ? Number(target.dataset.bendIndex) : -1;
+      if (idx < 0) {
+        const origin = parentOrigin(selectedId);
+        const bends = parseBends(n.props?.bends).map((p) => ({ x: p.x + origin.x, y: p.y + origin.y }));
+        idx = bends.findIndex((b) => Math.hypot(b.x - pt.x, b.y - pt.y) <= 10);
+      }
+      if (idx >= 0) {
+        n.props = deleteBendFromLine(n.props ?? {}, idx);
+        void saveScene({ label: "删除拐点" });
+        return;
+      }
     }
   }
-  const pt = stagePoint(e);
   const id = hitTest(pt.x, pt.y);
   if (id && isGraphic(id)) openTextEditor(id);
 });
@@ -1929,6 +1964,7 @@ function commitTextEditor(cancel = false): void {
 const TOOL_KEYS: Record<string, string> = { r: "rectangle", o: "ellipse", l: "line", x: "elbowConnector", t: "text" };
 
 document.addEventListener("keydown", (e) => {
+  if (document.getElementById("delete-confirm")) return;
   const target = e.target as HTMLElement;
   if (mode !== "edit" || (target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable))) return;
   const ctrl = e.ctrlKey || e.metaKey;
@@ -1995,15 +2031,14 @@ document.addEventListener("keydown", (e) => {
     const unlocked = filterUnlocked(project.scene, ids);
     if (unlocked.length === 0) return toast("选中的控件已锁定");
     const [dx, dy] = moves[e.key];
-    for (const id of unlocked) {
+    const lineIds = unlocked.filter((id) => node(id)?.type === "Line");
+    const boxIds = unlocked.filter((id) => node(id)?.type !== "Line");
+    if (boxIds.length > 0) {
+      project.scene = applyMoveToScene(project.scene, boxIds, dx, dy);
+    }
+    for (const id of lineIds) {
       const n = node(id);
-      if (!n) continue;
-      // 线条挪动的是没挂着的那几头和拐点
-      if (n.type === "Line") n.props = offsetLineProps(id, n.props ?? {}, dx, dy);
-      else {
-        n.x = (n.x ?? 0) + dx;
-        n.y = (n.y ?? 0) + dy;
-      }
+      if (n) n.props = offsetLineProps(id, n.props ?? {}, dx, dy);
     }
     void saveScene();
   }
@@ -2047,8 +2082,7 @@ async function createNode(type: string, parentId: string, rect: Rect, props?: Re
   };
   if (props && Object.keys(props).length > 0) created.props = props;
   if (decl.children) created.children = [];
-  project.scene.nodes[id] = created;
-  (project.scene.nodes[parentId].children ??= []).push(id);
+  project.scene = applyAddNodeToScene(project.scene, parentId, id, created);
   selectedId = id;
   await saveScene();
   return id;
@@ -2101,9 +2135,10 @@ async function createLine(preset: ShapePreset, start: Anchor, end: Anchor, paren
 /** 复制一份，放在原来的右下方一点。线条复制出来是两头都没挂的。 */
 /** 快速新建（FigJam 的 Ctrl+Enter）：在右边放一个同样的形状，用折线箭头连起来。 */
 async function quickCreate(id: string): Promise<void> {
+  if (isNodeLocked(project.scene, id)) return toast("控件已锁定");
   const n = node(id);
   const parentId = parentOf(id);
-  if (!n || n.type !== "Shape" || !parentId) return;
+  if (!n || n.type !== "Shape" || !parentId || isNodeLocked(project.scene, parentId)) return;
   const GAP = 80;
   const x = n.x ?? 0;
   const y = n.y ?? 0;
@@ -2213,6 +2248,7 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
   for (const oldId of order) {
     const source = clip.nodes[oldId];
     const copy = JSON.parse(JSON.stringify(source)) as SceneNode;
+    delete copy.locked;
     if (copy.children) copy.children = copy.children.map((child) => idMap.get(child)).filter((child): child is string => !!child);
     if (copy.type === "Line" && copy.props) {
       for (const key of ["startNode", "endNode"]) {
@@ -2230,7 +2266,11 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
   for (const root of clip.roots) {
     const fresh = idMap.get(root);
     if (!fresh) continue;
-    const { parentId, index } = placement(root);
+    let { parentId, index } = placement(root);
+    while (parentId !== project.scene.root && isNodeLocked(project.scene, parentId)) {
+      parentId = parentOf(parentId) ?? project.scene.root;
+      index = undefined;
+    }
     const parent = node(parentId) ?? node(project.scene.root)!;
     const origin = parentId === project.scene.root ? { x: 0, y: 0 } : absRect(parentId);
     const copy = node(fresh)!;
@@ -2250,7 +2290,9 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
 /** 复制一份（Ctrl+D）：每个都放在原来那个的后面，往右下错开一点。 */
 async function duplicateNodes(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  const clip = copyNodes(ids);
+  const unlocked = filterUnlocked(project.scene, ids);
+  if (unlocked.length === 0) return toast("选中的控件已锁定");
+  const clip = copyNodes(unlocked);
   const placed = pasteClip(clip, (rootId) => {
     const parentId = parentOf(rootId) ?? project.scene.root;
     const siblings = node(parentId)?.children ?? [];
@@ -2265,11 +2307,16 @@ async function duplicateNode(id: string): Promise<void> {
   await duplicateNodes([id]);
 }
 
-/** 粘贴到哪里：选中的是能装东西的节点，就放进它里面；否则和选中的东西放在同一层；什么都没选就放进窗口。 */
+/** 粘贴到哪里：选中的是能装东西且未锁定的节点，就放进它里面；否则往外找未锁定的父容器；什么都没选就放进窗口。 */
 function pasteParent(): string {
   if (!selectedId) return project.scene.root;
-  if (selectedIds.length === 1 && canHoldChildren(selectedId)) return selectedId;
-  return parentOf(selectedId) ?? project.scene.root;
+  if (selectedIds.length === 1 && canHoldChildren(selectedId) && !isNodeLocked(project.scene, selectedId)) {
+    return selectedId;
+  }
+  for (let p = parentOf(selectedId); p; p = parentOf(p)) {
+    if (canHoldChildren(p) && !isNodeLocked(project.scene, p)) return p;
+  }
+  return project.scene.root;
 }
 
 async function pasteNodes(clip: Clip): Promise<void> {
@@ -2315,6 +2362,18 @@ function askDeleteYamlEntries(yamlIds: string[]): Promise<"both" | "scene-only" 
         e.preventDefault();
         e.stopPropagation();
         finish("cancel");
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        const active = document.activeElement as HTMLElement | null;
+        const choice = active?.dataset.choice as "both" | "scene-only" | "cancel" | undefined;
+        finish(choice ?? "both");
+        return;
+      }
+      if (e.key !== "Tab") {
+        e.stopPropagation();
       }
     };
     document.addEventListener("keydown", onKey, true);
@@ -2352,12 +2411,9 @@ function askDeleteYamlEntries(yamlIds: string[]): Promise<"both" | "scene-only" 
 async function deleteNodes(ids: string[], options: { askYaml?: boolean; removeYaml?: boolean } = {}): Promise<void> {
   const candidates = ids.filter((id) => id !== project.scene.root);
   if (candidates.length === 0) return;
-  const unlockedRoots = candidates.filter((id) => {
-    const sub = collectSubtreeIds(project.scene, [id]);
-    return [...sub].every((each) => !isNodeLocked(project.scene, each));
-  });
+  const unlockedRoots = candidates.filter((id) => !hasLockedInSubtree(project.scene, id));
   if (unlockedRoots.length === 0) {
-    toast("选中的控件已锁定，解锁后才能删除");
+    toast("选中的控件（或其子控件）已锁定，解锁后才能删除");
     return;
   }
   const removed = collectSubtreeIds(project.scene, unlockedRoots);
@@ -2383,13 +2439,11 @@ async function deleteNodes(ids: string[], options: { askYaml?: boolean; removeYa
     if (startGone) writeAnchor(line.props, "start", { point: layout.start.point, node: null, side: "auto" }, origin);
     if (endGone) writeAnchor(line.props, "end", { point: layout.end.point, node: null, side: "auto" }, origin);
   }
-  for (const n of Object.values(project.scene.nodes)) {
-    if (n.children) n.children = n.children.filter((child) => !removed.has(child));
-  }
-  for (const target of removed) delete project.scene.nodes[target];
+  const delRes = applyDeleteFromScene(project.scene, unlockedRoots, project.logicText, deleteYaml);
+  project.scene = delRes.scene;
   selectedId = null;
   selectedIds = [];
-  const nextLogicText = deleteYaml && yamlIds.length > 0 ? removeYamlObjects(project.logicText, yamlIds) : undefined;
+  const nextLogicText = deleteYaml && yamlIds.length > 0 ? delRes.logicText : undefined;
   await saveScene({ nextLogicText, label: "删除控件" });
 }
 
@@ -2407,17 +2461,24 @@ async function toggleLock(targetIds?: string[]): Promise<void> {
   toast(locked ? `已锁定 ${ids.length} 个控件` : `已解锁 ${ids.length} 个控件`);
 }
 
+function alignableSelection(): string[] {
+  return filterUnlocked(project.scene, topSelection()).filter((id) => {
+    const n = node(id);
+    return !!n && n.type !== "Line";
+  });
+}
+
 async function alignSelected(kind: AlignKind): Promise<void> {
-  const ids = topSelection();
-  if (ids.length < 2) return;
+  const ids = alignableSelection();
+  if (ids.length < 2) return toast("至少需要 2 个未锁定的控件才能对齐");
   const changed = alignSceneNodes(project.scene, ids, kind);
   if (!changed) return toast("选中的控件已锁定或无需对齐");
   await saveScene({ label: "对齐控件" });
 }
 
 async function distributeSelected(axis: DistributeAxis): Promise<void> {
-  const ids = topSelection();
-  if (ids.length < 3) return;
+  const ids = alignableSelection();
+  if (ids.length < 3) return toast("至少需要 3 个未锁定的控件才能等距分布");
   const changed = distributeSceneNodes(project.scene, ids, axis);
   if (!changed) return toast("至少需要 3 个未锁定的控件才能等距分布");
   await saveScene({ label: "分布控件" });
@@ -2525,14 +2586,39 @@ async function renameId(oldId: string, nextId: string): Promise<void> {
 }
 
 async function createDocSection(id: string): Promise<void> {
+  await flushEditors();
+  const doc = parseDocument(project.logicText);
+  if (doc.errors.length > 0) {
+    toast("YAML 有语法错误，请先在 YAML 页签中修正");
+    return;
+  }
   const name = sectionNameFor(id);
   const path = project.pageDoc;
   const current = project.docs.get(path) ?? `# ${project.name}\n`;
-  if (getSection(current, name) === null) await writeText(path, appendSection(current, name, id));
-  await editLogic((doc) => {
-    ensureObject(doc, id);
-    doc.setIn(["objects", id, "doc"], `${path}#${name}`);
-  });
+  const nextDocContent = getSection(current, name) === null ? appendSection(current, name, id) : current;
+  ensureObject(doc, id);
+  doc.setIn(["objects", id, "doc"], `${path}#${name}`);
+  const nextLogicText = doc.toString(YAML_OUTPUT);
+
+  const before = currentSnapshot();
+  const nextDocs = { ...(before.docs ?? {}), [path]: nextDocContent };
+  history = pushHistory(
+    history,
+    before,
+    { ...before, logicText: nextLogicText, docs: nextDocs },
+    "创建说明",
+  );
+  if (nextDocContent !== current) {
+    window.clearTimeout(docTimer);
+    docDirty = false;
+    await writeText(path, nextDocContent);
+  }
+  if (nextLogicText !== project.logicText) {
+    window.clearTimeout(yamlTimer);
+    yamlDirty = false;
+    await writeText(LOGIC_PATH, nextLogicText);
+  }
+  await reload();
 }
 
 async function addCondition(id: string): Promise<void> {
@@ -2542,7 +2628,7 @@ async function addCondition(id: string): Promise<void> {
   const ok = await editLogic((doc) => {
     ensureObject(doc, id);
     doc.setIn(["objects", id, "conditions", name], doc.createNode({ type: "text", text: "在这里写一句话", preview: false }));
-  });
+  }, "添加条件");
   if (ok) {
     showRightTab("yaml");
     scrollYamlTo(`${name}:`);
@@ -2604,7 +2690,7 @@ function clipboardItems(): MenuItem[] {
   if (ids.length > 0) {
     items.push(
       { label: "复制（Ctrl+C）", action: () => void (copySelection(null) && toast(`已复制 ${ids.length} 个`)) },
-      { label: "剪切（Ctrl+X）", action: () => void (copySelection(null) && deleteNodes(ids)) },
+      { label: "剪切（Ctrl+X）", action: () => void (copySelection(null) && deleteNodes(ids, { askYaml: false })) },
     );
   }
   if (clipMemory) items.push({ label: "粘贴（Ctrl+V）", action: () => void pasteNodes(clipMemory!) });
@@ -2616,12 +2702,13 @@ function showMenu(x: number, y: number, id: string): void {
   if (selectedIds.length > 1 && selectedIds.includes(id)) {
     const ids = topSelection();
     const anyUnlocked = ids.some((each) => !isNodeLocked(project.scene, each));
+    const alignableCount = alignableSelection().length;
     const items: MenuItem[] = [
       ...clipboardItems(),
       "separator",
       { label: anyUnlocked ? "锁定所选（Ctrl+L）" : "解锁所选（Ctrl+L）", action: () => void toggleLock(ids) },
     ];
-    if (ids.length >= 2) {
+    if (alignableCount >= 2) {
       items.push(
         "separator",
         { label: "左对齐", action: () => void alignSelected("left") },
@@ -2632,7 +2719,7 @@ function showMenu(x: number, y: number, id: string): void {
         { label: "底对齐", action: () => void alignSelected("bottom") },
       );
     }
-    if (ids.length >= 3) {
+    if (alignableCount >= 3) {
       items.push(
         { label: "水平等距分布", action: () => void distributeSelected("horizontal") },
         { label: "垂直等距分布", action: () => void distributeSelected("vertical") },
@@ -2711,7 +2798,7 @@ function sep(): HTMLSpanElement {
 }
 
 /**
- * 缩放控件旁边的一组按钮：吸附开关、网格、撤销和重做、锁定、对齐与分布。只在编辑模式下出现。
+ * 缩放控件旁边的一组按钮：吸附开关、网格、撤销和重做、锁定、旋转角度、对齐与分布。只在编辑模式下出现。
  * 画图形、画线的工具在左侧素材栏里（点一下选为工具，或者直接拖进来），快捷键 V、R、O、L、Shift+L、X、T 照样能用。
  */
 function renderToolbar(): void {
@@ -2773,9 +2860,36 @@ function renderToolbar(): void {
   lockBtn.dataset.action = "lock";
   lockBtn.disabled = lockIds.length === 0;
 
-  const unlockedCount = filterUnlocked(project.scene, tops).length;
-  const canAlign = unlockedCount >= 2;
-  const canDistribute = unlockedCount >= 3;
+  const singleRotatableId =
+    selectedIds.length === 1 && selectedId && selectedId !== project.scene.root && node(selectedId)?.type !== "Line"
+      ? selectedId
+      : null;
+  const rotLabel = document.createElement("label");
+  rotLabel.className = "bar-number tool-rotate";
+  rotLabel.title = "旋转角度（度），填 0 归零";
+  rotLabel.textContent = "旋转°";
+  const rotInput = document.createElement("input");
+  rotInput.type = "number";
+  rotInput.dataset.action = "rotation";
+  rotInput.min = "-360";
+  rotInput.max = "360";
+  rotInput.step = "1";
+  rotInput.value = singleRotatableId ? String(node(singleRotatableId)?.rotation ?? 0) : "0";
+  rotInput.disabled = !singleRotatableId || isNodeLocked(project.scene, singleRotatableId);
+  rotInput.addEventListener("change", () => {
+    if (!singleRotatableId) return;
+    if (isNodeLocked(project.scene, singleRotatableId)) return toast("控件已锁定");
+    const targetNode = node(singleRotatableId);
+    const nextVal = Number(rotInput.value);
+    if (!targetNode || !Number.isFinite(nextVal)) return;
+    setNodeRotation(targetNode, Math.max(-360, Math.min(360, nextVal)));
+    void saveScene({ label: "旋转控件" });
+  });
+  rotLabel.append(rotInput);
+
+  const alignableCount = alignableSelection().length;
+  const canAlign = alignableCount >= 2;
+  const canDistribute = alignableCount >= 3;
   const alignDefs: Array<[AlignKind, string, string]> = [
     ["left", "⫷", "左对齐"],
     ["centerH", "⫿", "水平居中对齐"],
@@ -2806,6 +2920,7 @@ function renderToolbar(): void {
     versionBtn,
     sep(),
     lockBtn,
+    rotLabel,
     sep(),
     ...alignBtns,
     distH,
@@ -2846,14 +2961,13 @@ async function setGraphicProps(id: string, patch: Record<string, Value | undefin
   if (targets.length === 0) return toast("选中的图形已锁定");
   for (const target of targets) {
     const t = node(target)!;
-    t.props = { ...t.props };
     // 换了线的走法，手动调整过的拐点就不再适用
-    if (patch.route !== undefined && patch.route !== t.props.route) delete t.props.bends;
-    for (const [key, value] of Object.entries(patch)) {
-      if (value === undefined) delete t.props[key];
-      else t.props[key] = value;
+    if (patch.route !== undefined && patch.route !== t.props?.route && t.props) {
+      t.props = { ...t.props };
+      delete t.props.bends;
     }
   }
+  project.scene = applyPropsToScene(project.scene, targets, patch);
   const keys = n.type === "Shape" ? SHAPE_STYLE_KEYS : LINE_STYLE_KEYS;
   const remembered = n.type === "Shape" ? lastShapeStyle : lastLineStyle;
   for (const [key, value] of Object.entries(patch)) {
@@ -3061,7 +3175,7 @@ function positionShapeBar(): void {
   }
   shapeBar.style.visibility = "";
   const stage = $("stage");
-  const r = selectedIds.length > 1 ? unionRect(topSelection())! : absRect(selectedId);
+  const r = selectedIds.length > 1 ? unionRect(topSelection())! : visualRect(selectedId);
   // 样式条放在设计窗口里，会跟着视角一起缩放；反过来缩回去，让它在屏幕上始终是原来的大小
   const zoom = viewZoom();
   shapeBar.style.transform = zoom === 1 ? "" : `scale(${1 / zoom})`;
@@ -3098,7 +3212,13 @@ async function reverseLine(id: string): Promise<void> {
 // ---------- 用户的预设 ----------
 
 async function writePresets(presets: ShapePreset[]): Promise<void> {
-  await writeText(PRESETS_PATH, JSON.stringify({ version: 1, presets }, null, 2) + "\n");
+  await flushEditors();
+  const nextText = currentPresetsText(presets);
+  const before = currentSnapshot();
+  if (nextText !== before.presetsText) {
+    history = pushHistory(history, before, { ...before, presetsText: nextText }, "修改预设");
+  }
+  await writeText(PRESETS_PATH, nextText);
   await reload();
 }
 
@@ -3281,6 +3401,7 @@ function renderLayers(): void {
     const locked = isNodeLocked(project.scene, id);
     const row = document.createElement("div");
     row.className = "layer" + (id === selectedId || selectedIds.includes(id) ? " selected" : "") + (locked ? " locked" : "");
+    row.dataset.id = id;
     row.style.paddingLeft = `${6 + depth * 14}px`;
     const name = document.createElement("span");
     name.textContent = id;
@@ -3356,7 +3477,7 @@ function afterSelectionChange(): void {
 
 /** 选中一个。additive 为真（按住 Shift 点）时，加进选择；已经选中的就去掉。 */
 function select(id: string | null, additive = false): void {
-  flushEditors();
+  void flushEditors();
   if (additive && id && id !== project.scene.root) {
     selectedIds = selectedIds.includes(id) ? selectedIds.filter((each) => each !== id) : [...selectedIds, id];
     selectedId = selectedIds[selectedIds.length - 1] ?? null;
@@ -3369,7 +3490,7 @@ function select(id: string | null, additive = false): void {
 }
 
 function setSelection(ids: string[]): void {
-  flushEditors();
+  void flushEditors();
   selectedIds = ids.filter((id) => node(id) && id !== project.scene.root);
   selectedId = selectedIds[selectedIds.length - 1] ?? null;
   afterSelectionChange();
@@ -3413,9 +3534,10 @@ function setTextarea(area: HTMLTextAreaElement, value: string, enabled = true): 
 function renderRight(): void {
   const idInput = $<HTMLInputElement>("selection-id");
   const n = selectedId ? node(selectedId) : undefined;
+  const locked = selectedId ? isNodeLocked(project.scene, selectedId) : false;
   idInput.value = selectedId ?? "未选中控件";
-  idInput.disabled = !selectedId || isNodeLocked(project.scene, selectedId);
-  $("selection-type").textContent = n ? `${n.type}${n.locked ? "（已锁定）" : ""}` : "";
+  idInput.disabled = !selectedId || locked;
+  $("selection-type").textContent = n ? `${n.type}${locked ? "（已锁定）" : ""}` : "";
 
   // 文档页签
   if (!docDirty) {
@@ -3471,8 +3593,14 @@ async function saveDoc(): Promise<void> {
   if (!docDirty || !docTarget) return;
   const { path, section } = docTarget;
   const current = project.docs.get(path) ?? "";
+  const nextDocContent = section === null ? docText.value : replaceSection(current, section, docText.value);
   docDirty = false;
-  await writeText(path, section === null ? docText.value : replaceSection(current, section, docText.value));
+  if (nextDocContent !== current) {
+    const before = currentSnapshot();
+    const nextDocs = { ...(before.docs ?? {}), [path]: nextDocContent };
+    history = pushHistory(history, before, { ...before, docs: nextDocs }, "编辑说明");
+  }
+  await writeText(path, nextDocContent);
   await reload();
 }
 
@@ -3481,10 +3609,11 @@ async function saveYaml(): Promise<void> {
   if (!yamlDirty) return;
   yamlDirty = false;
   if (yamlText.value !== project.logicText) {
+    const before = currentSnapshot();
     history = pushHistory(
       history,
-      { sceneText: project.sceneText, logicText: project.logicText },
-      { sceneText: project.sceneText, logicText: yamlText.value },
+      before,
+      { ...before, logicText: yamlText.value },
       "编辑 YAML",
     );
   }
@@ -3492,10 +3621,9 @@ async function saveYaml(): Promise<void> {
   await reload();
 }
 
-/** 切换选中对象之前，把还没保存的编辑先写入文件。 */
-function flushEditors(): void {
-  void saveDoc();
-  void saveYaml();
+/** 切换选中对象或执行撤销/重做之前，把还没保存的编辑先写入文件。 */
+async function flushEditors(): Promise<void> {
+  await Promise.all([saveDoc(), saveYaml()]);
 }
 
 docText.addEventListener("input", () => {
