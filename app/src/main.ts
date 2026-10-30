@@ -3,6 +3,18 @@ import { isMap, parseDocument, type Document } from "yaml";
 import { listDir, readText, removeFile, watchProject, writeText } from "./fs";
 import { initDocView, syncDocView, syncPreviewSelectionToTextarea } from "./docview";
 import { initLibrary, renderLibraryPalette } from "./library";
+import {
+  commitPaletteDropOnStage,
+  hideLayoutDropIndicator,
+  initLayoutEdit,
+  placeNewNodeInScene,
+  previewPaletteDropOnStage,
+  renderLayoutEditPane,
+  tryDropFreeNodeIntoLayoutContainer,
+  tryStartLayoutCanvasDrag,
+} from "./layoutedit";
+import { focusMenuItemInEditor, initMenuEdit, renderMenuEditPane } from "./menuedit";
+import { initStateEdit, renderStateEditPane } from "./stateedit";
 import { initPreviewLauncher, initStandalonePreviewWindow, syncStandalonePreviewTitle } from "./previewwindow";
 import {
   allWindowIds,
@@ -644,6 +656,8 @@ function renderStage(): void {
             previewRuntime.dispatch(item.id, "mouseup");
             previewRuntime.dispatch(item.id, "click");
             previewRuntime.dispatch(null, "window.click");
+          } else if (mode === "edit") {
+            focusMenuItemInEditor(item.id);
           }
         });
         group.append(btn);
@@ -1460,8 +1474,18 @@ function capturePointer(e: PointerEvent): void {
 const MIN_SIZE = 8;
 
 /** 落在哪个能装东西且未锁定的节点里：从鼠标下最里面的节点往外找。 */
-function containerAt(px: number, py: number): string {
+function containerAt(px: number, py: number, excludeId?: string): string {
   for (let hit = hitTest(px, py); hit; hit = parentOf(hit)) {
+    if (excludeId) {
+      let insideExcluded = false;
+      for (let p: string | null = hit; p; p = parentOf(p)) {
+        if (p === excludeId) {
+          insideExcluded = true;
+          break;
+        }
+      }
+      if (insideExcluded) continue;
+    }
     if (canHoldChildren(hit) && !isNodeLocked(project.scene, hit)) return hit;
   }
   return project.scene.root;
@@ -1618,6 +1642,9 @@ overlay.addEventListener("pointerdown", (e) => {
   }
   const ids = filterUnlocked(project.scene, topSelection()).filter((each) => !isLayoutPositionedNode(project.scene, each));
   if (ids.length === 0) {
+    if (!toggleOnClick && selectedIds.length === 1 && selectedId && tryStartLayoutCanvasDrag(selectedId, e)) {
+      return;
+    }
     if (toggleOnClick) gesture = { kind: "move", ids: [], origins: [], start: { x: e.clientX, y: e.clientY }, abs: absRect(id), moved: false, targets: [], toggleOnClick };
     return;
   }
@@ -1969,8 +1996,12 @@ overlay.addEventListener("pointerup", (e) => {
   endGesture();
   if (!finished) return;
   if (finished.kind === "move") {
-    if (finished.moved) void saveScene();
-    else if (finished.toggleOnClick) select(finished.toggleOnClick, true);
+    if (finished.moved) {
+      if (finished.ids.length === 1) {
+        tryDropFreeNodeIntoLayoutContainer(finished.ids[0], stagePoint(e));
+      }
+      void saveScene();
+    } else if (finished.toggleOnClick) select(finished.toggleOnClick, true);
     return;
   }
   if (
@@ -2255,8 +2286,22 @@ function idBaseOf(id: string): string {
 /** 放一个新节点进画布。rect 是设计窗口里的绝对坐标。 */
 async function createNode(type: string, parentId: string, rect: Rect, props?: Record<string, Value>, idBase?: string): Promise<string> {
   const decl = declFor(project, type) ?? CONTAINER_DECL;
-  const parentRect = absRect(parentId);
   const id = newId(type, idBase);
+  if (type === "Dock") {
+    placeNewNodeInScene(
+      project.scene,
+      type,
+      id,
+      rect.x + rect.width / 2,
+      rect.y + rect.height / 2,
+      { width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) },
+      { props, canHaveChildren: true, boxes: currentLayoutBoxes() },
+    );
+    selectedId = id;
+    await saveScene();
+    return id;
+  }
+  const parentRect = absRect(parentId);
   const parentNode = node(parentId);
   const omitCoords =
     (parentNode ? layoutOf(parentNode) !== null : false) ||
@@ -2279,10 +2324,7 @@ async function createNode(type: string, parentId: string, rect: Rect, props?: Re
 }
 
 async function addNode(type: string, px: number, py: number): Promise<void> {
-  const decl = declFor(project, type) ?? CONTAINER_DECL;
-  const size = decl.defaultSize ?? CONTAINER_DECL.defaultSize!;
-  // 落点在能放子节点的控件里，就放进去；否则放在窗口里
-  await createNode(type, containerAt(px, py), { x: px - size.width / 2, y: py - size.height / 2, width: size.width, height: size.height });
+  await commitPaletteDropOnStage(type, px, py);
 }
 
 /** 预设的属性，加上上次用过的颜色和线型（工具自带的预设才沿用；文字和用户存的预设保持原样）。 */
@@ -3599,6 +3641,12 @@ function startPaletteDrag(down: PointerEvent, type: string): void {
   const place = (e: PointerEvent) => {
     ghost.style.left = `${e.clientX - size.width / 2}px`;
     ghost.style.top = `${e.clientY - size.height / 2}px`;
+    if (Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) > 4) {
+      const rect = $("stage").getBoundingClientRect();
+      const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+      if (inside) previewPaletteDropOnStage(type, (e.clientX - rect.left) / viewZoom(), (e.clientY - rect.top) / viewZoom());
+      else hideLayoutDropIndicator();
+    }
   };
   place(down);
   document.body.append(ghost);
@@ -3606,6 +3654,7 @@ function startPaletteDrag(down: PointerEvent, type: string): void {
     document.removeEventListener("pointermove", place);
     document.removeEventListener("pointerup", up);
     ghost.remove();
+    hideLayoutDropIndicator();
     // 只点了一下没有拖：把它选为工具，再在设计窗口里拖出大小
     if (Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) <= 4) {
       setTool(tool.kind === "node" && tool.type === type ? { kind: "select" } : { kind: "node", type });
@@ -3734,11 +3783,13 @@ let docTarget: { path: string; section: string | null } | null = null;
 let docTimer: number | undefined;
 let yamlTimer: number | undefined;
 
-function showRightTab(tab: "doc" | "yaml"): void {
-  $("tab-doc").setAttribute("aria-selected", String(tab === "doc"));
-  $("tab-yaml").setAttribute("aria-selected", String(tab === "yaml"));
-  $("pane-doc").hidden = tab !== "doc";
-  $("pane-yaml").hidden = tab !== "yaml";
+function showRightTab(tab: string): void {
+  for (const id of ["doc", "yaml", "layout", "menu", "state"]) {
+    const t = document.getElementById(`tab-${id}`);
+    const p = document.getElementById(`pane-${id}`);
+    if (t) t.setAttribute("aria-selected", String(tab === id));
+    if (p) p.hidden = tab !== id;
+  }
   if (tab === "yaml" && selectedId) scrollYamlTo(`  ${selectedId}:`);
 }
 
@@ -3806,6 +3857,9 @@ function renderRight(): void {
     }
   }
   syncDocView();
+  renderLayoutEditPane();
+  renderMenuEditPane();
+  renderStateEditPane();
 }
 
 /** 把 YAML 编辑器滚动到以 prefix 开头的那一行。 */
@@ -4155,6 +4209,34 @@ async function main(): Promise<void> {
     getSelectedId: () => selectedId,
     onViewFullDoc: () => select(null),
     onCommitDoc: () => void saveDoc(),
+  });
+  initLayoutEdit({
+    getProject: () => project,
+    getMode: () => mode,
+    getSelectedId: () => selectedId,
+    selectNode: (id) => select(id),
+    saveScene,
+    editLogic,
+    newNodeId: newId,
+    containerAtPoint: containerAt,
+    currentBoxes: currentLayoutBoxes,
+    stagePoint,
+    overlay,
+    toast,
+    activateRightTab: showRightTab,
+  });
+  initMenuEdit({
+    getProject: () => project,
+    getMode: () => mode,
+    saveScene,
+    toast,
+    activateRightTab: showRightTab,
+  });
+  initStateEdit({
+    getProject: () => project,
+    editLogic,
+    toast,
+    activateRightTab: showRightTab,
   });
   initPreviewLauncher(
     () => project,

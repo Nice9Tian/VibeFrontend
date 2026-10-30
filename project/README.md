@@ -827,3 +827,13 @@ actions:
   2. **模拟成功（`success`）**：不执行实现文件，把 `mockResult` 作为 `result` 执行 `onSuccess`。
   3. **模拟失败（`error`）**：不执行实现文件，把 `mockError` 作为 `error.message` 执行 `onError`。
 - 导出成 Qt 后，每个动作都会在 `vf::BusinessInterface` 上暴露信号 `action<Name>Requested(const QVariantMap &input)` 以及完成回调 `finish<Name>Success(const QVariant &result)` 和 `finish<Name>Error(const QString &message)`：业务连接该信号即可接管动作并在完成后回调成功或失败；若业务未连接该信号，则自动回退到内置的 `actions/<动作名>.js` 或模拟模式。
+
+### 11.9 编辑模式下的布局、停靠、菜单与状态归属操作
+
+以上所有布局、停靠、菜单和状态归属除了写入 `ui/scene.json` 和 `logic/app.logic.yaml` 外，都可以直接在工具界面里通过可视面板和画布拖拽完成：
+
+- **往布局容器里拖与重排**：从左侧素材栏把控件拖到 `VBox`、`HBox`、`Grid`、`Form`、`Stack` 或开启了 `layout` 的 `Container` / `Dock` / `Dialog` 上时，画布会高亮显示插入线或网格目标格，松开鼠标即按对应位置插入；在画布上拖动已排版的子控件可调整它在父容器里的顺序。
+- **右侧“布局”页签**：选中容器可切换排版方式（自由定位 / 竖排 / 横排 / 网格 / 表单 / 层叠）、调整内边距 `padding` 与间距 `gap`、重排子控件并修改每个子控件的主轴伸缩 `stretch`；选中任意子控件可设置尺寸规则 `SizePolicy`（`horizontal`、`vertical`、`stretch`、`preferredWidth/Height`、`minWidth/Height`、`maxWidth/Height`、`fixedWidth/Height`）与网格单元格（`row`、`column`、`rowSpan`、`columnSpan`）；选中 `Dock` 停靠面板可切换停靠方向（`dockArea`: `left` / `right` / `top` / `bottom`）并调整在 `window.docks` 中的顺序；选中 `Window` 可指定中央区 `central` 与状态栏 `statusBar`。
+- **右侧“菜单”页签**：可直接增删改排主窗口顶部菜单栏（`window.menuBar`）与各菜单项（设置 `id`、`text`、`shortcut`、`checkable`、`checked`、关联停靠面板 `dock` 或触发全局事件 `emit`），也可一键把窗口中的 `Dock` 绑定到“视图”菜单。
+- **右侧“状态”页签**：可新增或删除状态变量，一键把任一状态标注为“界面自管（`owner: ui`）”或“业务管（`owner: business`）”，并可添加业务事件与全局条件。
+- **锁定与撤销/重做**：被锁定的节点（含继承了锁定父容器的子节点）禁止一切布局、尺寸、停靠、属性或菜单修改；所有通过面板和画布拖拽执行的修改均自动记入撤销/重做历史（`Ctrl+Z` / `Ctrl+Y`）。

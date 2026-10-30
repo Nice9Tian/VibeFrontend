@@ -1242,6 +1242,244 @@ export function computeSceneLayout(
   return boxes;
 }
 
+export function isSceneNodeLocked(scene: Scene, id: string): boolean {
+  const visited = new Set<string>();
+  for (let cursor: string | null = id; cursor; cursor = parentOfNode(scene, cursor)) {
+    if (visited.has(cursor)) break;
+    visited.add(cursor);
+    if (scene.nodes[cursor]?.locked) return true;
+    if (cursor === scene.root) break;
+  }
+  return false;
+}
+
+export function canNodeHoldChildren(project: RuntimeProject | null, node: SceneNode | undefined): boolean {
+  if (!node) return false;
+  if (
+    node.type === "Window" ||
+    node.type === "Dialog" ||
+    node.type === "Container" ||
+    node.type === "Dock" ||
+    node.type in LAYOUT_TYPE_KINDS
+  ) {
+    return true;
+  }
+  return project ? declFor(project, node.type)?.children === true : false;
+}
+
+export interface LayoutDropTarget {
+  containerId: string;
+  kind: LayoutKind;
+  /** 插入到 container.children 的下标（0..children.length） */
+  insertIndex: number;
+  /** 网格布局（grid）下对应的行与列（0-based） */
+  row?: number;
+  column?: number;
+  /** 相对于所属顶层窗口左上角的插入指示线或指示框 */
+  indicator: { x: number; y: number; width: number; height: number; isLine: boolean };
+}
+
+/**
+ * 计算在布局容器 containerId 内落点 pt（相对于顶层窗口左上角）应插入的子节点下标与指示线位置。
+ */
+export function computeLayoutDropTarget(
+  scene: Scene,
+  containerId: string,
+  pt: { x: number; y: number },
+  boxes?: Map<string, ComputedBox>,
+  excludeId?: string,
+): LayoutDropTarget | null {
+  const container = scene.nodes[containerId];
+  const layout = layoutOf(container);
+  if (!container || !layout) return null;
+  const layoutBoxes = boxes ?? computeSceneLayout(scene);
+  const cBox = layoutBoxes.get(containerId);
+  if (!cBox) return null;
+
+  const [padTop, padRight, padBottom, padLeft] = paddingOf(layout);
+  const headerOffset = container.type === "Dock" ? (container.headerHeight ?? 26) : 0;
+  const innerX = cBox.absX + padLeft;
+  const innerY = cBox.absY + headerOffset + padTop;
+  const innerW = Math.max(8, cBox.width - padLeft - padRight);
+  const innerH = Math.max(8, cBox.height - headerOffset - padTop - padBottom);
+  const children = (container.children ?? []).filter((cid) => cid !== excludeId && Boolean(scene.nodes[cid]));
+
+  if (layout.kind === "vbox" || layout.kind === "form") {
+    let insertIndex = children.length;
+    for (let i = 0; i < children.length; i++) {
+      const b = layoutBoxes.get(children[i]);
+      const midY = b ? b.absY + b.height / 2 : innerY;
+      if (pt.y < midY) {
+        insertIndex = i;
+        break;
+      }
+    }
+    let lineY = innerY + 2;
+    if (children.length === 0) {
+      lineY = innerY + 2;
+    } else if (insertIndex === 0) {
+      const firstBox = layoutBoxes.get(children[0]);
+      lineY = Math.max(cBox.absY + headerOffset + 1, (firstBox?.absY ?? innerY) - 2);
+    } else if (insertIndex >= children.length) {
+      const lastBox = layoutBoxes.get(children[children.length - 1]);
+      lineY = lastBox ? lastBox.absY + lastBox.height + 2 : innerY + innerH - 2;
+    } else {
+      const prevBox = layoutBoxes.get(children[insertIndex - 1]);
+      const nextBox = layoutBoxes.get(children[insertIndex]);
+      lineY = prevBox && nextBox ? Math.round((prevBox.absY + prevBox.height + nextBox.absY) / 2) : innerY;
+    }
+    return {
+      containerId,
+      kind: layout.kind,
+      insertIndex,
+      indicator: { x: innerX, y: Math.round(lineY) - 1, width: innerW, height: 3, isLine: true },
+    };
+  }
+
+  if (layout.kind === "hbox") {
+    let insertIndex = children.length;
+    for (let i = 0; i < children.length; i++) {
+      const b = layoutBoxes.get(children[i]);
+      const midX = b ? b.absX + b.width / 2 : innerX;
+      if (pt.x < midX) {
+        insertIndex = i;
+        break;
+      }
+    }
+    let lineX = innerX + 2;
+    if (children.length === 0) {
+      lineX = innerX + 2;
+    } else if (insertIndex === 0) {
+      const firstBox = layoutBoxes.get(children[0]);
+      lineX = Math.max(cBox.absX + 1, (firstBox?.absX ?? innerX) - 2);
+    } else if (insertIndex >= children.length) {
+      const lastBox = layoutBoxes.get(children[children.length - 1]);
+      lineX = lastBox ? lastBox.absX + lastBox.width + 2 : innerX + innerW - 2;
+    } else {
+      const prevBox = layoutBoxes.get(children[insertIndex - 1]);
+      const nextBox = layoutBoxes.get(children[insertIndex]);
+      lineX = prevBox && nextBox ? Math.round((prevBox.absX + prevBox.width + nextBox.absX) / 2) : innerX;
+    }
+    return {
+      containerId,
+      kind: "hbox",
+      insertIndex,
+      indicator: { x: Math.round(lineX) - 1, y: innerY, width: 3, height: innerH, isLine: true },
+    };
+  }
+
+  if (layout.kind === "grid") {
+    const cols = Math.max(1, layout.columns ?? 2);
+    const numRows = Math.max(1, Math.ceil((children.length + 1) / cols));
+    const cellW = innerW / cols;
+    const cellH = innerH / numRows;
+    const col = Math.max(0, Math.min(cols - 1, Math.floor((pt.x - innerX) / Math.max(1, cellW))));
+    const row = Math.max(0, Math.min(numRows - 1, Math.floor((pt.y - innerY) / Math.max(1, cellH))));
+    const insertIndex = Math.min(children.length, row * cols + col);
+    return {
+      containerId,
+      kind: "grid",
+      insertIndex,
+      row,
+      column: col,
+      indicator: {
+        x: Math.round(innerX + col * cellW),
+        y: Math.round(innerY + row * cellH),
+        width: Math.max(8, Math.round(cellW)),
+        height: Math.max(8, Math.round(cellH)),
+        isLine: false,
+      },
+    };
+  }
+
+  return {
+    containerId,
+    kind: "stack",
+    insertIndex: children.length,
+    indicator: { x: innerX, y: innerY, width: innerW, height: innerH, isLine: false },
+  };
+}
+
+export interface DockDropTarget {
+  windowId: string;
+  dockArea: DockArea;
+  /** 在目标停靠区内的插入位置（0..areaDocks.length） */
+  insertIndex: number;
+  /** 相对于窗口左上角的预览区域框 */
+  indicator: { x: number; y: number; width: number; height: number };
+}
+
+/**
+ * 计算在主窗口内拖动或放置停靠面板（Dock）时对应的四侧停靠区（left / right / top / bottom）与顺序。
+ */
+export function computeDockDropTarget(
+  scene: Scene,
+  pt: { x: number; y: number },
+  boxes?: Map<string, ComputedBox>,
+  excludeDockId?: string,
+): DockDropTarget | null {
+  const winId = scene.root;
+  const winNode = scene.nodes[winId];
+  if (!winNode) return null;
+  const W = Math.max(100, winNode.width);
+  const H = Math.max(100, winNode.height);
+  const menuH = winNode.menuBar ? (winNode.menuBar.height ?? 28) : 0;
+  const statusNode = winNode.statusBar ? scene.nodes[winNode.statusBar] : undefined;
+  const statusH = statusNode ? prefHeight(statusNode) : 0;
+  const midY = menuH;
+  const midH = Math.max(40, H - menuH - statusH);
+
+  const relX = Math.max(0, Math.min(1, pt.x / W));
+  const relY = Math.max(0, Math.min(1, (pt.y - midY) / midH));
+  let dockArea: DockArea = "left";
+  if (relX <= 0.28) dockArea = "left";
+  else if (relX >= 0.72) dockArea = "right";
+  else if (relY <= 0.25) dockArea = "top";
+  else if (relY >= 0.75) dockArea = "bottom";
+  else {
+    const dLeft = relX;
+    const dRight = 1 - relX;
+    const dTop = relY;
+    const dBottom = 1 - relY;
+    const minD = Math.min(dLeft, dRight, dTop, dBottom);
+    if (minD === dLeft) dockArea = "left";
+    else if (minD === dRight) dockArea = "right";
+    else if (minD === dTop) dockArea = "top";
+    else dockArea = "bottom";
+  }
+
+  const layoutBoxes = boxes ?? computeSceneLayout(scene);
+  const allDocks = (winNode.docks ?? []).filter((did) => did !== excludeDockId && Boolean(scene.nodes[did]));
+  const areaDocks = allDocks.filter((did) => (scene.nodes[did]?.dockArea ?? "left") === dockArea);
+  let insertIndex = areaDocks.length;
+  for (let i = 0; i < areaDocks.length; i++) {
+    const b = layoutBoxes.get(areaDocks[i]);
+    if (!b) continue;
+    if (dockArea === "left" || dockArea === "right") {
+      if (pt.x < b.absX + b.width / 2) {
+        insertIndex = i;
+        break;
+      }
+    } else if (pt.y < b.absY + b.height / 2) {
+      insertIndex = i;
+      break;
+    }
+  }
+
+  const sideW = Math.min(240, Math.max(80, Math.round(W * 0.25)));
+  const sideH = Math.min(140, Math.max(60, Math.round(midH * 0.25)));
+  const indicator =
+    dockArea === "left"
+      ? { x: 0, y: midY, width: sideW, height: midH }
+      : dockArea === "right"
+        ? { x: W - sideW, y: midY, width: sideW, height: midH }
+        : dockArea === "top"
+          ? { x: 0, y: midY, width: W, height: sideH }
+          : { x: 0, y: midY + midH - sideH, width: W, height: sideH };
+
+  return { windowId: winId, dockArea, insertIndex, indicator };
+}
+
 // ---------- 说明文档的小节 ----------
 
 export function parseDocRef(ref: string): { path: string; section: string | null } {
