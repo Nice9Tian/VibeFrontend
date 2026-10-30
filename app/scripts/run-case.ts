@@ -14,7 +14,7 @@ import { findMenuItem, type Project } from "../src/model.ts";
 import { Runtime, type ActionSimMode } from "../src/runtime.ts";
 import { nodeIO } from "./node-io.ts";
 
-export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string }> = [
+export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string; noEffects?: boolean }> = [
   {
     name: "1. 初始状态与工具栏切换",
     steps: "state;click:toolEraserBtn;check;state;click:toolFillBtn;check;state;click:toolBrushBtn;check;state",
@@ -90,12 +90,23 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string }> = [
       "click:newProjectBtn;check;state;click:cancelNewProjectBtn;check;state;click:newProjectBtn;close:newProjectDialog;check;state;click:menuToggleTimeline;check;state;click:menuToggleTimeline;check;state",
   },
   {
-    name: "17. 停靠面板连续编排（叠页签 → 切页签 → 浮出 → 恢复 → 改大小 → 分栏并排 → 改分栏大小 → 关闭与菜单重开）",
+    name: "17. [Step 6] 状态图片按钮 StateButton 五种状态切换（selected/normal/hover/pressed/disabled）与调色盘过渡效果",
+    steps:
+      "state;click:colorPanelToggleBtn;wait:220;check;state;enter:colorPanelToggleBtn;check;state;input:colorPanelToggleBtn:pressed;check;state;input:colorPanelToggleBtn:released;leave:colorPanelToggleBtn;check;state;click:lockLayerCheck;check;state;click:lockLayerCheck;click:colorPanelToggleBtn;wait:220;check;state",
+  },
+  {
+    name: "18. [Step 6] --no-effects 降级模式下调色盘显隐与状态图片按钮逐字一致",
+    steps:
+      "state;click:colorPanelToggleBtn;check;state;enter:colorPanelToggleBtn;state;leave:colorPanelToggleBtn;click:colorPanelToggleBtn;check;state",
+    noEffects: true,
+  },
+  {
+    name: "19. 停靠面板连续编排（叠页签 → 切页签 → 浮出 → 恢复 → 改大小 → 分栏并排 → 改分栏大小 → 关闭与菜单重开）",
     steps:
       "dock:tabify:layersDock:inspectorDock;check;state;dock:tab:layersDock;check;state;dock:float:inspectorDock:320,140,280,460;check;state;dock:restore:inspectorDock;check;state;dock:resize:left:260;check;state;dock:split:layersDock:inspectorDock:after;check;state;dock:resizeSplit:left:0:240;check;state;dock:close:timelineDock;check;state;click:menuToggleTimeline;check;state;dock:move:inspectorDock:right;dock:resize:left:240;check;state",
   },
   {
-    name: "18. 浮动嵌入框（FloatBox）嵌入与窗口内浮出切换及拖拽移位",
+    name: "20. 浮动嵌入框（FloatBox）嵌入与窗口内浮出切换及拖拽移位",
     steps:
       "toggle:onionSkinBox;check;state;floatbox:move:onionSkinBox:420,180;check;state;toggle:onionSkinBox;check;state",
   },
@@ -219,6 +230,10 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
       runtime.dispatch(id, "mouseenter");
     } else if (verb === "leave") {
       runtime.dispatch(id, "mouseleave");
+    } else if (verb === "press") {
+      runtime.dispatch(id, "mousedown");
+    } else if (verb === "release") {
+      runtime.dispatch(id, "mouseup");
     } else if (verb === "type") {
       const obj = project.logic.objects?.[id];
       let cur =
@@ -243,6 +258,10 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
             runtime.dispatch(id, "change", clamped);
           }
         }
+      } else if (node?.type !== "TextInput" && rest === "pressed") {
+        runtime.dispatch(id, "mousedown");
+      } else if (node?.type !== "TextInput" && rest === "released") {
+        runtime.dispatch(id, "mouseup");
       } else {
         typed.set(id, rest);
         runtime.dispatch(id, "change", rest);
@@ -316,7 +335,8 @@ async function main(): Promise<number> {
     for (const c of ANIMEAN_SUITE_CASES) {
       const webLines = await runStepsOnWeb(project, c.steps);
       const webStates = webLines.filter((l) => l.startsWith("state "));
-      const qtOut = execFileSync(qtExe, ["--steps", c.steps], { encoding: "utf8" });
+      const qtArgs = c.noEffects ? ["--no-effects", "--steps", c.steps] : ["--steps", c.steps];
+      const qtOut = execFileSync(qtExe, qtArgs, { encoding: "utf8" });
       const qtLines = qtOut.split(/\r?\n/).filter(Boolean);
       const qtStates = qtLines.filter((l) => l.startsWith("state "));
       const qtChecks = qtLines.filter((l) => l.startsWith("check "));

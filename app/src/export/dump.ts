@@ -23,7 +23,14 @@ export function dumpRuntime(runtime: Runtime, scene: Scene): string {
     if (id === scene.root) continue;
     const view = runtime.view(id);
     const props: Array<[string, Value]> = Object.keys(view.props).map((key) => [key, canonicalValue(view.props[key])]);
-    views.push([id, { enabled: view.enabled, props: sorted(props), visible: view.visible }]);
+    const entry: Record<string, unknown> = {
+      enabled: view.enabled,
+      props: sorted(props),
+      ...(view.stateImage ? { stateImage: view.stateImage } : {}),
+      ...(view.visualState ? { visualState: view.visualState } : {}),
+      visible: view.visible,
+    };
+    views.push([id, entry]);
   }
   const stateEntries: Array<[string, Value]> = runtime.stateSnapshot().map(([k, v]) => [k, canonicalValue(v)]);
   const rootNode = scene.nodes[scene.root];

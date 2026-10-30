@@ -3,6 +3,11 @@
 import { isMap, parseDocument } from "yaml";
 import type { Value } from "./expr.ts";
 import {
+  isDockArea,
+  syncSceneNodesFromDockLayout,
+  type DockArea,
+} from "./dock.ts";
+import {
   childrenOfNode,
   isLayoutPositionedNode,
   isPartitionedWindow,
@@ -587,6 +592,12 @@ export function applyAddNodeToScene(
   if (created.type === "Dock" && targetParentId === next.root && isPartitionedWindow(parent)) {
     parent.docks ??= [];
     if (!parent.docks.includes(id)) parent.docks.push(id);
+    if (parent.dockLayout) {
+      const area: DockArea = isDockArea(created.dockArea) ? created.dockArea : "left";
+      parent.dockLayout.areas[area] ??= { groups: [] };
+      parent.dockLayout.areas[area].groups.push({ tabs: [id], active: id });
+    }
+    return next;
   }
   parent.children ??= [];
   if (!parent.children.includes(id)) parent.children.push(id);
@@ -634,6 +645,6 @@ export function applyDockLayoutToScene(scene: Scene, dockLayout: DockLayoutSpec,
   const next = cloneScene(scene);
   const winNode = next.nodes[winId];
   if (!winNode) return next;
-  winNode.dockLayout = JSON.parse(JSON.stringify(dockLayout)) as DockLayoutSpec;
+  syncSceneNodesFromDockLayout(next, winNode, dockLayout);
   return next;
 }

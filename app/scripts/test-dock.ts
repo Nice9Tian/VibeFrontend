@@ -43,6 +43,14 @@ import {
   snapshotOf,
   undoHistory,
 } from "../src/history.ts";
+import {
+  insertOrMoveNodeInLayout,
+  placeNewNodeInScene,
+  reorderChildInLayout,
+  setDockPanelArea,
+  setWindowPartitionRole,
+  updateNodePropsAndMeta,
+} from "../src/layoutedit.ts";
 import { loadProjectFiles } from "../src/loader.ts";
 import {
   childrenOfNode,
@@ -272,7 +280,63 @@ async function testDockModelAndReferences(): Promise<void> {
     "新增的 Dock 应出现在主窗口 dockLayout 中",
   );
 
-  console.log("PASS 1. 停靠纯模型运算、3组分栏缩放、关闭激活页签自动切换、持久化撤销重做与 FloatBox 独立显隐检查");
+  // 13) 验证 layoutedit.ts 停靠摆放操作与 winNode.dockLayout 保持同一份描述同步
+  const sceneLe = structuredClone(project.scene);
+  const placed = placeNewNodeInScene(
+    sceneLe,
+    "Dock",
+    "extraBottomDock",
+    400,
+    750,
+    { width: 1280, height: 160 },
+    { dockArea: "bottom", insertIndex: 0, props: { title: "扩展底部" } },
+  );
+  assert.equal(placed, true);
+  const winLe = sceneLe.nodes[sceneLe.root];
+  assert.ok(winLe.dockLayout, "placeNewNodeInScene 后主窗口应维护 dockLayout");
+  assert.equal(
+    winLe.dockLayout!.areas.bottom.groups[0].tabs[0],
+    "extraBottomDock",
+    "placeNewNodeInScene 按 insertIndex=0 插入底部停靠面板应同步到 dockLayout.areas.bottom.groups[0]",
+  );
+  assert.equal(setDockPanelArea(sceneLe, "extraBottomDock", "right"), true);
+  assert.ok(
+    sceneLe.nodes[sceneLe.root].dockLayout!.areas.right.groups.some((g) => g.tabs.includes("extraBottomDock")),
+    "setDockPanelArea 切换停靠侧后应同步更新 dockLayout.areas.right",
+  );
+  assert.ok(
+    !sceneLe.nodes[sceneLe.root].dockLayout!.areas.bottom.groups.some((g) => g.tabs.includes("extraBottomDock")),
+    "setDockPanelArea 切换停靠侧后原 bottom 停靠区不应残留该面板",
+  );
+  assert.equal(updateNodePropsAndMeta(sceneLe, "extraBottomDock", { width: 292 }), true);
+  assert.equal(
+    sceneLe.nodes[sceneLe.root].dockLayout!.areas.right.size,
+    292,
+    "updateNodePropsAndMeta 修改停靠面板宽度应同步更新 dockLayout.areas.right.size",
+  );
+  assert.equal(reorderChildInLayout(sceneLe, "extraBottomDock", -1, true), true);
+  assert.equal(
+    sceneLe.nodes[sceneLe.root].dockLayout!.areas.right.groups[0].tabs[0],
+    "extraBottomDock",
+    "reorderChildInLayout 调整停靠面板顺序应同步更新 dockLayout.areas.right.groups 顺序",
+  );
+  assert.equal(setWindowPartitionRole(sceneLe, "extraBottomDock", "none"), true);
+  assert.ok(
+    !dockIdsOfLayout(sceneLe.nodes[sceneLe.root].dockLayout!).includes("extraBottomDock"),
+    "setWindowPartitionRole 降级为普通容器后应从 dockLayout 移除",
+  );
+  assert.equal(setWindowPartitionRole(sceneLe, "extraBottomDock", "dock", "left"), true);
+  assert.ok(
+    sceneLe.nodes[sceneLe.root].dockLayout!.areas.left.groups.some((g) => g.tabs.includes("extraBottomDock")),
+    "setWindowPartitionRole 重新设回主窗口停靠区应同步更新 dockLayout",
+  );
+  assert.equal(insertOrMoveNodeInLayout(sceneLe, "extraBottomDock", "layersDock", 0), true);
+  assert.ok(
+    !dockIdsOfLayout(sceneLe.nodes[sceneLe.root].dockLayout!).includes("extraBottomDock"),
+    "insertOrMoveNodeInLayout 移入普通容器后应从主窗口 dockLayout 移除",
+  );
+
+  console.log("PASS 1. 停靠纯模型运算、layoutedit 同步、3组分栏缩放、关闭激活页签自动切换、持久化撤销重做与 FloatBox 独立显隐检查");
 }
 
 // ---------------------------------------------------------------------------
@@ -770,6 +834,84 @@ function buildInteractiveHtmlPage(): string {
       });
     }
 
+    // 步骤 9：验证同组多页签拖出分栏（Problem 2B DOM 侧）以及 iframe 缩放容器内的 DOM 拖拽坐标转换
+    {
+      // 此时 layersDock 与 inspectorDock 叠在同一页签组且激活 inspectorDock，按住 inspectorDock 标题栏拖向自身底部边缘拆分为上下两栏
+      const inspHdr = stage.querySelector('[data-vf-id="inspectorDock"] > .vf-dock-header');
+      const inspEl = stage.querySelector('[data-vf-id="inspectorDock"]');
+      const hRect = inspHdr.getBoundingClientRect();
+      const iRect = inspEl.getBoundingClientRect();
+      simulateDrag(
+        inspHdr,
+        hRect.left + 40,
+        hRect.top + 12,
+        iRect.left + iRect.width / 2,
+        iRect.bottom - 15,
+      );
+      await nextFrame();
+      const dlAfterUnTabSplit = runtime.getDockLayout();
+      const unTabSplitGroupCount = dlAfterUnTabSplit.areas.left.groups.length;
+
+      // 在带 CSS transform: scale(0.75) 与偏移 (40, 30) 的外层容器中挂载 iframe 画布，测试 iframe 内部与跨窗口指针拖拽坐标
+      const hostWrap = document.createElement("div");
+      hostWrap.style.cssText = "position:fixed;left:40px;top:30px;transform:scale(0.75);transform-origin:0 0;z-index:100;";
+      const iframe = document.createElement("iframe");
+      iframe.style.cssText = "width:1280px;height:800px;border:0;";
+      hostWrap.append(iframe);
+      document.body.append(hostWrap);
+      const idoc = iframe.contentDocument;
+      const iwin = iframe.contentWindow;
+      idoc.open();
+      idoc.write('<!doctype html><html><head><style>html,body{margin:0;padding:0;}#istage{position:relative;width:1280px;height:800px;}</style></head><body><div id="istage"></div></body></html>');
+      idoc.close();
+      const istage = idoc.getElementById("istage");
+      let iframeAreaSize = 240;
+      const iframeCb = {
+        ...{
+          getMode: () => "preview",
+          getScene: () => project.scene,
+          getWindowSize: () => rootSize,
+          getDockLayout: () => runtime.getDockLayout(project.scene.root),
+          getDockTitle: (did) => did,
+          onActivateTab: () => {},
+          onTabify: () => {},
+          onSplit: () => {},
+          onMoveToArea: () => {},
+          onFloat: () => {},
+          onRestore: () => {},
+          onClose: () => {},
+          onResizeArea: (_area, sz) => { iframeAreaSize = sz; },
+          onResizeSplit: () => {},
+        },
+      };
+      syncDockSplittersDom(
+        istage,
+        [{ kind: "area", area: "left", orientation: "vertical", x: 237, y: 28, width: 6, height: 580, currentSize: 240 }],
+        iframeCb,
+      );
+      const isplitter = istage.querySelector('.dock-splitter[data-splitter-kind="area"]');
+      // 1) iframe 内部坐标系（clientX=240 -> 290，应增加 50px 到 290）
+      isplitter.dispatchEvent(new iwin.PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 240, clientY: 100 }));
+      iwin.dispatchEvent(new iwin.PointerEvent("pointermove", { bubbles: true, button: 0, clientX: 290, clientY: 100 }));
+      iwin.dispatchEvent(new iwin.PointerEvent("pointerup", { bubbles: true, button: 0, clientX: 290, clientY: 100 }));
+      const sizeAfterLocalDrag = iframeAreaSize;
+
+      // 2) 外层窗口缩放坐标系（iframe left=40, scale=0.75：startX=240 -> outerClientX = 40 + 240*0.75 = 220，endX=300 -> outerClientX = 40 + 300*0.75 = 265）
+      iframeAreaSize = 240;
+      isplitter.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 240, clientY: 100 }));
+      window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, button: 0, clientX: 40 + 300 * 0.75, clientY: 30 + 100 * 0.75 }));
+      window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, clientX: 40 + 300 * 0.75, clientY: 30 + 100 * 0.75 }));
+      const sizeAfterOuterScaledDrag = iframeAreaSize;
+      hostWrap.remove();
+
+      log.push({
+        step: "untab-split-and-iframe-drag",
+        unTabSplitGroupCount,
+        sizeAfterLocalDrag,
+        sizeAfterOuterScaledDrag,
+      });
+    }
+
     await fetch("/report", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -981,7 +1123,16 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
   assert.equal(s8.onionVisibleWhenParentClosed, true, "原父 Dock 关闭后浮出的 FloatBox 在 DOM 中仍应可见");
   assert.equal(s8.activeSwitchedToLayers, true, "关闭激活页签后应自动切换到同组剩余可见页签 layersDock");
 
-  console.log("PASS 2. 无头 Chrome 真实 DOM 拖拽与点击交互（叠页签/切页签/浮出/缩放/恢复/分栏/分隔条/关闭重开/FloatBox 浮出拖拽与还原）");
+  const s9 = report.log[8] as {
+    unTabSplitGroupCount: number;
+    sizeAfterLocalDrag: number;
+    sizeAfterOuterScaledDrag: number;
+  };
+  assert.equal(s9.unTabSplitGroupCount, 2, "同组多页签拖向底边应拆出独立分栏组");
+  assert.equal(s9.sizeAfterLocalDrag, 290, "iframe 内部坐标拖拽分隔条应准确计算位移");
+  assert.equal(s9.sizeAfterOuterScaledDrag, 300, "iframe 外层缩放窗口坐标拖拽分隔条应按缩放比例换算");
+
+  console.log("PASS 2. 无头 Chrome 真实 DOM 拖拽与点击交互（叠页签/切页签/浮出/缩放/恢复/分栏/分隔条/关闭重开/FloatBox/iframe 坐标）");
 
   // 对照 Qt 可执行文件在相同停靠编排 + FloatBox 浮出移位后的 layoutDump
   if (fs.existsSync(ANIMEAN_QT_EXE)) {
@@ -1055,8 +1206,48 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     assert.equal(finalDocksJson.areas.left.groups.length, 2, "真实鼠标拖拽下沿分栏后 Qt 实测 dockDump 应有 2 个并排组");
     assert.equal(finalDocksJson.areas.left.size, 276, "真实鼠标拖拽分隔条后 Qt 实测左侧宽度应为 276px");
 
+    // [复审 Blocking 2 问题 A] 先分栏再向第一组叠页签：不应被后续 splitDockWidget 抹平 tabify
+    const qtSplitThenTabify = execFileSync(
+      ANIMEAN_QT_EXE,
+      ["--steps", "resize:1280x800;dock:split:layersDock:inspectorDock:after;dock:tabify:layersDock:timelineDock;check;docks"],
+      { encoding: "utf8" },
+    );
+    const qtStLines = qtSplitThenTabify.split(/\r?\n/).filter(Boolean);
+    assert.ok(qtStLines.includes("check ok"), `先 split 再 tabify 后 Qt check 应通过，实际：${qtSplitThenTabify}`);
+    const qtStDocks = JSON.parse(qtStLines.find((l) => l.startsWith("docks "))!.slice("docks ".length));
+    assert.equal(qtStDocks.areas.left.groups.length, 2, "先 split 再 tabify 后左侧应保持 2 个并排组");
+    assert.deepEqual(
+      qtStDocks.areas.left.groups[0].tabs,
+      ["layersDock", "timelineDock"],
+      "第 0 组应保留 layersDock 与 timelineDock 两个叠放页签",
+    );
+    assert.deepEqual(qtStDocks.areas.left.groups[1].tabs, ["inspectorDock"], "第 1 组应保留 inspectorDock");
+
+    // [复审 Blocking 2 问题 B] 先叠页签再从同一页签组拖出分栏：应能正确定位可见激活页签并拆分为两栏
+    const qtTabifyThenSplit = execFileSync(
+      ANIMEAN_QT_EXE,
+      ["--steps", "resize:1280x800;dock:tabify:layersDock:inspectorDock;dock:split:layersDock:inspectorDock:after;check;docks"],
+      { encoding: "utf8" },
+    );
+    const qtTsLines = qtTabifyThenSplit.split(/\r?\n/).filter(Boolean);
+    assert.ok(qtTsLines.includes("check ok"), `先 tabify 再同组拖出 split 后 Qt check 应通过，实际：${qtTabifyThenSplit}`);
+    const qtTsDocks = JSON.parse(qtTsLines.find((l) => l.startsWith("docks "))!.slice("docks ".length));
+    assert.equal(qtTsDocks.areas.left.groups.length, 2, "从同一叠页签组拖出分栏后左侧应拆成 2 个并排组");
+
+    // [复审 Should-Fix 3] 左侧停靠区按水平方向（厚度方向）分栏：areaRect 联合宽度应与总宽度一致
+    const qtHorizSplit = execFileSync(
+      ANIMEAN_QT_EXE,
+      ["--steps", "resize:1280x800;dock:split:layersDock:inspectorDock:after:horizontal;check;docks"],
+      { encoding: "utf8" },
+    );
+    const qtHsLines = qtHorizSplit.split(/\r?\n/).filter(Boolean);
+    assert.ok(qtHsLines.includes("check ok"), `左侧水平分栏后 Qt check 应通过，实际：${qtHorizSplit}`);
+    const qtHsDocks = JSON.parse(qtHsLines.find((l) => l.startsWith("docks "))!.slice("docks ".length));
+    assert.equal(qtHsDocks.areas.left.splitOrientation, "horizontal", "左侧停靠区应记录为 horizontal 分栏");
+    assert.equal(qtHsDocks.areas.left.size, 240, "左侧水平分栏联合总宽度应为 240px");
+
     console.log(
-      `PASS 3. 停靠编排 + FloatBox 浮出移位后无头 Chrome DOM 与 Qt 实测几何对比：共 ${count} 个可见控件，最大偏差 ${maxDiff}px（<= 3px），父 Dock 关闭后 FloatBox 独立显隐与真实 QTest 鼠标拖拽验证通过`,
+      `PASS 3. 停靠编排 + FloatBox 浮出移位后无头 Chrome DOM 与 Qt 实测几何对比：共 ${count} 个可见控件，最大偏差 ${maxDiff}px（<= 3px），父 Dock 关闭后 FloatBox 独立显隐、真实 QTest 鼠标拖拽及复审组合场景验证通过`,
     );
   }
 }

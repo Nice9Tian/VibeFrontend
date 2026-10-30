@@ -13,6 +13,7 @@
     "test:editor": "node scripts/test-editor.ts",
     "test:library": "node scripts/test-library.ts",
     "test:docview": "node scripts/test-docview.ts",
+    "test:layout-edit": "node scripts/test-layout-edit.ts",
     "test:dock": "node scripts/test-dock.ts"
   },
   "dependencies": {

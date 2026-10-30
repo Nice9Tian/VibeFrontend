@@ -161,8 +161,8 @@ QStringList compare(Ui &ui)
     for (auto it = widgets.begin(); it != widgets.end(); ++it) {
         const QJsonObject wanted = views.value(it.key()).toObject();
         const QJsonObject actual = it.value().toObject();
-        for (const QString &key : { QStringLiteral("visible"), QStringLiteral("enabled") }) {
-            if (wanted.value(key) != actual.value(key)) {
+        for (const QString &key : { QStringLiteral("visible"), QStringLiteral("enabled"), QStringLiteral("stateImage"), QStringLiteral("visualState") }) {
+            if ((wanted.contains(key) || actual.contains(key)) && wanted.value(key) != actual.value(key)) {
                 lines.append(QStringLiteral("check MISMATCH %1.%2 wanted=%3 actual=%4")
                                  .arg(it.key(), key, toText(wanted.value(key)), toText(actual.value(key))));
             }
@@ -273,7 +273,14 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                 }
                 auto *targetDock = ui.window()->findChild<QDockWidget *>(arg1);
                 if (hdr && targetDock && !targetDock->isHidden()) {
-                    const QPoint endGlobal = targetDock->mapToGlobal(QPoint(targetDock->width() / 2, 12));
+                    QDockWidget *visualTarget = targetDock;
+                    if (auto *mw = qobject_cast<QMainWindow *>(ui.window())) {
+                        for (QDockWidget *p : mw->tabifiedDockWidgets(targetDock)) {
+                            if (p && !p->isHidden() && p->height() > visualTarget->height())
+                                visualTarget = p;
+                        }
+                    }
+                    const QPoint endGlobal = visualTarget->mapToGlobal(QPoint(visualTarget->width() / 2, 12));
                     sendMouseDrag(hdr, hdr->rect().center(), endGlobal);
                     continue;
                 }
@@ -418,24 +425,31 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                 }
                 auto *targetDock = ui.window()->findChild<QDockWidget *>(arg1);
                 if (hdr && targetDock && !targetDock->isHidden()) {
+                    QDockWidget *visualTarget = targetDock;
+                    if (auto *mw = qobject_cast<QMainWindow *>(ui.window())) {
+                        for (QDockWidget *p : mw->tabifiedDockWidgets(targetDock)) {
+                            if (p && !p->isHidden() && p->height() > visualTarget->height())
+                                visualTarget = p;
+                        }
+                    }
                     const QString pos = arg3.isEmpty() ? QStringLiteral("after") : arg3;
                     QString orient = arg4;
                     if (orient.isEmpty()) {
                         auto *mw = qobject_cast<QMainWindow *>(ui.window());
-                        const Qt::DockWidgetArea a = mw ? mw->dockWidgetArea(targetDock) : Qt::LeftDockWidgetArea;
+                        const Qt::DockWidgetArea a = mw ? mw->dockWidgetArea(visualTarget) : Qt::LeftDockWidgetArea;
                         orient = (a == Qt::LeftDockWidgetArea || a == Qt::RightDockWidgetArea)
                             ? QStringLiteral("vertical")
                             : QStringLiteral("horizontal");
                     }
                     const int hdrH = 26;
-                    const int bodyH = qMax(20, targetDock->height() - hdrH);
-                    QPoint targetLocal(targetDock->width() / 2, hdrH + bodyH / 2);
+                    const int bodyH = qMax(20, visualTarget->height() - hdrH);
+                    QPoint targetLocal(visualTarget->width() / 2, hdrH + bodyH / 2);
                     if (orient == QLatin1String("vertical")) {
                         targetLocal.setY(hdrH + int(bodyH * (pos == QLatin1String("before") ? 0.12 : 0.88)));
                     } else {
-                        targetLocal.setX(int(targetDock->width() * (pos == QLatin1String("before") ? 0.10 : 0.90)));
+                        targetLocal.setX(int(visualTarget->width() * (pos == QLatin1String("before") ? 0.10 : 0.90)));
                     }
-                    sendMouseDrag(hdr, hdr->rect().center(), targetDock->mapToGlobal(targetLocal));
+                    sendMouseDrag(hdr, hdr->rect().center(), visualTarget->mapToGlobal(targetLocal));
                     continue;
                 }
                 args.insert(QStringLiteral("target"), arg1);
@@ -548,6 +562,10 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
         }
         if (verb == QLatin1String("click")) {
             click(widget);
+        } else if (verb == QLatin1String("press")) {
+            sendMouse(widget, QEvent::MouseButtonPress, Qt::LeftButton);
+        } else if (verb == QLatin1String("release")) {
+            sendMouse(widget, QEvent::MouseButtonRelease, Qt::NoButton);
         } else if (verb == QLatin1String("dblclick")) {
             click(widget);
             sendMouse(widget, QEvent::MouseButtonDblClick, Qt::LeftButton);
@@ -575,6 +593,12 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             } else if (auto *edit = qobject_cast<QLineEdit *>(widget)) {
                 edit->setText(rawVal);
                 emit edit->textEdited(rawVal);
+            } else if (rawVal == QLatin1String("pressed")) {
+                sendMouse(widget, QEvent::MouseButtonPress, Qt::LeftButton);
+            } else if (rawVal == QLatin1String("released")) {
+                const QPointF outside(-10.0, -10.0);
+                QMouseEvent event(QEvent::MouseButtonRelease, outside, widget->mapToGlobal(outside), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(widget, &event);
             }
         } else if (verb == QLatin1String("select")) {
             const QString rawVal = step.section(QLatin1Char(':'), 2);

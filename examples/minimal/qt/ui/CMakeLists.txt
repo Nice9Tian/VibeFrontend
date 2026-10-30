@@ -7,7 +7,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(VfUi LANGUAGES CXX)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Qml)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Qml Svg)
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/LayerRules.cmake")
 

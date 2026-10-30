@@ -1,0 +1,32 @@
+{
+  "generator": "VibeFrontend",
+  "formatVersion": 1,
+  "project": "图形与连线导出样板",
+  "generated": [
+    "AGENTS.md",
+    "CMakeLists.txt",
+    "INTERFACE.md",
+    "business_interface/BusinessInterface.h",
+    "business_interface/CMakeLists.txt",
+    "cmake/LayerRules.cmake",
+    "preview/CMakeLists.txt",
+    "preview/main.cpp",
+    "ui_binding/CMakeLists.txt",
+    "ui_binding/Ui.cpp",
+    "ui_binding/Ui.h",
+    "ui_binding/UiDriver.cpp",
+    "ui_binding/UiDriver.h",
+    "ui_binding/logic/project.json",
+    "ui_binding/logic/runtime.js",
+    "ui_interface/CMakeLists.txt",
+    "ui_interface/UiEffects.h",
+    "vf-export.json"
+  ],
+  "interface": {
+    "states": [],
+    "events": [],
+    "externals": [],
+    "effects": []
+  },
+  "lastChanges": []
+}

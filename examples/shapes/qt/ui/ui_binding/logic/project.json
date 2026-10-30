@@ -1,0 +1,434 @@
+{
+  "scene": {
+    "version": 1,
+    "root": "shapesWindow",
+    "nodes": {
+      "shapesWindow": {
+        "type": "Window",
+        "title": "图形与连线导出样板",
+        "width": 840,
+        "height": 520,
+        "children": [
+          "startBox",
+          "decisionDiamond",
+          "inputPara",
+          "dbCylinder",
+          "docReport",
+          "subProcess",
+          "starBadge",
+          "hexNode",
+          "cloudNote",
+          "rotatedRect",
+          "rotatedTri",
+          "lineStartToDecision",
+          "lineDecisionToInput",
+          "lineDecisionToDb",
+          "lineDbToDoc",
+          "lineDocToRotated",
+          "freeDecorLine"
+        ]
+      },
+      "startBox": {
+        "type": "Shape",
+        "x": 36,
+        "y": 48,
+        "width": 130,
+        "height": 64,
+        "props": {
+          "shape": "rectangle",
+          "radius": 14,
+          "fill": "#dbeafe",
+          "stroke": "#2563eb",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "text": "开始流程",
+          "textColor": "#1e3a8a",
+          "fontSize": 14,
+          "fontWeight": "bold",
+          "textAlign": "center"
+        }
+      },
+      "decisionDiamond": {
+        "type": "Shape",
+        "x": 250,
+        "y": 36,
+        "width": 140,
+        "height": 88,
+        "props": {
+          "shape": "diamond",
+          "fill": "#fef3c7",
+          "stroke": "#d97706",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "text": "条件分支",
+          "textColor": "#92400e",
+          "fontSize": 13,
+          "textAlign": "center"
+        }
+      },
+      "inputPara": {
+        "type": "Shape",
+        "x": 490,
+        "y": 48,
+        "width": 150,
+        "height": 64,
+        "props": {
+          "shape": "parallelogram",
+          "fill": "#dcfce7",
+          "stroke": "#16a34a",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "text": "数据输入",
+          "textColor": "#166534",
+          "fontSize": 13,
+          "textAlign": "center"
+        }
+      },
+      "dbCylinder": {
+        "type": "Shape",
+        "x": 260,
+        "y": 210,
+        "width": 120,
+        "height": 88,
+        "props": {
+          "shape": "cylinder",
+          "fill": "#f3e8ff",
+          "stroke": "#7c3aed",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "text": "核心库",
+          "textColor": "#5b21b6",
+          "fontSize": 13,
+          "textAlign": "center"
+        }
+      },
+      "docReport": {
+        "type": "Shape",
+        "x": 495,
+        "y": 214,
+        "width": 140,
+        "height": 80,
+        "props": {
+          "shape": "document",
+          "fill": "#ffe4e6",
+          "stroke": "#e11d48",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "text": "输出报表",
+          "textColor": "#9f1239",
+          "fontSize": 13,
+          "textAlign": "center"
+        }
+      },
+      "subProcess": {
+        "type": "Shape",
+        "x": 36,
+        "y": 214,
+        "width": 136,
+        "height": 80,
+        "props": {
+          "shape": "predefinedProcess",
+          "fill": "#e0f2fe",
+          "stroke": "#0284c7",
+          "strokeWidth": 2,
+          "strokeStyle": "dashed",
+          "text": "子过程",
+          "textColor": "#075985",
+          "fontSize": 13,
+          "textAlign": "center"
+        }
+      },
+      "starBadge": {
+        "type": "Shape",
+        "x": 44,
+        "y": 366,
+        "width": 110,
+        "height": 104,
+        "props": {
+          "shape": "star",
+          "points": 5,
+          "ratio": 0.45,
+          "fill": "#fef08a",
+          "stroke": "#ca8a04",
+          "strokeWidth": 2,
+          "strokeStyle": "solid"
+        }
+      },
+      "hexNode": {
+        "type": "Shape",
+        "x": 200,
+        "y": 376,
+        "width": 130,
+        "height": 84,
+        "props": {
+          "shape": "hexagon",
+          "fill": "#ccfbf1",
+          "stroke": "#0d9488",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "text": "准备模块",
+          "textColor": "#115e59",
+          "fontSize": 13
+        }
+      },
+      "cloudNote": {
+        "type": "Shape",
+        "x": 376,
+        "y": 368,
+        "width": 156,
+        "height": 96,
+        "props": {
+          "shape": "cloud",
+          "fill": "#f1f5f9",
+          "stroke": "#475569",
+          "strokeWidth": 2,
+          "strokeStyle": "dotted",
+          "text": "云端同步",
+          "textColor": "#334155",
+          "fontSize": 13
+        }
+      },
+      "rotatedRect": {
+        "type": "Shape",
+        "x": 686,
+        "y": 190,
+        "width": 116,
+        "height": 72,
+        "rotation": 24,
+        "props": {
+          "shape": "rectangle",
+          "radius": 10,
+          "fill": "#ffedd5",
+          "stroke": "#ea580c",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "text": "旋转 24°",
+          "textColor": "#9a3412",
+          "fontSize": 13
+        }
+      },
+      "rotatedTri": {
+        "type": "Shape",
+        "x": 692,
+        "y": 366,
+        "width": 104,
+        "height": 92,
+        "rotation": -28,
+        "props": {
+          "shape": "triangle",
+          "fill": "#fae8ff",
+          "stroke": "#c026d3",
+          "strokeWidth": 2,
+          "strokeStyle": "solid"
+        }
+      },
+      "lineStartToDecision": {
+        "type": "Line",
+        "x": 166,
+        "y": 66,
+        "width": 84,
+        "height": 28,
+        "props": {
+          "x1": 166,
+          "y1": 80,
+          "x2": 250,
+          "y2": 80,
+          "startNode": "startBox",
+          "startSide": "right",
+          "endNode": "decisionDiamond",
+          "endSide": "left",
+          "route": "straight",
+          "stroke": "#2563eb",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "startCap": "none",
+          "endCap": "arrow",
+          "label": "提交",
+          "textColor": "#1e3a8a",
+          "fontSize": 12
+        }
+      },
+      "lineDecisionToInput": {
+        "type": "Line",
+        "x": 390,
+        "y": 66,
+        "width": 115,
+        "height": 28,
+        "props": {
+          "x1": 390,
+          "y1": 80,
+          "x2": 505,
+          "y2": 80,
+          "startNode": "decisionDiamond",
+          "startSide": "right",
+          "endNode": "inputPara",
+          "endSide": "left",
+          "route": "elbow",
+          "stroke": "#16a34a",
+          "strokeWidth": 2,
+          "strokeStyle": "dashed",
+          "startCap": "circle",
+          "endCap": "triangle",
+          "label": "通过",
+          "textColor": "#166534",
+          "fontSize": 12
+        }
+      },
+      "lineDecisionToDb": {
+        "type": "Line",
+        "x": 306,
+        "y": 124,
+        "width": 28,
+        "height": 86,
+        "props": {
+          "x1": 320,
+          "y1": 124,
+          "x2": 320,
+          "y2": 210,
+          "startNode": "decisionDiamond",
+          "startSide": "bottom",
+          "endNode": "dbCylinder",
+          "endSide": "top",
+          "route": "curved",
+          "bends": "346,168",
+          "stroke": "#7c3aed",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "startCap": "diamond",
+          "endCap": "arrow"
+        }
+      },
+      "lineDbToDoc": {
+        "type": "Line",
+        "x": 380,
+        "y": 240,
+        "width": 115,
+        "height": 28,
+        "props": {
+          "x1": 380,
+          "y1": 254,
+          "x2": 495,
+          "y2": 254,
+          "startNode": "dbCylinder",
+          "startSide": "right",
+          "endNode": "docReport",
+          "endSide": "left",
+          "route": "straight",
+          "stroke": "#e11d48",
+          "strokeWidth": 2,
+          "strokeStyle": "dotted",
+          "startCap": "bar",
+          "endCap": "arrow",
+          "label": "生成",
+          "textColor": "#9f1239",
+          "fontSize": 12
+        }
+      },
+      "lineDocToRotated": {
+        "type": "Line",
+        "x": 635,
+        "y": 195,
+        "width": 65,
+        "height": 65,
+        "props": {
+          "x1": 635,
+          "y1": 254,
+          "x2": 691,
+          "y2": 203,
+          "startNode": "docReport",
+          "startSide": "right",
+          "endNode": "rotatedRect",
+          "endSide": "outline",
+          "endAt": "0.0,0.5",
+          "route": "elbow",
+          "stroke": "#ea580c",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "startCap": "none",
+          "endCap": "triangle"
+        }
+      },
+      "freeDecorLine": {
+        "type": "Line",
+        "x": 556,
+        "y": 402,
+        "width": 112,
+        "height": 28,
+        "props": {
+          "x1": 564,
+          "y1": 416,
+          "x2": 660,
+          "y2": 416,
+          "route": "straight",
+          "stroke": "#334155",
+          "strokeWidth": 2,
+          "strokeStyle": "solid",
+          "startCap": "arrow",
+          "endCap": "circle"
+        }
+      }
+    }
+  },
+  "logic": {
+    "version": 1,
+    "state": {
+      "flow": {
+        "highlighted": {
+          "type": "boolean",
+          "initial": false
+        },
+        "startFill": {
+          "type": "string",
+          "initial": "#dbeafe"
+        },
+        "lineStroke": {
+          "type": "string",
+          "initial": "#2563eb"
+        }
+      }
+    },
+    "objects": {
+      "startBox": {
+        "doc": "docs/window.md#start-box",
+        "props": {
+          "fill": "flow.startFill"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "flow.highlighted = not flow.highlighted"
+            },
+            {
+              "if": "flow.highlighted",
+              "then": [
+                {
+                  "set": "flow.startFill = '#fef08a'"
+                },
+                {
+                  "set": "flow.lineStroke = '#f59e0b'"
+                }
+              ],
+              "else": [
+                {
+                  "set": "flow.startFill = '#dbeafe'"
+                },
+                {
+                  "set": "flow.lineStroke = '#2563eb'"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "lineStartToDecision": {
+        "props": {
+          "stroke": "flow.lineStroke"
+        }
+      },
+      "decisionDiamond": {
+        "doc": "docs/window.md#decision-diamond"
+      }
+    }
+  },
+  "components": {}
+}

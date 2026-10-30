@@ -29,23 +29,63 @@ export default function create(el, { props, emit, mode }) {
     if (mode !== "preview" || current.enabled === false || !Boolean(current.floating)) return;
     if (e.button !== 0 || e.target === toggleBtn) return;
     e.stopPropagation();
-    const startX = e.clientX;
-    const startY = e.clientY;
+    const ownerDoc = root.ownerDocument || document;
+    const ownerWin = ownerDoc.defaultView || window;
+    const frameEl = ownerWin !== window ? ownerWin.frameElement : null;
+    const rect = root.getBoundingClientRect();
+    const innerScale = rect.width > 0 && root.offsetWidth > 0 ? rect.width / root.offsetWidth : 1;
+    const frameRect = frameEl ? frameEl.getBoundingClientRect() : null;
+    const outerScale =
+      frameEl && frameRect && frameEl.offsetWidth > 0 && frameRect.width > 0
+        ? frameRect.width / frameEl.offsetWidth
+        : 1;
+    const hdrRect = header.getBoundingClientRect();
+    const inInner =
+      e.clientX >= hdrRect.left - 4 &&
+      e.clientX <= hdrRect.right + 4 &&
+      e.clientY >= hdrRect.top - 4 &&
+      e.clientY <= hdrRect.bottom + 4;
+    const useOuter =
+      Boolean(frameEl && frameRect) &&
+      (e.view === window ||
+        (!inInner &&
+          (Math.abs(outerScale - 1) > 0.01 || Math.abs(frameRect.left) > 1 || Math.abs(frameRect.top) > 1)));
+    const toStageXY = (pe, fromOuter = false) => {
+      let cx = pe.clientX;
+      let cy = pe.clientY;
+      if (frameEl && (useOuter || fromOuter || pe.view === window)) {
+        const fr = frameEl.getBoundingClientRect();
+        const os = frameEl.offsetWidth > 0 && fr.width > 0 ? fr.width / frameEl.offsetWidth : 1;
+        cx = (cx - fr.left) / os;
+        cy = (cy - fr.top) / os;
+      }
+      return { x: cx / innerScale, y: cy / innerScale };
+    };
+    const startPt = toStageXY(e, false);
     const baseX = Number(current.floatX ?? 60);
     const baseY = Number(current.floatY ?? 80);
-    const rect = root.getBoundingClientRect();
-    const zoom = rect.width > 0 && root.offsetWidth > 0 ? rect.width / root.offsetWidth : 1;
-    const onMove = (me) => {
-      const dx = Math.round((me.clientX - startX) / zoom);
-      const dy = Math.round((me.clientY - startY) / zoom);
+    const onMove = (me, fromOuter = false) => {
+      const pt = toStageXY(me, fromOuter);
+      const dx = Math.round(pt.x - startPt.x);
+      const dy = Math.round(pt.y - startPt.y);
       emit("move", { x: Math.max(0, baseX + dx), y: Math.max(0, baseY + dy) });
     };
+    const moveInner = (me) => onMove(me, false);
+    const moveOuter = (me) => onMove(me, true);
     const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      ownerWin.removeEventListener("pointermove", moveInner);
+      ownerWin.removeEventListener("pointerup", onUp);
+      if (ownerWin !== window) {
+        window.removeEventListener("pointermove", moveOuter);
+        window.removeEventListener("pointerup", onUp);
+      }
     };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    ownerWin.addEventListener("pointermove", moveInner);
+    ownerWin.addEventListener("pointerup", onUp);
+    if (ownerWin !== window) {
+      window.addEventListener("pointermove", moveOuter);
+      window.addEventListener("pointerup", onUp);
+    }
   });
 
   function update(next) {

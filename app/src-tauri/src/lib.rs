@@ -2,7 +2,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
 /// 设计项目所在的文件夹，按顺序查找：
@@ -282,6 +282,185 @@ fn library_remove_dir(window: tauri::WebviewWindow, path: String) -> Result<(), 
 }
 
 /// 监听项目文件夹，文件有变化就通知网页重新加载。
+#[derive(Deserialize)]
+struct ExportFileEntry {
+    path: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct WriteQtExportReport {
+    #[serde(rename = "outDir")]
+    out_dir: String,
+    #[serde(rename = "totalFiles")]
+    total_files: usize,
+    written: usize,
+    scaffolded: usize,
+    removed: usize,
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+fn resolve_export_dir(raw: &str) -> Result<PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("导出文件夹路径不能为空".to_string());
+    }
+    let input = Path::new(trimmed);
+    let base = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        let proj = project_dir();
+        let proj = proj.canonicalize().unwrap_or(proj);
+        proj.join(input)
+    };
+    let clean = normalize_path(&base);
+    Ok(clean)
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy().trim_start_matches(r"\\?\").to_string()
+}
+
+#[tauri::command]
+fn default_qt_export_dir(configured: Option<String>) -> Result<String, String> {
+    let rel = configured
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "../qt/ui".to_string());
+    let dir = resolve_export_dir(&rel)?;
+    Ok(display_path(&dir))
+}
+
+#[tauri::command]
+fn pick_export_dir(initial_dir: Option<String>) -> Result<Option<String>, String> {
+    let start = initial_dir
+        .and_then(|s| resolve_export_dir(&s).ok())
+        .map(|p| display_path(&p))
+        .unwrap_or_default();
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+$dlg.Description = '选择导出成 Qt 的目标文件夹'
+$dlg.ShowNewFolderButton = $true
+if ($env:VF_PICK_INIT -and (Test-Path -LiteralPath $env:VF_PICK_INIT)) {
+    $dlg.SelectedPath = $env:VF_PICK_INIT
+}
+if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    Write-Output $dlg.SelectedPath
+}
+"#;
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Sta", "-Command", script])
+            .env("VF_PICK_INIT", &start)
+            .output()
+            .map_err(|e| format!("打开文件夹选择框失败：{e}"))?;
+        let chosen = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if chosen.is_empty() {
+            return Ok(None);
+        }
+        return Ok(Some(chosen));
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = start;
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+fn read_qt_export_manifest(out_dir: String) -> Result<Option<String>, String> {
+    let dir = resolve_export_dir(&out_dir)?;
+    let manifest_path = dir.join("vf-export.json");
+    match std::fs::read_to_string(&manifest_path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("读取导出记录 {} 失败：{e}", display_path(&manifest_path))),
+    }
+}
+
+fn same_lf_text(file: &Path, content: &str) -> bool {
+    match std::fs::read_to_string(file) {
+        Ok(existing) => existing.replace("\r\n", "\n") == content.replace("\r\n", "\n"),
+        Err(_) => false,
+    }
+}
+
+#[tauri::command]
+fn write_qt_export(
+    window: tauri::WebviewWindow,
+    out_dir: String,
+    files: Vec<ExportFileEntry>,
+    scaffold_if_missing: Vec<ExportFileEntry>,
+    obsolete: Vec<String>,
+) -> Result<WriteQtExportReport, String> {
+    ensure_writable_window(&window)?;
+    let dir = resolve_export_dir(&out_dir)?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建导出目录 {} 失败：{e}", display_path(&dir)))?;
+
+    let mut written = 0usize;
+    for entry in &files {
+        ensure_non_empty_rel(&entry.path)?;
+        let full = resolve_in(dir.clone(), &entry.path)?;
+        if same_lf_text(&full, &entry.content) {
+            continue;
+        }
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+        }
+        std::fs::write(&full, &entry.content).map_err(|e| format!("写入 {} 失败：{e}", entry.path))?;
+        written += 1;
+    }
+
+    let mut scaffolded = 0usize;
+    for entry in &scaffold_if_missing {
+        ensure_non_empty_rel(&entry.path)?;
+        let full = resolve_in(dir.clone(), &entry.path)?;
+        if full.exists() {
+            continue;
+        }
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+        }
+        std::fs::write(&full, &entry.content).map_err(|e| format!("写入 {} 失败：{e}", entry.path))?;
+        scaffolded += 1;
+    }
+
+    let mut removed = 0usize;
+    for rel in &obsolete {
+        ensure_non_empty_rel(rel)?;
+        let full = resolve_in(dir.clone(), rel)?;
+        if full.is_file() {
+            std::fs::remove_file(&full).map_err(|e| format!("删除 {} 失败：{e}", rel))?;
+            removed += 1;
+        }
+    }
+
+    let final_dir = dir.canonicalize().unwrap_or(dir);
+    Ok(WriteQtExportReport {
+        out_dir: display_path(&final_dir),
+        total_files: files.len(),
+        written,
+        scaffolded,
+        removed,
+    })
+}
+
 fn start_watcher(app: &tauri::AppHandle) -> notify::Result<RecommendedWatcher> {
     let handle = app.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -322,6 +501,10 @@ pub fn run() {
             library_write_text,
             library_list_dir,
             library_remove_dir,
+            default_qt_export_dir,
+            pick_export_dir,
+            read_qt_export_manifest,
+            write_qt_export,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

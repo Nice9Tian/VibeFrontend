@@ -144,7 +144,8 @@ let userMoved = false;
 let pan: { x: number; y: number; left: number; top: number; pointerId: number } | null = null;
 
 function isTyping(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable);
+  const el = target as HTMLElement | null;
+  return Boolean(el && typeof el.matches === "function" && (el.matches("input, textarea, select") || el.isContentEditable));
 }
 
 function startPan(e: PointerEvent): void {
@@ -262,6 +263,92 @@ export function initViewport(): void {
     scroll.classList.remove("pan-ready");
   });
   // 切到别的窗口时，空格可能按下了没有松开的消息
+  const bindIframeDoc = () => {
+    const iframe = document.getElementById("stage-iframe") as HTMLIFrameElement | null;
+    const doc = iframe?.contentDocument;
+    if (!iframe || !doc || (doc as unknown as { __vfViewportBound?: boolean }).__vfViewportBound) return;
+    (doc as unknown as { __vfViewportBound?: boolean }).__vfViewportBound = true;
+    const toOuterXY = (clientX: number, clientY: number) => {
+      const rect = iframe.getBoundingClientRect();
+      return { x: rect.left + clientX * zoom, y: rect.top + clientY * zoom };
+    };
+    doc.addEventListener(
+      "wheel",
+      (e) => {
+        userMoved = true;
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          const pt = toOuterXY(e.clientX, e.clientY);
+          const factor = Math.exp(-e.deltaY * (Math.abs(e.deltaY) < 40 ? 0.01 : 0.0015));
+          setZoom(zoom * factor, pt.x, pt.y);
+        } else {
+          scroll.scrollLeft += e.shiftKey ? e.deltaY : e.deltaX;
+          scroll.scrollTop += e.shiftKey ? 0 : e.deltaY;
+        }
+      },
+      { passive: false },
+    );
+    doc.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (e.button === 1 || (e.button === 0 && spaceHeld)) {
+          e.preventDefault();
+          e.stopPropagation();
+          const pt = toOuterXY(e.clientX, e.clientY);
+          userMoved = true;
+          pan = { x: pt.x, y: pt.y, left: scroll.scrollLeft, top: scroll.scrollTop, pointerId: e.pointerId };
+          scroll.classList.add("panning");
+        }
+      },
+      true,
+    );
+    doc.addEventListener(
+      "pointermove",
+      (e) => {
+        if (!pan) return;
+        e.stopPropagation();
+        const pt = toOuterXY(e.clientX, e.clientY);
+        scroll.scrollLeft = pan.left - (pt.x - pan.x);
+        scroll.scrollTop = pan.top - (pt.y - pan.y);
+      },
+      true,
+    );
+    doc.addEventListener("pointerup", finish, true);
+    doc.addEventListener("pointercancel", finish, true);
+    doc.addEventListener("keydown", (e) => {
+      if (isTyping(e.target)) return;
+      if (e.code === "Space") {
+        if (!spaceHeld) {
+          spaceHeld = true;
+          scroll.classList.add("pan-ready");
+        }
+        e.preventDefault();
+        return;
+      }
+      const ctrl = e.ctrlKey || e.metaKey;
+      if (ctrl && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        stepZoom(1);
+      } else if (ctrl && e.key === "-") {
+        e.preventDefault();
+        stepZoom(-1);
+      } else if (ctrl && e.key === "0") {
+        e.preventDefault();
+        setZoom(1);
+      } else if (e.shiftKey && !ctrl && e.code === "Digit1") {
+        e.preventDefault();
+        zoomToFit();
+      }
+    });
+    doc.addEventListener("keyup", (e) => {
+      if (e.code !== "Space") return;
+      spaceHeld = false;
+      scroll.classList.remove("pan-ready");
+    });
+  };
+  bindIframeDoc();
+  document.getElementById("stage-iframe")?.addEventListener("load", bindIframeDoc);
+
   window.addEventListener("blur", () => {
     spaceHeld = false;
     scroll.classList.remove("pan-ready");

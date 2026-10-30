@@ -33,7 +33,9 @@ import {
   isPartitionedWindow,
   layoutOf,
   requestEvent,
+  resolveStateImage,
   type RuntimeProject,
+  type StateImageKey,
   type StateLeaf,
   type Step,
 } from "./model.ts";
@@ -47,6 +49,10 @@ export interface NodeView {
   visible: boolean;
   enabled: boolean;
   props: Record<string, Value>;
+  /** 状态图片控件当前所处的外观状态（normal / hover / pressed / selected / disabled） */
+  visualState?: StateImageKey;
+  /** 状态图片控件当前选中的 SVG 文件名 */
+  stateImage?: string;
 }
 
 export type ActionSimMode = "real" | "success" | "error";
@@ -209,6 +215,10 @@ export class Runtime {
   private actionSims = new Map<string, ActionSimConfig>();
   /** 正在进行中的异步动作集合 */
   private runningActions = new Set<string>();
+  /** 当前鼠标悬停中的控件 ID 集合（用于状态图片选图） */
+  private hoveredControls = new Set<string>();
+  /** 当前鼠标按下中的控件 ID 集合（用于状态图片选图） */
+  private pressedControls = new Set<string>();
   private activePromises = new Set<Promise<unknown>>();
   private exprCache = new Map<string, Expr>();
   private fnCache = new Map<string, (state: Record<string, unknown>, args: Record<string, Value>) => unknown>();
@@ -269,6 +279,8 @@ export class Runtime {
       }
     }
     this.runningActions.clear();
+    this.hoveredControls.clear();
+    this.pressedControls.clear();
   }
 
   /** 换成新加载的项目；状态结构没变的部分保留当前值。 */
@@ -753,7 +765,23 @@ export class Runtime {
         }
       }
     }
-    return { visible, enabled: props.enabled !== false, props };
+    const enabled = props.enabled !== false;
+    if (!enabled) {
+      this.pressedControls.delete(id);
+    }
+    const selected = Boolean(props.selected ?? props.checked ?? (props.variant === "primary"));
+    const resolvedState = resolveStateImage(decl, {
+      enabled,
+      pressed: this.pressedControls.has(id) || props.pressed === true,
+      hovered: this.hoveredControls.has(id) || props.hovered === true,
+      selected,
+    });
+    return {
+      visible,
+      enabled,
+      props,
+      ...(resolvedState ? { visualState: resolvedState.state, stateImage: resolvedState.file } : {}),
+    };
   }
 
   // ---------- 事件 ----------
@@ -831,6 +859,34 @@ export class Runtime {
             ...(nh !== undefined ? { floatHeight: nh } : {}),
           });
           this.hooks.onChange();
+        }
+      }
+    }
+    if (nodeId) {
+      if (event === "mouseleave") {
+        const changed = this.hoveredControls.delete(nodeId) || this.pressedControls.delete(nodeId);
+        if (changed) this.hooks.onChange();
+      } else if (event === "mouseup") {
+        if (this.pressedControls.delete(nodeId)) this.hooks.onChange();
+      } else if (event === "mouseenter" || event === "mousedown") {
+        const winId = this.windowOf(nodeId);
+        const winOpen = winId === scene.root || this.view(winId).visible;
+        const curView = this.view(nodeId);
+        if (winOpen && curView.visible && curView.enabled) {
+          if (event === "mouseenter") this.hoveredControls.add(nodeId);
+          else this.pressedControls.add(nodeId);
+          this.hooks.onChange();
+        }
+      } else if (event === "change" && (value === "pressed" || value === "released")) {
+        const decl = node ? declFor(this.project, node.type) : null;
+        if (decl?.stateImages) {
+          const curView = this.view(nodeId);
+          if (curView.visible && curView.enabled) {
+            if (value === "pressed") this.pressedControls.add(nodeId);
+            else this.pressedControls.delete(nodeId);
+            this.hooks.onChange();
+          }
+          if (!logic.objects?.[nodeId]?.bind && !logic.objects?.[nodeId]?.events?.change) return;
         }
       }
     }

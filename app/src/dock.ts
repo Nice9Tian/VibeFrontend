@@ -319,8 +319,10 @@ export function normalizeDockLayout(scene: Scene, winNode: SceneNode | undefined
     } else {
       const orient = areaSpec.splitOrientation ?? defaultSplitOrientation(area);
       areaSpec.splitOrientation = orient;
-      if (areaSpec.groups.some((g) => g.size === undefined)) {
-        const refSpan = computeReferenceAreaSplitSpan(out, scene, winNode, area);
+      const refSpan = computeReferenceAreaSplitSpan(out, scene, winNode, area);
+      const isPerpendicularSplit = orient === defaultSplitOrientation(area);
+      const curSum = areaSpec.groups.reduce((acc, g) => acc + (g.size ?? 0), 0);
+      if (areaSpec.groups.some((g) => g.size === undefined) || (isPerpendicularSplit && Math.abs(curSum - refSpan) > 1)) {
         const groupEntries = areaSpec.groups.map((group) => {
           const activeId = group.active && group.tabs.includes(group.active) ? group.active : group.tabs[0];
           const activeDock = (activeId ? scene.nodes[activeId] : undefined) ?? ({ type: "Dock", width: 240, height: 280 } as SceneNode);
@@ -330,6 +332,9 @@ export function normalizeDockLayout(scene: Scene, winNode: SceneNode | undefined
         for (let gi = 0; gi < areaSpec.groups.length; gi++) {
           areaSpec.groups[gi].size = distributed[gi];
         }
+      }
+      if (!isPerpendicularSplit) {
+        areaSpec.size = areaSpec.groups.reduce((acc, g) => acc + (g.size ?? 0), 0);
       }
     }
   }
@@ -359,6 +364,62 @@ export function dockFindLocation(layout: DockLayoutSpec, dockId: string): DockLo
     }
   }
   return null;
+}
+
+/**
+ * 将 DockLayoutSpec 写回窗口节点的 dockLayout，并同步更新 winNode.docks 顺序与各 Dock 节点的 dockArea / 尺寸，
+ * 确保 layoutedit 与 dock.ts 共用并维护同一份停靠描述。
+ */
+export function syncSceneNodesFromDockLayout(
+  scene: Scene,
+  winNode: SceneNode | undefined,
+  layout?: DockLayoutSpec,
+): DockLayoutSpec {
+  const normalized = normalizeDockLayout(
+    scene,
+    layout
+      ? {
+          ...winNode,
+          type: "Window",
+          width: winNode?.width ?? 1280,
+          height: winNode?.height ?? 800,
+          dockLayout: layout,
+        }
+      : winNode,
+  );
+  if (!winNode) return normalized;
+  winNode.dockLayout = cloneDockLayout(normalized);
+  for (const area of DOCK_AREAS) {
+    const areaSpec = normalized.areas[area];
+    const orient = areaSpec.splitOrientation ?? defaultSplitOrientation(area);
+    for (const g of areaSpec.groups) {
+      for (const tid of g.tabs) {
+        const d = scene.nodes[tid];
+        if (!d || d.type !== "Dock") continue;
+        d.dockArea = area;
+        if (area === "left" || area === "right") {
+          if (orient === "vertical" && areaSpec.size !== undefined) {
+            d.width = areaSpec.size;
+          } else if (orient === "horizontal" && g.size !== undefined) {
+            d.width = g.size;
+          }
+        } else {
+          if (orient === "horizontal" && areaSpec.size !== undefined) {
+            d.height = areaSpec.size;
+          } else if (orient === "vertical" && g.size !== undefined) {
+            d.height = g.size;
+          }
+        }
+      }
+    }
+  }
+  for (const f of normalized.floating ?? []) {
+    const d = scene.nodes[f.dockId];
+    if (!d || d.type !== "Dock") continue;
+    d.dockArea = f.lastArea;
+  }
+  winNode.docks = dockIdsOfLayout(normalized);
+  return winNode.dockLayout;
 }
 
 function detachDockFromLayout(layout: DockLayoutSpec, dockId: string): { lastArea?: DockArea } {
@@ -1164,27 +1225,25 @@ export function syncDockHeaderDom(
         if (callbacks.getMode() !== "preview" || e.button !== 0) return;
         e.stopPropagation();
         e.preventDefault();
-        const startX = e.clientX;
-        const startY = e.clientY;
+        const ctx = createFrameDragContext(windowFrameEl, e, resizer!);
+        const startPt = ctx.toStagePoint(e);
         const startW = dockEl.offsetWidth;
         const startH = dockEl.offsetHeight;
         const startLeft = parseFloat(dockEl.style.left) || 0;
         const startTop = parseFloat(dockEl.style.top) || 0;
-        const scale = getElementScale(windowFrameEl);
         let latestRect: Partial<DockFloatRect> | null = null;
-        const onMove = (me: PointerEvent) => {
-          const nw = Math.max(120, Math.round(startW + (me.clientX - startX) / scale));
-          const nh = Math.max(80, Math.round(startH + (me.clientY - startY) / scale));
+        const onMove = (me: PointerEvent, fromOuter = false) => {
+          const pt = ctx.toStagePoint(me, fromOuter);
+          const nw = Math.max(120, Math.round(startW + (pt.x - startPt.x)));
+          const nh = Math.max(80, Math.round(startH + (pt.y - startPt.y)));
           latestRect = { x: startLeft, y: startTop, width: nw, height: nh };
           callbacks.onFloat(dockId, latestRect, false);
         };
         const onUp = () => {
-          window.removeEventListener("pointermove", onMove);
-          window.removeEventListener("pointerup", onUp);
+          cleanup();
           if (latestRect) callbacks.onFloat(dockId, latestRect, true);
         };
-        window.addEventListener("pointermove", onMove);
-        window.addEventListener("pointerup", onUp);
+        const cleanup = ctx.bindDrag(onMove, onUp);
       });
       dockEl.append(resizer);
     }
@@ -1193,9 +1252,94 @@ export function syncDockHeaderDom(
   }
 }
 
-function getElementScale(el: HTMLElement): number {
-  const rect = el.getBoundingClientRect();
-  return el.offsetWidth > 0 && rect.width > 0 ? rect.width / el.offsetWidth : 1;
+/**
+ * 统一处理直接挂载在页面或隔离在 #stage-iframe 内的拖拽坐标换算与跨窗口指针监听：
+ * - 支持外层 #stage-frame CSS transform: scale(zoom) 与内层容器自身缩放；
+ * - 同时监听 iframe 内部 window 与外层 window 的 pointermove / pointerup；
+ * - 自动识别事件 clientX/clientY 是来自 iframe 内部视口坐标系还是外层主窗口坐标系。
+ */
+function createFrameDragContext(
+  windowFrameEl: HTMLElement,
+  downEvent: PointerEvent,
+  targetEl?: HTMLElement,
+) {
+  const ownerDoc = windowFrameEl.ownerDocument ?? document;
+  const ownerWin = ownerDoc.defaultView ?? window;
+  const frameEl = ownerWin !== window ? (ownerWin.frameElement as HTMLElement | null) : null;
+
+  const isOuterEvent = (pe: PointerEvent, checkTarget?: HTMLElement): boolean => {
+    if (!frameEl || ownerWin === window) return false;
+    if (pe.view === window) return true;
+    if (pe.view === ownerWin) return false;
+    const fr = frameEl.getBoundingClientRect();
+    const outerScale = frameEl.offsetWidth > 0 && fr.width > 0 ? fr.width / frameEl.offsetWidth : 1;
+    if (checkTarget && (Math.abs(outerScale - 1) > 0.01 || Math.abs(fr.left) > 1 || Math.abs(fr.top) > 1)) {
+      const tr = checkTarget.getBoundingClientRect();
+      const inInner =
+        pe.clientX >= tr.left - 4 &&
+        pe.clientX <= tr.right + 4 &&
+        pe.clientY >= tr.top - 4 &&
+        pe.clientY <= tr.bottom + 4;
+      const oLeft = fr.left + tr.left * outerScale;
+      const oRight = fr.left + tr.right * outerScale;
+      const oTop = fr.top + tr.top * outerScale;
+      const oBottom = fr.top + tr.bottom * outerScale;
+      const inOuter =
+        pe.clientX >= oLeft - 4 &&
+        pe.clientX <= oRight + 4 &&
+        pe.clientY >= oTop - 4 &&
+        pe.clientY <= oBottom + 4;
+      if (inOuter && !inInner) return true;
+      if (inInner && !inOuter) return false;
+    }
+    return false;
+  };
+
+  const downUsesOuter = isOuterEvent(downEvent, targetEl);
+
+  const toStagePoint = (pe: PointerEvent, fromOuter = false): { x: number; y: number } => {
+    const winRect = windowFrameEl.getBoundingClientRect();
+    const innerScale =
+      windowFrameEl.offsetWidth > 0 && winRect.width > 0 ? winRect.width / windowFrameEl.offsetWidth : 1;
+    let cx = pe.clientX;
+    let cy = pe.clientY;
+    if (frameEl && (downUsesOuter || fromOuter || pe.view === window)) {
+      const fr = frameEl.getBoundingClientRect();
+      const outerScale = frameEl.offsetWidth > 0 && fr.width > 0 ? fr.width / frameEl.offsetWidth : 1;
+      cx = (cx - fr.left) / outerScale;
+      cy = (cy - fr.top) / outerScale;
+    }
+    return {
+      x: (cx - winRect.left) / innerScale,
+      y: (cy - winRect.top) / innerScale,
+    };
+  };
+
+  const bindDrag = (
+    onMove: (e: PointerEvent, fromOuter: boolean) => void,
+    onUp: (e: PointerEvent, fromOuter: boolean) => void,
+  ) => {
+    const moveInner = (e: PointerEvent) => onMove(e, false);
+    const upInner = (e: PointerEvent) => onUp(e, false);
+    const moveOuter = (e: PointerEvent) => onMove(e, true);
+    const upOuter = (e: PointerEvent) => onUp(e, true);
+    ownerWin.addEventListener("pointermove", moveInner);
+    ownerWin.addEventListener("pointerup", upInner);
+    if (ownerWin !== window) {
+      window.addEventListener("pointermove", moveOuter);
+      window.addEventListener("pointerup", upOuter);
+    }
+    return () => {
+      ownerWin.removeEventListener("pointermove", moveInner);
+      ownerWin.removeEventListener("pointerup", upInner);
+      if (ownerWin !== window) {
+        window.removeEventListener("pointermove", moveOuter);
+        window.removeEventListener("pointerup", upOuter);
+      }
+    };
+  };
+
+  return { toStagePoint, bindDrag };
 }
 
 /**
@@ -1227,16 +1371,16 @@ export function syncDockSplittersDom(
       if (callbacks.getMode() !== "preview" || e.button !== 0) return;
       e.stopPropagation();
       e.preventDefault();
-      const startX = e.clientX;
-      const startY = e.clientY;
+      const ctx = createFrameDragContext(windowFrameEl, e, bar);
+      const startPt = ctx.toStagePoint(e, false);
       const startSize = sp.currentSize;
-      const scale = getElementScale(windowFrameEl);
       bar.classList.add("dragging");
       let latestSize: number | null = null;
 
-      const onMove = (me: PointerEvent) => {
-        const dx = Math.round((me.clientX - startX) / scale);
-        const dy = Math.round((me.clientY - startY) / scale);
+      const onMove = (me: PointerEvent, fromOuter = false) => {
+        const pt = ctx.toStagePoint(me, fromOuter);
+        const dx = Math.round(pt.x - startPt.x);
+        const dy = Math.round(pt.y - startPt.y);
         if (sp.kind === "area") {
           let nextSize = startSize;
           if (sp.area === "left") nextSize = startSize + dx;
@@ -1253,8 +1397,7 @@ export function syncDockSplittersDom(
       };
       const onUp = () => {
         bar.classList.remove("dragging");
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
+        cleanup();
         if (latestSize !== null) {
           if (sp.kind === "area") {
             callbacks.onResizeArea(sp.area, latestSize, true);
@@ -1263,8 +1406,7 @@ export function syncDockSplittersDom(
           }
         }
       };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
+      const cleanup = ctx.bindDrag(onMove, onUp);
     });
 
     windowFrameEl.append(bar);
@@ -1287,13 +1429,12 @@ function startDockDragSession(
   windowFrameEl: HTMLElement,
   callbacks: DockPreviewCallbacks,
 ): void {
-  const startClientX = downEvent.clientX;
-  const startClientY = downEvent.clientY;
-  const scale = getElementScale(windowFrameEl);
-  const winRect = windowFrameEl.getBoundingClientRect();
-  const dockRect = dockEl.getBoundingClientRect();
-  const offsetX = (startClientX - dockRect.left) / scale;
-  const offsetY = (startClientY - dockRect.top) / scale;
+  const ctx = createFrameDragContext(windowFrameEl, downEvent, dockEl);
+  const startPt = ctx.toStagePoint(downEvent);
+  const dockLeft = parseFloat(dockEl.style.left) || 0;
+  const dockTop = parseFloat(dockEl.style.top) || 0;
+  const offsetX = startPt.x - dockLeft;
+  const offsetY = startPt.y - dockTop;
   const isAlreadyFloating = dockEl.classList.contains("dock-floating");
   const floatW = isAlreadyFloating
     ? Math.max(80, Math.round(dockEl.offsetWidth || 240))
@@ -1307,9 +1448,7 @@ function startDockDragSession(
   let ghostEl: HTMLElement | null = null;
   let currentDrop: DropAction | null = null;
 
-  const computeDropAction = (clientX: number, clientY: number): DropAction => {
-    const relX = Math.round((clientX - winRect.left) / scale);
-    const relY = Math.round((clientY - winRect.top) / scale);
+  const computeDropAction = (relX: number, relY: number): DropAction => {
     const W = windowFrameEl.offsetWidth;
     const H = windowFrameEl.offsetHeight;
     const scene = callbacks.getScene();
@@ -1351,20 +1490,26 @@ function startDockDragSession(
       }
     }
 
-    // 2. 检查是否悬停在另一个可见已停靠面板上（中心叠页签，上下/左右边缘并排）
+    // 2. 检查是否悬停在可见已停靠面板上（中心叠页签，上下/左右边缘并排；含多页签组把当前激活页签拖到本组边缘拆出分栏）
     const otherDocks = Array.from(
       windowFrameEl.querySelectorAll<HTMLElement>('.node[data-type="Dock"], .vf-node[data-vf-type="Dock"]'),
     );
     for (const otherEl of otherDocks) {
       const otherId = otherEl.dataset.id ?? otherEl.dataset.vfId;
-      if (!otherId || otherId === dragDockId) continue;
+      if (!otherId) continue;
       if (otherEl.style.display === "none" || otherEl.classList.contains("dock-floating")) continue;
+      let effectiveTargetId = otherId;
+      if (otherId === dragDockId) {
+        const peerId = dragLoc?.kind === "area" ? dragLoc.group.tabs.find((tid) => tid !== dragDockId) : undefined;
+        if (!peerId) continue;
+        effectiveTargetId = peerId;
+      }
       const ox = parseFloat(otherEl.style.left) || 0;
       const oy = parseFloat(otherEl.style.top) || 0;
       const ow = otherEl.offsetWidth;
       const oh = otherEl.offsetHeight;
       if (relX >= ox && relX <= ox + ow && relY >= oy && relY <= oy + oh) {
-        const otherLoc = dockFindLocation(curLayout, otherId);
+        const otherLoc = dockFindLocation(curLayout, effectiveTargetId);
         const sameTabGroup =
           dragLoc?.kind === "area" &&
           otherLoc?.kind === "area" &&
@@ -1376,7 +1521,7 @@ function startDockDragSession(
         if (sameTabGroup && relY <= oy + hdrH + 8) {
           return {
             type: "tabify",
-            targetDockId: otherId,
+            targetDockId: effectiveTargetId,
             previewRect: { x: ox, y: oy, width: ow, height: oh },
           };
         }
@@ -1384,13 +1529,12 @@ function startDockDragSession(
         const localY = (relY - oy) / Math.max(1, oh);
         const area: DockArea =
           otherLoc?.kind === "area" ? otherLoc.area : isDockArea(dNode?.dockArea) ? dNode.dockArea : "left";
-        const splitOrient = curLayout.areas[area]?.splitOrientation ?? defaultSplitOrientation(area);
-        const isVertSplit = splitOrient === "vertical";
-        if (isVertSplit) {
+        const primaryVert = (curLayout.areas[area]?.splitOrientation ?? defaultSplitOrientation(area)) === "vertical";
+        if (primaryVert) {
           if (localY < 0.25) {
             return {
               type: "split",
-              targetDockId: otherId,
+              targetDockId: effectiveTargetId,
               splitPos: "before",
               splitOrient: "vertical",
               previewRect: { x: ox, y: oy, width: ow, height: Math.round(oh / 2) },
@@ -1399,17 +1543,35 @@ function startDockDragSession(
           if (localY > 0.75) {
             return {
               type: "split",
-              targetDockId: otherId,
+              targetDockId: effectiveTargetId,
               splitPos: "after",
               splitOrient: "vertical",
               previewRect: { x: ox, y: oy + Math.round(oh / 2), width: ow, height: Math.round(oh / 2) },
+            };
+          }
+          if (localX < 0.22) {
+            return {
+              type: "split",
+              targetDockId: effectiveTargetId,
+              splitPos: "before",
+              splitOrient: "horizontal",
+              previewRect: { x: ox, y: oy, width: Math.round(ow / 2), height: oh },
+            };
+          }
+          if (localX > 0.78) {
+            return {
+              type: "split",
+              targetDockId: effectiveTargetId,
+              splitPos: "after",
+              splitOrient: "horizontal",
+              previewRect: { x: ox + Math.round(ow / 2), y: oy, width: Math.round(ow / 2), height: oh },
             };
           }
         } else {
           if (localX < 0.25) {
             return {
               type: "split",
-              targetDockId: otherId,
+              targetDockId: effectiveTargetId,
               splitPos: "before",
               splitOrient: "horizontal",
               previewRect: { x: ox, y: oy, width: Math.round(ow / 2), height: oh },
@@ -1418,16 +1580,34 @@ function startDockDragSession(
           if (localX > 0.75) {
             return {
               type: "split",
-              targetDockId: otherId,
+              targetDockId: effectiveTargetId,
               splitPos: "after",
               splitOrient: "horizontal",
               previewRect: { x: ox + Math.round(ow / 2), y: oy, width: Math.round(ow / 2), height: oh },
             };
           }
+          if (localY < 0.22) {
+            return {
+              type: "split",
+              targetDockId: effectiveTargetId,
+              splitPos: "before",
+              splitOrient: "vertical",
+              previewRect: { x: ox, y: oy, width: ow, height: Math.round(oh / 2) },
+            };
+          }
+          if (localY > 0.78) {
+            return {
+              type: "split",
+              targetDockId: effectiveTargetId,
+              splitPos: "after",
+              splitOrient: "vertical",
+              previewRect: { x: ox, y: oy + Math.round(oh / 2), width: ow, height: Math.round(oh / 2) },
+            };
+          }
         }
         return {
           type: "tabify",
-          targetDockId: otherId,
+          targetDockId: effectiveTargetId,
           previewRect: { x: ox, y: oy, width: ow, height: oh },
         };
       }
@@ -1442,8 +1622,9 @@ function startDockDragSession(
     };
   };
 
-  const onMove = (me: PointerEvent) => {
-    const dist = Math.hypot(me.clientX - startClientX, me.clientY - startClientY);
+  const onMove = (me: PointerEvent, fromOuter = false) => {
+    const pt = ctx.toStagePoint(me, fromOuter);
+    const dist = Math.hypot(pt.x - startPt.x, pt.y - startPt.y);
     if (!dragging) {
       if (dist < 4) return;
       dragging = true;
@@ -1454,9 +1635,9 @@ function startDockDragSession(
       ghostEl.textContent = callbacks.getDockTitle(dragDockId);
       windowFrameEl.append(overlayEl, ghostEl);
     }
-    currentDrop = computeDropAction(me.clientX, me.clientY);
-    const relX = Math.round((me.clientX - winRect.left) / scale);
-    const relY = Math.round((me.clientY - winRect.top) / scale);
+    const relX = Math.round(pt.x);
+    const relY = Math.round(pt.y);
+    currentDrop = computeDropAction(relX, relY);
     if (overlayEl && currentDrop) {
       const r = currentDrop.previewRect;
       overlayEl.dataset.dropType = currentDrop.type;
@@ -1477,8 +1658,7 @@ function startDockDragSession(
   };
 
   const onUp = () => {
-    window.removeEventListener("pointermove", onMove);
-    window.removeEventListener("pointerup", onUp);
+    cleanup();
     overlayEl?.remove();
     ghostEl?.remove();
     if (!dragging || !currentDrop) return;
@@ -1493,6 +1673,5 @@ function startDockDragSession(
     }
   };
 
-  window.addEventListener("pointermove", onMove);
-  window.addEventListener("pointerup", onUp);
+  const cleanup = ctx.bindDrag(onMove, onUp);
 }

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "id": "9a7d2b40-6e81-4b5a-8c34-1f90e3a7d501",
+  "name": "图形与连线导出样板",
+  "windows": [
+    { "id": "shapesWindow", "doc": "docs/window.md" }
+  ],
+  "export": {
+    "qt": "../qt/ui"
+  }
+}
