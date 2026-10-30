@@ -3,8 +3,31 @@
 import type { Value } from "./expr.ts";
 import { LINE_DECL, SHAPE_DECL, type ShapePreset } from "./shapes.ts";
 import { STANDARD_COMPONENTS } from "../standard/index.ts";
+import {
+  computeDockWindowLayout,
+  dockIdsOfLayout,
+  remapDockLayoutReferences,
+  removeDockLayoutReferences,
+  renameDockLayoutReferences,
+  type DockArea,
+  type DockAreaSpec,
+  type DockFloatingSpec,
+  type DockFloatRect,
+  type DockGroupSpec,
+  type DockLayoutSpec,
+  type DockSplitOrientation,
+} from "./dock.ts";
 
-export { STANDARD_COMPONENTS };
+export {
+  STANDARD_COMPONENTS,
+  type DockArea,
+  type DockAreaSpec,
+  type DockFloatingSpec,
+  type DockFloatRect,
+  type DockGroupSpec,
+  type DockLayoutSpec,
+  type DockSplitOrientation,
+};
 
 export const SCENE_PATH = "ui/scene.json";
 export const LOGIC_PATH = "logic/app.logic.yaml";
@@ -18,7 +41,6 @@ export const BUILTIN_GLOBAL_EVENTS = ["app.start", "window.click"];
 
 export type LayoutKind = "vbox" | "hbox" | "grid" | "form" | "stack";
 export type SizeMode = "preferred" | "fixed" | "expanding";
-export type DockArea = "left" | "right" | "top" | "bottom";
 
 export interface LayoutSpec {
   kind: LayoutKind;
@@ -108,11 +130,12 @@ export interface SceneNode {
   dockArea?: DockArea;
   /** 停靠面板标题栏高度（默认 26） */
   headerHeight?: number;
-  /** 主窗口分区：菜单栏、状态栏节点 ID、中央区节点 ID、停靠面板节点 ID 列表 */
+  /** 主窗口分区：菜单栏、状态栏节点 ID、中央区节点 ID、停靠面板节点 ID 列表、停靠排列描述 */
   menuBar?: MenuBarSpec;
   statusBar?: string;
   central?: string;
   docks?: string[];
+  dockLayout?: DockLayoutSpec;
 }
 
 export interface Scene {
@@ -484,7 +507,7 @@ export function declFor(project: RuntimeProject, type: string): ComponentDecl | 
 }
 
 /**
- * 统一获取一个画布节点的全部直接子节点 ID（按 docks → central → statusBar → children 顺序去重）。
+ * 统一获取一个画布节点的全部直接子节点 ID（按 docks / dockLayout → central → statusBar → children 顺序去重）。
  */
 export function childrenOfNode(n: SceneNode | undefined): string[] {
   if (!n) return [];
@@ -493,13 +516,14 @@ export function childrenOfNode(n: SceneNode | undefined): string[] {
     if (cid && !list.includes(cid)) list.push(cid);
   };
   for (const cid of n.docks ?? []) add(cid);
+  for (const cid of dockIdsOfLayout(n.dockLayout)) add(cid);
   add(n.central);
   add(n.statusBar);
   for (const cid of n.children ?? []) add(cid);
   return list;
 }
 
-/** 查找某个节点在画布树中的父节点 ID（含主窗口的 docks / central / statusBar 分区）。 */
+/** 查找某个节点在画布树中的父节点 ID（含主窗口的 docks / dockLayout / central / statusBar 分区）。 */
 export function parentOfNode(scene: Scene, id: string): string | null {
   for (const [parentId, parent] of Object.entries(scene.nodes)) {
     if (childrenOfNode(parent).includes(id)) return parentId;
@@ -507,7 +531,7 @@ export function parentOfNode(scene: Scene, id: string): string | null {
   return null;
 }
 
-/** 从画布所有节点引用（children / docks / central / statusBar / menuBar.dock / windows）中移除一组被删除的节点 ID。 */
+/** 从画布所有节点引用（children / docks / dockLayout / central / statusBar / menuBar.dock / windows）中移除一组被删除的节点 ID。 */
 export function removeNodeReferences(scene: Scene, removed: ReadonlySet<string>): void {
   if (scene.windows) {
     scene.windows = scene.windows.filter((wid) => !removed.has(wid));
@@ -515,6 +539,7 @@ export function removeNodeReferences(scene: Scene, removed: ReadonlySet<string>)
   for (const n of Object.values(scene.nodes)) {
     if (n.children) n.children = n.children.filter((cid) => !removed.has(cid));
     if (n.docks) n.docks = n.docks.filter((cid) => !removed.has(cid));
+    if (n.dockLayout) removeDockLayoutReferences(n.dockLayout, removed);
     if (n.central && removed.has(n.central)) delete n.central;
     if (n.statusBar && removed.has(n.statusBar)) delete n.statusBar;
     if (n.menuBar?.menus) {
@@ -527,7 +552,7 @@ export function removeNodeReferences(scene: Scene, removed: ReadonlySet<string>)
   }
 }
 
-/** 将画布中对 oldId 的所有结构引用（root / windows / children / docks / central / statusBar / menuBar.dock / Line 端点）统一重命名为 nextId。 */
+/** 将画布中对 oldId 的所有结构引用（root / windows / children / docks / dockLayout / central / statusBar / menuBar.dock / Line 端点）统一重命名为 nextId。 */
 export function renameNodeReferences(scene: Scene, oldId: string, nextId: string): void {
   if (scene.root === oldId) scene.root = nextId;
   if (scene.windows) {
@@ -536,6 +561,7 @@ export function renameNodeReferences(scene: Scene, oldId: string, nextId: string
   for (const n of Object.values(scene.nodes)) {
     if (n.children) n.children = n.children.map((cid) => (cid === oldId ? nextId : cid));
     if (n.docks) n.docks = n.docks.map((cid) => (cid === oldId ? nextId : cid));
+    if (n.dockLayout) renameDockLayoutReferences(n.dockLayout, oldId, nextId);
     if (n.central === oldId) n.central = nextId;
     if (n.statusBar === oldId) n.statusBar = nextId;
     if (n.menuBar?.menus) {
@@ -552,13 +578,16 @@ export function renameNodeReferences(scene: Scene, oldId: string, nextId: string
   }
 }
 
-/** 复制粘贴节点时，按映射函数统一重写节点内部的 children / docks / central / statusBar 子节点 ID。 */
+/** 复制粘贴节点时，按映射函数统一重写节点内部的 children / docks / dockLayout / central / statusBar 子节点 ID。 */
 export function remapNodeChildren(n: SceneNode, mapId: (oldId: string) => string | undefined): void {
   if (n.children) {
     n.children = n.children.map(mapId).filter((cid): cid is string => Boolean(cid));
   }
   if (n.docks) {
     n.docks = n.docks.map(mapId).filter((cid): cid is string => Boolean(cid));
+  }
+  if (n.dockLayout) {
+    remapDockLayoutReferences(n.dockLayout, mapId);
   }
   if (n.central) {
     const mapped = mapId(n.central);
@@ -610,7 +639,9 @@ export function layoutOf(node: SceneNode | undefined): LayoutSpec | null {
   if (!node) return null;
   if (node.layout) return node.layout;
   const kind = LAYOUT_TYPE_KINDS[node.type];
-  return kind ? { kind } : null;
+  if (kind) return { kind };
+  if (node.type === "FloatBox") return { kind: "vbox", padding: 8, gap: 6 };
+  return null;
 }
 
 export function paddingOf(layout: LayoutSpec | null | undefined): [number, number, number, number] {
@@ -705,19 +736,26 @@ export interface ComputedBox {
 
 export function isPartitionedWindow(node: SceneNode | undefined): boolean {
   if (!node) return false;
-  return Boolean(node.menuBar || node.statusBar || node.central || (node.docks && node.docks.length > 0));
+  return Boolean(
+    node.menuBar || node.statusBar || node.central || (node.docks && node.docks.length > 0) || node.dockLayout,
+  );
 }
 
-/** 节点是否是分区主窗口直接挂载的分区节点（docks / central / statusBar）。 */
+/** 节点是否是分区主窗口直接挂载的分区节点（docks / dockLayout / central / statusBar）。 */
 export function isPartitionNode(scene: Scene, id: string): boolean {
   const parentId = parentOfNode(scene, id);
   if (!parentId) return false;
   const parent = scene.nodes[parentId];
   if (!parent || !isPartitionedWindow(parent)) return false;
-  return Boolean(parent.docks?.includes(id) || parent.central === id || parent.statusBar === id);
+  return Boolean(
+    parent.docks?.includes(id) ||
+      dockIdsOfLayout(parent.dockLayout).includes(id) ||
+      parent.central === id ||
+      parent.statusBar === id,
+  );
 }
 
-/** 节点的父容器是否启用了自动排版（VBox / HBox / Grid / Form / Stack 或 layout 字段）。 */
+/** 节点的父容器是否启用了自动排版（VBox / HBox / Grid / Form / Stack / FloatBox 或 layout 字段）。 */
 export function isLayoutChildNode(scene: Scene, id: string): boolean {
   const parentId = parentOfNode(scene, id);
   if (!parentId) return false;
@@ -763,20 +801,64 @@ export function computeSceneLayout(
     rootSize?: { width: number; height: number };
     isVisible?: (id: string) => boolean;
     getProp?: (id: string, prop: string) => Value;
+    getDockLayout?: (winId: string) => DockLayoutSpec | undefined;
   } = {},
 ): Map<string, ComputedBox> {
   const isVisible = options.isVisible ?? (() => true);
   const getProp = options.getProp ?? ((id: string, prop: string) => scene.nodes[id]?.props?.[prop] ?? null);
   const boxes = new Map<string, ComputedBox>();
 
+  const isFloatingFloatBox = (cid: string): boolean => {
+    const c = scene.nodes[cid];
+    if (!c || c.type !== "FloatBox") return false;
+    return Boolean(getProp(cid, "floating") ?? c.props?.floating ?? false);
+  };
+
+  const layoutFloatingFloatBox = (cid: string, parentBox: ComputedBox) => {
+    const c = scene.nodes[cid]!;
+    const hdrH = Math.max(0, Number(getProp(cid, "headerHeight") ?? c.props?.headerHeight ?? c.headerHeight ?? 24));
+    const fx = Math.round(Number(getProp(cid, "floatX") ?? c.props?.floatX ?? 60));
+    const fy = Math.round(Number(getProp(cid, "floatY") ?? c.props?.floatY ?? 80));
+    const fw = Math.max(80, Math.round(Number(getProp(cid, "floatWidth") ?? c.props?.floatWidth ?? prefWidth(c))));
+    const fh = Math.max(hdrH + 20, Math.round(Number(getProp(cid, "floatHeight") ?? c.props?.floatHeight ?? prefHeight(c))));
+    const box: ComputedBox = {
+      x: fx - parentBox.absX,
+      y: fy - parentBox.absY,
+      width: fw,
+      height: fh,
+      absX: fx,
+      absY: fy,
+      visible: parentBox.visible && isVisible(cid),
+      windowId: parentBox.windowId,
+    };
+    boxes.set(cid, box);
+    layoutSubtree(cid, box);
+  };
+
   const layoutSubtree = (parentId: string, parentBox: ComputedBox) => {
     const parent = scene.nodes[parentId];
     if (!parent) return;
-    const children = (parent.children ?? []).filter((cid) => !boxes.has(cid) && Boolean(scene.nodes[cid]));
-    if (children.length === 0) return;
+    const rawChildren = (parent.children ?? []).filter((cid) => !boxes.has(cid) && Boolean(scene.nodes[cid]));
+    if (rawChildren.length === 0) return;
 
-    const headerOffset = parent.type === "Dock" ? (parent.headerHeight ?? 26) : 0;
+    const headerOffset =
+      parent.type === "Dock"
+        ? (parent.headerHeight ?? 26)
+        : parent.type === "FloatBox"
+          ? Math.max(0, Number(getProp(parentId, "headerHeight") ?? parent.props?.headerHeight ?? parent.headerHeight ?? 24))
+          : 0;
     const layout = layoutOf(parent);
+
+    // 处于浮出状态的 FloatBox 脱离父布局流，按窗口坐标 (floatX, floatY, floatWidth, floatHeight) 定位
+    const children: string[] = [];
+    for (const cid of rawChildren) {
+      if (isFloatingFloatBox(cid)) {
+        layoutFloatingFloatBox(cid, parentBox);
+      } else {
+        children.push(cid);
+      }
+    }
+    if (children.length === 0) return;
 
     if (!layout) {
       for (const cid of children) {
@@ -1144,83 +1226,16 @@ export function computeSceneLayout(
 
       const midY = menuH;
       const midH = Math.max(0, H - menuH - statusH);
-      const dockIds = winNode.docks ?? (winNode.children ?? []).filter((cid) => scene.nodes[cid]?.type === "Dock");
-
-      const byArea: Record<DockArea, string[]> = { top: [], bottom: [], left: [], right: [] };
-      for (const did of dockIds) {
-        const d = scene.nodes[did];
-        if (!d) continue;
-        const area: DockArea = d.dockArea ?? "left";
-        if (isVisible(did)) byArea[area].push(did);
-        else {
-          const dBox: ComputedBox = {
-            x: 0,
-            y: midY,
-            width: prefWidth(d),
-            height: prefHeight(d),
-            absX: 0,
-            absY: midY,
-            visible: false,
-            windowId: winId,
-          };
-          boxes.set(did, dBox);
-          layoutSubtree(did, dBox);
-        }
-      }
-
-      let topH = 0;
-      for (const did of byArea.top) {
-        const d = scene.nodes[did]!;
-        const dh = prefHeight(d);
-        const dBox: ComputedBox = { x: 0, y: midY + topH, width: W, height: dh, absX: 0, absY: midY + topH, visible: winVis, windowId: winId };
+      const dockOverride = options.getDockLayout?.(winId);
+      const dockRes = computeDockWindowLayout(scene, winId, winNode, W, midY, midH, winVis, isVisible, dockOverride);
+      for (const [did, dBox] of dockRes.dockBoxes) {
         boxes.set(did, dBox);
         layoutSubtree(did, dBox);
-        topH += dh;
-      }
-
-      let bottomH = 0;
-      for (const did of byArea.bottom) bottomH += prefHeight(scene.nodes[did]!);
-      let bCurY = midY + midH - bottomH;
-      for (const did of byArea.bottom) {
-        const d = scene.nodes[did]!;
-        const dh = prefHeight(d);
-        const dBox: ComputedBox = { x: 0, y: bCurY, width: W, height: dh, absX: 0, absY: bCurY, visible: winVis, windowId: winId };
-        boxes.set(did, dBox);
-        layoutSubtree(did, dBox);
-        bCurY += dh;
-      }
-
-      const centerY = midY + topH;
-      const centerH = Math.max(0, midH - topH - bottomH);
-
-      let leftW = 0;
-      for (const did of byArea.left) {
-        const d = scene.nodes[did]!;
-        const dw = prefWidth(d);
-        const dBox: ComputedBox = { x: leftW, y: centerY, width: dw, height: centerH, absX: leftW, absY: centerY, visible: winVis, windowId: winId };
-        boxes.set(did, dBox);
-        layoutSubtree(did, dBox);
-        leftW += dw;
-      }
-
-      let rightW = 0;
-      for (const did of byArea.right) rightW += prefWidth(scene.nodes[did]!);
-      let rCurX = W - rightW;
-      for (const did of byArea.right) {
-        const d = scene.nodes[did]!;
-        const dw = prefWidth(d);
-        const dBox: ComputedBox = { x: rCurX, y: centerY, width: dw, height: centerH, absX: rCurX, absY: centerY, visible: winVis, windowId: winId };
-        boxes.set(did, dBox);
-        layoutSubtree(did, dBox);
-        rCurX += dw;
       }
 
       const centralId = winNode.central;
       if (centralId && scene.nodes[centralId]) {
-        const cx = leftW;
-        const cy = centerY;
-        const cw = Math.max(0, W - leftW - rightW);
-        const ch = centerH;
+        const { x: cx, y: cy, width: cw, height: ch } = dockRes.centralBox;
         const cBox: ComputedBox = {
           x: cx,
           y: cy,

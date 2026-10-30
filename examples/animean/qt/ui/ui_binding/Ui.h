@@ -34,10 +34,13 @@ public:
     QString widgetDump() const;
     // 每个可见控件此刻相对于所属窗口的位置和大小。一行 JSON，供排版比较脚本核对。
     QString layoutDump() const;
+    // 当前各停靠面板在窗口中的实际停靠排列（四个区域、并排、页签组、浮窗）。一行 JSON，和 stateDump 里的 docks 对照。
+    QString dockDump() const;
 
-    // 供自动化测试驱动触发请求事件或切换动作模拟方式
+    // 供自动化测试驱动触发请求事件、切换动作模拟方式或执行停靠操作
     void triggerRequest(const QString &name, const QString &jsonArgs = QString());
     void setActionSimulation(const QString &name, const QString &mode, int delayMs = 0);
+    void runDockOp(const QString &op, const QString &jsonArgs = QString());
 
     // ---- BusinessInterface ----
     void setLayerVisible(bool value) override;

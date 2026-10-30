@@ -33,6 +33,35 @@
       "statusBar": "statusBar",
       "central": "centralArea",
       "docks": ["toolsDock", "layersDock", "inspectorDock", "timelineDock"],
+      "dockLayout": {
+        "areas": {
+          "top": {
+            "size": 68,
+            "groups": [
+              { "tabs": ["toolsDock"], "active": "toolsDock" }
+            ]
+          },
+          "left": {
+            "size": 240,
+            "groups": [
+              { "tabs": ["layersDock"], "active": "layersDock" }
+            ]
+          },
+          "right": {
+            "size": 260,
+            "groups": [
+              { "tabs": ["inspectorDock"], "active": "inspectorDock" }
+            ]
+          },
+          "bottom": {
+            "size": 96,
+            "groups": [
+              { "tabs": ["timelineDock"], "active": "timelineDock" }
+            ]
+          }
+        },
+        "floating": []
+      },
       "children": ["toolsDock", "layersDock", "centralArea", "inspectorDock", "timelineDock", "statusBar"]
     },
 
@@ -201,7 +230,7 @@
       "headerHeight": 26,
       "title": "检查器",
       "layout": { "kind": "vbox", "padding": 10, "gap": 8 },
-      "children": ["inspectorTabs", "inspectorStack"]
+      "children": ["inspectorTabs", "inspectorStack", "onionSkinBox"]
     },
     "inspectorTabs": {
       "type": "Grid",
@@ -302,6 +331,27 @@
       "width": 232,
       "height": 28,
       "props": { "text": "尚未导出", "tone": "muted" }
+    },
+    "onionSkinBox": {
+      "type": "FloatBox",
+      "width": 240,
+      "height": 74,
+      "layout": { "kind": "vbox", "padding": 8, "gap": 6 },
+      "props": {
+        "title": "洋葱皮预览",
+        "floating": false,
+        "floatX": 360,
+        "floatY": 160,
+        "floatWidth": 240,
+        "floatHeight": 96
+      },
+      "children": ["onionSkinLabel"]
+    },
+    "onionSkinLabel": {
+      "type": "Label",
+      "width": 224,
+      "height": 28,
+      "props": { "text": "前后各显示 2 帧残影", "tone": "muted" }
     },
 
     "timelineDock": {

@@ -259,7 +259,7 @@ var VF = (function(exports) {
 	};
 	//#endregion
 	//#region standard/Button/component.json
-	var component_default$7 = {
+	var component_default$8 = {
 		type: "Button",
 		label: "按钮",
 		description: "标准按钮，支持主次样式与可勾选状态",
@@ -313,7 +313,7 @@ var VF = (function(exports) {
 	};
 	//#endregion
 	//#region standard/CheckBox/component.json
-	var component_default$6 = {
+	var component_default$7 = {
 		type: "CheckBox",
 		label: "复选框",
 		description: "复选框，支持文字和双向绑定布尔状态",
@@ -357,7 +357,7 @@ var VF = (function(exports) {
 	};
 	//#endregion
 	//#region standard/ComboBox/component.json
-	var component_default$5 = {
+	var component_default$6 = {
 		type: "ComboBox",
 		label: "下拉框",
 		description: "下拉选择框，options 用逗号分隔各选项，支持双向绑定字符串状态",
@@ -397,6 +397,87 @@ var VF = (function(exports) {
 				"signal": "currentTextChanged",
 				"type": "string"
 			} }
+		}
+	};
+	//#endregion
+	//#region standard/FloatBox/component.json
+	var component_default$5 = {
+		type: "FloatBox",
+		label: "浮动嵌入框",
+		description: "可在嵌入布局与窗口内浮动面板之间切换的标准容器",
+		defaultSize: {
+			"width": 220,
+			"height": 120
+		},
+		entry: "index.js",
+		style: "style.css",
+		props: {
+			"title": {
+				"type": "string",
+				"default": "浮动嵌入框",
+				"logic": true
+			},
+			"floating": {
+				"type": "boolean",
+				"default": false,
+				"logic": true
+			},
+			"floatX": {
+				"type": "number",
+				"default": 60,
+				"logic": true
+			},
+			"floatY": {
+				"type": "number",
+				"default": 80,
+				"logic": true
+			},
+			"floatWidth": {
+				"type": "number",
+				"default": 220,
+				"logic": true
+			},
+			"floatHeight": {
+				"type": "number",
+				"default": 120,
+				"logic": true
+			},
+			"headerHeight": {
+				"type": "number",
+				"default": 24
+			},
+			"enabled": {
+				"type": "boolean",
+				"default": true,
+				"logic": true
+			}
+		},
+		events: [
+			"toggle",
+			"change",
+			"move"
+		],
+		children: true,
+		qt: {
+			"widget": "QFrame",
+			"props": {
+				"title": "vfTitle",
+				"floating": "vfFloating",
+				"floatX": "vfFloatX",
+				"floatY": "vfFloatY",
+				"floatWidth": "vfFloatWidth",
+				"floatHeight": "vfFloatHeight"
+			},
+			"events": {
+				"toggle": {
+					"signal": "toggled",
+					"type": "boolean"
+				},
+				"change": {
+					"signal": "toggled",
+					"type": "boolean"
+				}
+			}
 		}
 	};
 	//#endregion
@@ -837,6 +918,80 @@ var VF = (function(exports) {
 			destroy: () => line.remove()
 		};
 	};
+	const createFloatBox = (el, { props, emit, mode }) => {
+		const root = document.createElement("div");
+		root.className = "vf-std-floatbox";
+		const header = document.createElement("div");
+		header.className = "vf-std-floatbox-header";
+		const title = document.createElement("span");
+		title.className = "vf-std-floatbox-title";
+		const toggleBtn = document.createElement("button");
+		toggleBtn.type = "button";
+		toggleBtn.className = "vf-std-floatbox-toggle";
+		header.append(title, toggleBtn);
+		const body = document.createElement("div");
+		body.className = "vf-std-floatbox-body";
+		root.append(header, body);
+		el.append(root);
+		let current = props;
+		toggleBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			if (current.enabled === false) return;
+			const next = !Boolean(current.floating);
+			emit("toggle", next);
+			emit("change", next);
+		});
+		header.addEventListener("pointerdown", (e) => {
+			var _current$floatX, _current$floatY;
+			if (mode !== "preview" || current.enabled === false) return;
+			if (e.button !== 0 || e.target === toggleBtn) return;
+			e.stopPropagation();
+			const startX = e.clientX;
+			const startY = e.clientY;
+			const baseX = Number((_current$floatX = current.floatX) !== null && _current$floatX !== void 0 ? _current$floatX : 60);
+			const baseY = Number((_current$floatY = current.floatY) !== null && _current$floatY !== void 0 ? _current$floatY : 80);
+			let moved = false;
+			const onMove = (me) => {
+				const dx = Math.round(me.clientX - startX);
+				const dy = Math.round(me.clientY - startY);
+				if (!moved && Math.hypot(dx, dy) >= 4) {
+					moved = true;
+					if (!current.floating) {
+						emit("toggle", true);
+						emit("change", true);
+					}
+				}
+				if (moved) emit("move", {
+					x: Math.max(0, baseX + dx),
+					y: Math.max(0, baseY + dy)
+				});
+			};
+			const onUp = () => {
+				window.removeEventListener("pointermove", onMove);
+				window.removeEventListener("pointerup", onUp);
+			};
+			window.addEventListener("pointermove", onMove);
+			window.addEventListener("pointerup", onUp);
+		});
+		const update = (next) => {
+			var _next$headerHeight, _next$title;
+			current = next;
+			const floating = Boolean(next.floating);
+			const hdrH = Number((_next$headerHeight = next.headerHeight) !== null && _next$headerHeight !== void 0 ? _next$headerHeight : 24);
+			header.style.height = `${hdrH}px`;
+			root.dataset.floating = String(floating);
+			root.dataset.disabled = String(next.enabled === false);
+			title.textContent = String((_next$title = next.title) !== null && _next$title !== void 0 ? _next$title : "浮动嵌入框");
+			toggleBtn.textContent = floating ? "嵌入" : "浮动";
+			toggleBtn.title = floating ? "嵌入回原布局" : "脱离布局浮动";
+			toggleBtn.disabled = next.enabled === false;
+		};
+		update(props);
+		return {
+			update,
+			destroy: () => root.remove()
+		};
+	};
 	const STANDARD_COMPONENTS = new Map([
 		{
 			decl: component_default$4,
@@ -851,7 +1006,7 @@ var VF = (function(exports) {
 .vf-std-label[data-tone="accent"] { color: var(--color-primary, #2563eb); font-weight: 500; }`
 		},
 		{
-			decl: component_default$7,
+			decl: component_default$8,
 			folder: "Button",
 			create: createButton,
 			styleText: `.vf-std-button { width: 100%; height: 100%; padding: 0 10px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.06s; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -879,7 +1034,7 @@ var VF = (function(exports) {
 .vf-std-spinbox-suffix { margin-left: 4px; color: var(--color-muted, #64748b); font-size: 12px; white-space: nowrap; }`
 		},
 		{
-			decl: component_default$5,
+			decl: component_default$6,
 			folder: "ComboBox",
 			create: createComboBox,
 			styleText: `.vf-std-combobox { box-sizing: border-box; width: 100%; height: 100%; padding: 0 8px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font: inherit; font-size: 13px; outline: none; cursor: pointer; }
@@ -887,7 +1042,7 @@ var VF = (function(exports) {
 .vf-std-combobox:disabled { opacity: 0.5; cursor: not-allowed; }`
 		},
 		{
-			decl: component_default$6,
+			decl: component_default$7,
 			folder: "CheckBox",
 			create: createCheckBox,
 			styleText: `.vf-std-checkbox { display: flex; align-items: center; gap: 8px; width: 100%; height: 100%; color: var(--color-text, #1e293b); font-size: 13px; cursor: pointer; user-select: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -916,8 +1071,732 @@ var VF = (function(exports) {
 			styleText: `.vf-std-separator { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
 .vf-std-separator::after { content: ""; display: block; width: 100%; height: 1px; background: var(--color-border, #e2e8f0); }
 .vf-std-separator[data-orientation="vertical"]::after { width: 1px; height: 100%; }`
+		},
+		{
+			decl: component_default$5,
+			folder: "FloatBox",
+			create: createFloatBox,
+			styleText: `.vf-std-floatbox { box-sizing: border-box; display: flex; flex-direction: column; width: 100%; height: 100%; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); pointer-events: none; overflow: hidden; }
+.vf-std-floatbox[data-floating="true"] { border-color: var(--color-primary, #2563eb); box-shadow: 0 12px 28px rgba(15, 23, 42, 0.35); }
+.vf-std-floatbox-header { box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 8px; height: 24px; background: rgba(148, 163, 184, 0.14); border-bottom: 1px solid var(--color-border, #cbd5e1); color: var(--color-text, #1e293b); font-size: 12px; font-weight: 600; user-select: none; pointer-events: auto; cursor: grab; }
+.vf-std-floatbox-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vf-std-floatbox-toggle { padding: 1px 6px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; line-height: 1.3; cursor: pointer; }
+.vf-std-floatbox-toggle:hover:not(:disabled) { border-color: var(--color-primary, #2563eb); color: var(--color-primary, #2563eb); }
+.vf-std-floatbox-body { flex: 1; min-height: 0; pointer-events: none; }`
 		}
 	].map((item) => [item.decl.type, item]));
+	//#endregion
+	//#region src/dock.ts
+	const DOCK_AREAS = [
+		"top",
+		"bottom",
+		"left",
+		"right"
+	];
+	function isDockArea(val) {
+		return val === "left" || val === "right" || val === "top" || val === "bottom";
+	}
+	function defaultSplitOrientation(area) {
+		return area === "left" || area === "right" ? "vertical" : "horizontal";
+	}
+	function cloneDockLayout(layout) {
+		var _layout$areas$top, _layout$areas$top2, _layout$areas$top$gro, _layout$areas$top3, _layout$areas$bottom, _layout$areas$bottom2, _layout$areas$bottom$, _layout$areas$bottom3, _layout$areas$left, _layout$areas$left2, _layout$areas$left$gr, _layout$areas$left3, _layout$areas$right, _layout$areas$right2, _layout$areas$right$g, _layout$areas$right3, _layout$floating;
+		return {
+			areas: {
+				top: _objectSpread2(_objectSpread2(_objectSpread2({}, ((_layout$areas$top = layout.areas.top) === null || _layout$areas$top === void 0 ? void 0 : _layout$areas$top.size) !== void 0 ? { size: layout.areas.top.size } : {}), ((_layout$areas$top2 = layout.areas.top) === null || _layout$areas$top2 === void 0 ? void 0 : _layout$areas$top2.splitOrientation) ? { splitOrientation: layout.areas.top.splitOrientation } : {}), {}, { groups: ((_layout$areas$top$gro = (_layout$areas$top3 = layout.areas.top) === null || _layout$areas$top3 === void 0 ? void 0 : _layout$areas$top3.groups) !== null && _layout$areas$top$gro !== void 0 ? _layout$areas$top$gro : []).map((g) => _objectSpread2(_objectSpread2({ tabs: [...g.tabs] }, g.active ? { active: g.active } : {}), g.size !== void 0 ? { size: g.size } : {})) }),
+				bottom: _objectSpread2(_objectSpread2(_objectSpread2({}, ((_layout$areas$bottom = layout.areas.bottom) === null || _layout$areas$bottom === void 0 ? void 0 : _layout$areas$bottom.size) !== void 0 ? { size: layout.areas.bottom.size } : {}), ((_layout$areas$bottom2 = layout.areas.bottom) === null || _layout$areas$bottom2 === void 0 ? void 0 : _layout$areas$bottom2.splitOrientation) ? { splitOrientation: layout.areas.bottom.splitOrientation } : {}), {}, { groups: ((_layout$areas$bottom$ = (_layout$areas$bottom3 = layout.areas.bottom) === null || _layout$areas$bottom3 === void 0 ? void 0 : _layout$areas$bottom3.groups) !== null && _layout$areas$bottom$ !== void 0 ? _layout$areas$bottom$ : []).map((g) => _objectSpread2(_objectSpread2({ tabs: [...g.tabs] }, g.active ? { active: g.active } : {}), g.size !== void 0 ? { size: g.size } : {})) }),
+				left: _objectSpread2(_objectSpread2(_objectSpread2({}, ((_layout$areas$left = layout.areas.left) === null || _layout$areas$left === void 0 ? void 0 : _layout$areas$left.size) !== void 0 ? { size: layout.areas.left.size } : {}), ((_layout$areas$left2 = layout.areas.left) === null || _layout$areas$left2 === void 0 ? void 0 : _layout$areas$left2.splitOrientation) ? { splitOrientation: layout.areas.left.splitOrientation } : {}), {}, { groups: ((_layout$areas$left$gr = (_layout$areas$left3 = layout.areas.left) === null || _layout$areas$left3 === void 0 ? void 0 : _layout$areas$left3.groups) !== null && _layout$areas$left$gr !== void 0 ? _layout$areas$left$gr : []).map((g) => _objectSpread2(_objectSpread2({ tabs: [...g.tabs] }, g.active ? { active: g.active } : {}), g.size !== void 0 ? { size: g.size } : {})) }),
+				right: _objectSpread2(_objectSpread2(_objectSpread2({}, ((_layout$areas$right = layout.areas.right) === null || _layout$areas$right === void 0 ? void 0 : _layout$areas$right.size) !== void 0 ? { size: layout.areas.right.size } : {}), ((_layout$areas$right2 = layout.areas.right) === null || _layout$areas$right2 === void 0 ? void 0 : _layout$areas$right2.splitOrientation) ? { splitOrientation: layout.areas.right.splitOrientation } : {}), {}, { groups: ((_layout$areas$right$g = (_layout$areas$right3 = layout.areas.right) === null || _layout$areas$right3 === void 0 ? void 0 : _layout$areas$right3.groups) !== null && _layout$areas$right$g !== void 0 ? _layout$areas$right$g : []).map((g) => _objectSpread2(_objectSpread2({ tabs: [...g.tabs] }, g.active ? { active: g.active } : {}), g.size !== void 0 ? { size: g.size } : {})) })
+			},
+			floating: ((_layout$floating = layout.floating) !== null && _layout$floating !== void 0 ? _layout$floating : []).map((f) => _objectSpread2({}, f))
+		};
+	}
+	/** 提取 DockLayoutSpec 中引用的全部停靠面板 ID（保持出现顺序且去重）。 */
+	function dockIdsOfLayout(layout) {
+		var _layout$floating2;
+		if (!layout) return [];
+		const list = [];
+		const add = (id) => {
+			if (id && !list.includes(id)) list.push(id);
+		};
+		for (const area of DOCK_AREAS) {
+			var _layout$areas$area$gr, _layout$areas;
+			for (const g of (_layout$areas$area$gr = (_layout$areas = layout.areas) === null || _layout$areas === void 0 || (_layout$areas = _layout$areas[area]) === null || _layout$areas === void 0 ? void 0 : _layout$areas.groups) !== null && _layout$areas$area$gr !== void 0 ? _layout$areas$area$gr : []) {
+				var _g$tabs;
+				for (const tid of (_g$tabs = g.tabs) !== null && _g$tabs !== void 0 ? _g$tabs : []) add(tid);
+			}
+		}
+		for (const f of (_layout$floating2 = layout.floating) !== null && _layout$floating2 !== void 0 ? _layout$floating2 : []) add(f.dockId);
+		return list;
+	}
+	/** 收集主窗口下的所有有效 Dock 节点 ID。 */
+	function windowDockIds(scene, winNode) {
+		var _winNode$docks, _winNode$children;
+		if (!winNode) return [];
+		const raw = [
+			...(_winNode$docks = winNode.docks) !== null && _winNode$docks !== void 0 ? _winNode$docks : [],
+			...dockIdsOfLayout(winNode.dockLayout),
+			...((_winNode$children = winNode.children) !== null && _winNode$children !== void 0 ? _winNode$children : []).filter((cid) => {
+				var _scene$nodes$cid;
+				return ((_scene$nodes$cid = scene.nodes[cid]) === null || _scene$nodes$cid === void 0 ? void 0 : _scene$nodes$cid.type) === "Dock";
+			})
+		];
+		const out = [];
+		for (const id of raw) {
+			var _scene$nodes$id;
+			if (((_scene$nodes$id = scene.nodes[id]) === null || _scene$nodes$id === void 0 ? void 0 : _scene$nodes$id.type) === "Dock" && !out.includes(id)) out.push(id);
+		}
+		return out;
+	}
+	/**
+	* 将窗口节点上的 dockLayout（或回退自 docks + dockArea）归一化为完整的 DockLayoutSpec。
+	*/
+	function normalizeDockLayout(scene, winNode) {
+		const validIds = windowDockIds(scene, winNode);
+		const validSet = new Set(validIds);
+		const seen = /* @__PURE__ */ new Set();
+		const areas = {
+			top: { groups: [] },
+			bottom: { groups: [] },
+			left: { groups: [] },
+			right: { groups: [] }
+		};
+		const floating = [];
+		const rawLayout = winNode === null || winNode === void 0 ? void 0 : winNode.dockLayout;
+		if (rawLayout === null || rawLayout === void 0 ? void 0 : rawLayout.areas) for (const area of DOCK_AREAS) {
+			var _rawArea$groups;
+			const rawArea = rawLayout.areas[area];
+			if (!rawArea) continue;
+			if (typeof rawArea.size === "number" && Number.isFinite(rawArea.size) && rawArea.size > 0) areas[area].size = Math.round(rawArea.size);
+			if (rawArea.splitOrientation === "horizontal" || rawArea.splitOrientation === "vertical") areas[area].splitOrientation = rawArea.splitOrientation;
+			for (const rawGroup of (_rawArea$groups = rawArea.groups) !== null && _rawArea$groups !== void 0 ? _rawArea$groups : []) {
+				var _rawGroup$tabs;
+				const tabs = [];
+				for (const tid of (_rawGroup$tabs = rawGroup.tabs) !== null && _rawGroup$tabs !== void 0 ? _rawGroup$tabs : []) if (validSet.has(tid) && !seen.has(tid)) {
+					seen.add(tid);
+					tabs.push(tid);
+				}
+				if (tabs.length === 0) continue;
+				const group = {
+					tabs,
+					active: rawGroup.active && tabs.includes(rawGroup.active) ? rawGroup.active : tabs[0]
+				};
+				if (typeof rawGroup.size === "number" && Number.isFinite(rawGroup.size) && rawGroup.size > 0) group.size = Math.round(rawGroup.size);
+				areas[area].groups.push(group);
+			}
+		}
+		if (Array.isArray(rawLayout === null || rawLayout === void 0 ? void 0 : rawLayout.floating)) for (const rf of rawLayout.floating) {
+			if (!rf || !validSet.has(rf.dockId) || seen.has(rf.dockId)) continue;
+			seen.add(rf.dockId);
+			const dNode = scene.nodes[rf.dockId];
+			const fallbackArea = isDockArea(dNode.dockArea) ? dNode.dockArea : "left";
+			floating.push({
+				dockId: rf.dockId,
+				lastArea: isDockArea(rf.lastArea) ? rf.lastArea : fallbackArea,
+				x: Math.round(Number.isFinite(rf.x) ? rf.x : 80),
+				y: Math.round(Number.isFinite(rf.y) ? rf.y : 90),
+				width: Math.max(80, Math.round(Number.isFinite(rf.width) ? rf.width : prefWidth(dNode))),
+				height: Math.max(60, Math.round(Number.isFinite(rf.height) ? rf.height : prefHeight(dNode)))
+			});
+		}
+		for (const did of validIds) {
+			if (seen.has(did)) continue;
+			seen.add(did);
+			const dNode = scene.nodes[did];
+			areas[isDockArea(dNode.dockArea) ? dNode.dockArea : "left"].groups.push({
+				tabs: [did],
+				active: did
+			});
+		}
+		for (const area of DOCK_AREAS) {
+			const areaSpec = areas[area];
+			if (areaSpec.size === void 0 && areaSpec.groups.length > 0) {
+				var _areaSpec$groups$0$ac;
+				const firstId = (_areaSpec$groups$0$ac = areaSpec.groups[0].active) !== null && _areaSpec$groups$0$ac !== void 0 ? _areaSpec$groups$0$ac : areaSpec.groups[0].tabs[0];
+				const firstNode = firstId ? scene.nodes[firstId] : void 0;
+				if (firstNode) areaSpec.size = area === "left" || area === "right" ? prefWidth(firstNode) : prefHeight(firstNode);
+			}
+		}
+		return {
+			areas,
+			floating
+		};
+	}
+	function dockFindLocation(layout, dockId) {
+		var _layout$floating3;
+		for (const area of DOCK_AREAS) {
+			var _layout$areas$area$gr3, _layout$areas$area;
+			const groups = (_layout$areas$area$gr3 = (_layout$areas$area = layout.areas[area]) === null || _layout$areas$area === void 0 ? void 0 : _layout$areas$area.groups) !== null && _layout$areas$area$gr3 !== void 0 ? _layout$areas$area$gr3 : [];
+			for (let gi = 0; gi < groups.length; gi++) {
+				const g = groups[gi];
+				const ti = g.tabs.indexOf(dockId);
+				if (ti >= 0) return {
+					kind: "area",
+					area,
+					groupIndex: gi,
+					tabIndex: ti,
+					group: g
+				};
+			}
+		}
+		const floating = (_layout$floating3 = layout.floating) !== null && _layout$floating3 !== void 0 ? _layout$floating3 : [];
+		for (let fi = 0; fi < floating.length; fi++) if (floating[fi].dockId === dockId) return {
+			kind: "floating",
+			index: fi,
+			item: floating[fi]
+		};
+		return null;
+	}
+	function detachDockFromLayout(layout, dockId) {
+		const loc = dockFindLocation(layout, dockId);
+		if (!loc) return {};
+		if (loc.kind === "floating") {
+			var _layout$floating4;
+			const lastArea = loc.item.lastArea;
+			layout.floating = ((_layout$floating4 = layout.floating) !== null && _layout$floating4 !== void 0 ? _layout$floating4 : []).filter((f) => f.dockId !== dockId);
+			return { lastArea };
+		}
+		const areaSpec = layout.areas[loc.area];
+		const group = areaSpec.groups[loc.groupIndex];
+		group.tabs = group.tabs.filter((id) => id !== dockId);
+		if (group.tabs.length === 0) areaSpec.groups.splice(loc.groupIndex, 1);
+		else if (group.active === dockId || !group.active || !group.tabs.includes(group.active)) group.active = group.tabs[Math.min(loc.tabIndex, group.tabs.length - 1)];
+		return { lastArea: loc.area };
+	}
+	/** 将 dockId 叠入 targetDockId 所在的页签组，并激活 dockId。 */
+	function dockTabify(layout, scene, winNode, targetDockId, dockId) {
+		const next = normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
+			type: "Window",
+			width: 0,
+			height: 0,
+			dockLayout: cloneDockLayout(layout)
+		}));
+		if (targetDockId === dockId) return next;
+		const targetLocBefore = dockFindLocation(next, targetDockId);
+		if (!targetLocBefore) return next;
+		if (targetLocBefore.kind === "floating") return dockTabify(dockRestore(next, scene, winNode, targetDockId), scene, winNode, targetDockId, dockId);
+		detachDockFromLayout(next, dockId);
+		const targetLoc = dockFindLocation(next, targetDockId);
+		if (!targetLoc || targetLoc.kind !== "area") return next;
+		if (!targetLoc.group.tabs.includes(dockId)) targetLoc.group.tabs.push(dockId);
+		targetLoc.group.active = dockId;
+		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
+			type: "Window",
+			width: 0,
+			height: 0,
+			dockLayout: next
+		}));
+	}
+	/** 切换页签组内的当前激活页签。 */
+	function dockActivateTab(layout, scene, winNode, dockId) {
+		const next = cloneDockLayout(layout);
+		const loc = dockFindLocation(next, dockId);
+		if (loc && loc.kind === "area") loc.group.active = dockId;
+		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
+			type: "Window",
+			width: 0,
+			height: 0,
+			dockLayout: next
+		}));
+	}
+	/** 将停靠面板拖出/切换为浮窗（或更新浮窗位置和尺寸）。 */
+	function dockFloat(layout, scene, winNode, dockId, rect) {
+		var _prevFloat$width, _prevFloat$height, _ref, _rect$x, _ref2, _rect$y, _rect$width, _rect$height, _next$floating;
+		const next = cloneDockLayout(layout);
+		const dNode = scene.nodes[dockId];
+		if (!dNode || dNode.type !== "Dock") return next;
+		const existingLoc = dockFindLocation(next, dockId);
+		const prevFloat = (existingLoc === null || existingLoc === void 0 ? void 0 : existingLoc.kind) === "floating" ? existingLoc.item : void 0;
+		const { lastArea } = detachDockFromLayout(next, dockId);
+		const resolvedArea = lastArea !== null && lastArea !== void 0 ? lastArea : isDockArea(dNode.dockArea) ? dNode.dockArea : "left";
+		const defW = (_prevFloat$width = prevFloat === null || prevFloat === void 0 ? void 0 : prevFloat.width) !== null && _prevFloat$width !== void 0 ? _prevFloat$width : resolvedArea === "left" || resolvedArea === "right" ? prefWidth(dNode) : Math.min(480, prefWidth(dNode));
+		const defH = (_prevFloat$height = prevFloat === null || prevFloat === void 0 ? void 0 : prevFloat.height) !== null && _prevFloat$height !== void 0 ? _prevFloat$height : resolvedArea === "top" || resolvedArea === "bottom" ? Math.max(120, prefHeight(dNode)) : Math.min(440, prefHeight(dNode));
+		const item = {
+			dockId,
+			lastArea: resolvedArea,
+			x: Math.round((_ref = (_rect$x = rect === null || rect === void 0 ? void 0 : rect.x) !== null && _rect$x !== void 0 ? _rect$x : prevFloat === null || prevFloat === void 0 ? void 0 : prevFloat.x) !== null && _ref !== void 0 ? _ref : 80),
+			y: Math.round((_ref2 = (_rect$y = rect === null || rect === void 0 ? void 0 : rect.y) !== null && _rect$y !== void 0 ? _rect$y : prevFloat === null || prevFloat === void 0 ? void 0 : prevFloat.y) !== null && _ref2 !== void 0 ? _ref2 : 90),
+			width: Math.max(80, Math.round((_rect$width = rect === null || rect === void 0 ? void 0 : rect.width) !== null && _rect$width !== void 0 ? _rect$width : defW)),
+			height: Math.max(60, Math.round((_rect$height = rect === null || rect === void 0 ? void 0 : rect.height) !== null && _rect$height !== void 0 ? _rect$height : defH))
+		};
+		next.floating = [...(_next$floating = next.floating) !== null && _next$floating !== void 0 ? _next$floating : [], item];
+		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
+			type: "Window",
+			width: 0,
+			height: 0,
+			dockLayout: next
+		}));
+	}
+	/** 将浮窗恢复回原来的停靠区（或指定停靠区）。 */
+	function dockRestore(layout, scene, winNode, dockId, targetArea) {
+		var _ref3;
+		const next = cloneDockLayout(layout);
+		const dNode = scene.nodes[dockId];
+		if (!dNode || dNode.type !== "Dock") return next;
+		const { lastArea } = detachDockFromLayout(next, dockId);
+		const area = (_ref3 = targetArea !== null && targetArea !== void 0 ? targetArea : lastArea) !== null && _ref3 !== void 0 ? _ref3 : isDockArea(dNode.dockArea) ? dNode.dockArea : "left";
+		next.areas[area].groups.push({
+			tabs: [dockId],
+			active: dockId
+		});
+		if (next.areas[area].size === void 0) next.areas[area].size = area === "left" || area === "right" ? prefWidth(dNode) : prefHeight(dNode);
+		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
+			type: "Window",
+			width: 0,
+			height: 0,
+			dockLayout: next
+		}));
+	}
+	/** 将面板移动/吸附到指定停靠区。 */
+	function dockMoveToArea(layout, scene, winNode, dockId, area, index) {
+		const next = cloneDockLayout(layout);
+		const dNode = scene.nodes[dockId];
+		if (!dNode || dNode.type !== "Dock") return next;
+		detachDockFromLayout(next, dockId);
+		const groups = next.areas[area].groups;
+		const newGroup = {
+			tabs: [dockId],
+			active: dockId
+		};
+		if (index !== void 0 && index >= 0 && index <= groups.length) groups.splice(index, 0, newGroup);
+		else groups.push(newGroup);
+		if (next.areas[area].size === void 0) next.areas[area].size = area === "left" || area === "right" ? prefWidth(dNode) : prefHeight(dNode);
+		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
+			type: "Window",
+			width: 0,
+			height: 0,
+			dockLayout: next
+		}));
+	}
+	/** 将 dockId 与 targetDockId 在同一停靠区内并排放置（split）。 */
+	function dockSplit(layout, scene, winNode, targetDockId, dockId, position = "after", orientation) {
+		var _ref4;
+		const next = cloneDockLayout(layout);
+		if (targetDockId === dockId) return next;
+		const targetLocBefore = dockFindLocation(next, targetDockId);
+		if (!targetLocBefore || targetLocBefore.kind !== "area") return next;
+		const area = targetLocBefore.area;
+		detachDockFromLayout(next, dockId);
+		const targetLoc = dockFindLocation(next, targetDockId);
+		if (!targetLoc || targetLoc.kind !== "area") return dockMoveToArea(next, scene, winNode, dockId, area);
+		const areaSpec = next.areas[area];
+		areaSpec.splitOrientation = (_ref4 = orientation !== null && orientation !== void 0 ? orientation : areaSpec.splitOrientation) !== null && _ref4 !== void 0 ? _ref4 : defaultSplitOrientation(area);
+		const insertIdx = position === "before" ? targetLoc.groupIndex : targetLoc.groupIndex + 1;
+		areaSpec.groups.splice(insertIdx, 0, {
+			tabs: [dockId],
+			active: dockId
+		});
+		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
+			type: "Window",
+			width: 0,
+			height: 0,
+			dockLayout: next
+		}));
+	}
+	/** 拖动停靠区与中央区之间的分隔条，调整停靠区厚度（宽度或高度）。 */
+	function dockResizeArea(layout, scene, winNode, area, size) {
+		const next = cloneDockLayout(layout);
+		const clamped = Math.max(area === "left" || area === "right" ? 80 : 48, Math.min(900, Math.round(size)));
+		next.areas[area].size = clamped;
+		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
+			type: "Window",
+			width: 0,
+			height: 0,
+			dockLayout: next
+		}));
+	}
+	/** 拖动同一停靠区内并排组之间的分隔条，调整第 groupIndex 个并排组的像素尺寸。 */
+	function dockResizeSplit(layout, scene, winNode, area, groupIndex, size) {
+		var _next$areas$area$grou, _next$areas$area;
+		const next = cloneDockLayout(layout);
+		const groups = (_next$areas$area$grou = (_next$areas$area = next.areas[area]) === null || _next$areas$area === void 0 ? void 0 : _next$areas$area.groups) !== null && _next$areas$area$grou !== void 0 ? _next$areas$area$grou : [];
+		if (groupIndex >= 0 && groupIndex < groups.length) groups[groupIndex].size = Math.max(60, Math.round(size));
+		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
+			type: "Window",
+			width: 0,
+			height: 0,
+			dockLayout: next
+		}));
+	}
+	function distributeGroupAxisSizes(totalSpan, groups, axis) {
+		const n = groups.length;
+		if (n === 0) return [];
+		if (n === 1) return [Math.max(0, totalSpan)];
+		const minEach = axis === "horizontal" ? 60 : 48;
+		const rawSizes = groups.map(({ group, activeDock }) => {
+			if (group.size !== void 0 && group.size > 0) return group.size;
+			return axis === "horizontal" ? prefWidth(activeDock) : prefHeight(activeDock);
+		});
+		const explicitIndices = groups.map((g, i) => g.group.size !== void 0 && g.group.size > 0 ? i : -1).filter((i) => i >= 0);
+		if (explicitIndices.length > 0 && explicitIndices.length < n) {
+			const out = new Array(n).fill(0);
+			let used = 0;
+			for (const idx of explicitIndices) {
+				const s = Math.max(minEach, Math.min(Math.max(minEach, totalSpan - minEach * (n - 1)), Math.round(groups[idx].group.size)));
+				out[idx] = s;
+				used += s;
+			}
+			const remIndices = groups.map((_, i) => i).filter((i) => !explicitIndices.includes(i));
+			const remSpan = Math.max(0, totalSpan - used);
+			let remUsed = 0;
+			remIndices.forEach((idx, k) => {
+				if (k === remIndices.length - 1) out[idx] = Math.max(minEach, remSpan - remUsed);
+				else {
+					const s = Math.max(minEach, Math.round(remSpan / remIndices.length));
+					out[idx] = s;
+					remUsed += s;
+				}
+			});
+			return out;
+		}
+		const sumRaw = rawSizes.reduce((a, b) => a + b, 0) || 1;
+		const out = [];
+		let used = 0;
+		for (let i = 0; i < n; i++) if (i === n - 1) out.push(Math.max(0, totalSpan - used));
+		else {
+			const s = Math.max(minEach, Math.round(totalSpan * rawSizes[i] / sumRaw));
+			out.push(s);
+			used += s;
+		}
+		return out;
+	}
+	/**
+	* 根据 DockLayoutSpec 计算主窗口所有停靠面板、中央区及分隔条的几何框。
+	*/
+	function computeDockWindowLayout(scene, winId, winNode, W, midY, midH, winVis, isVisible, dockLayoutOverride) {
+		var _layout$floating5;
+		const layout = dockLayoutOverride ? normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, { dockLayout: dockLayoutOverride })) : normalizeDockLayout(scene, winNode);
+		const dockBoxes = /* @__PURE__ */ new Map();
+		const splitters = [];
+		const activeTabByDock = /* @__PURE__ */ new Map();
+		const resolveAreaVisibleGroups = (area) => {
+			const areaSpec = layout.areas[area];
+			const visGroups = [];
+			areaSpec.groups.forEach((group, groupIndex) => {
+				const visibleTabs = group.tabs.filter((tid) => scene.nodes[tid] && isVisible(tid));
+				if (visibleTabs.length === 0) {
+					for (const tid of group.tabs) {
+						const d = scene.nodes[tid];
+						if (!d) continue;
+						dockBoxes.set(tid, {
+							x: 0,
+							y: midY,
+							width: prefWidth(d),
+							height: prefHeight(d),
+							absX: 0,
+							absY: midY,
+							visible: false,
+							windowId: winId
+						});
+						activeTabByDock.set(tid, {
+							groupTabs: [],
+							activeTab: tid,
+							isFloating: false,
+							area
+						});
+					}
+					return;
+				}
+				const activeId = group.active && visibleTabs.includes(group.active) ? group.active : visibleTabs[0];
+				const activeDock = scene.nodes[activeId];
+				visGroups.push({
+					group,
+					groupIndex,
+					visibleTabs,
+					activeId,
+					activeDock
+				});
+			});
+			return visGroups;
+		};
+		const assignGroupBoxes = (area, groupEntry, gx, gy, gw, gh) => {
+			for (const tid of groupEntry.group.tabs) {
+				if (!scene.nodes[tid]) continue;
+				const isActive = tid === groupEntry.activeId && isVisible(tid);
+				dockBoxes.set(tid, {
+					x: gx,
+					y: gy,
+					width: gw,
+					height: gh,
+					absX: gx,
+					absY: gy,
+					visible: winVis && isActive,
+					windowId: winId
+				});
+				activeTabByDock.set(tid, {
+					groupTabs: groupEntry.visibleTabs,
+					activeTab: groupEntry.activeId,
+					isFloating: false,
+					area
+				});
+			}
+		};
+		const topGroups = resolveAreaVisibleGroups("top");
+		let topH = 0;
+		if (topGroups.length > 0) {
+			var _layout$areas$top$spl;
+			if (((_layout$areas$top$spl = layout.areas.top.splitOrientation) !== null && _layout$areas$top$spl !== void 0 ? _layout$areas$top$spl : "horizontal") === "horizontal") {
+				var _layout$areas$top$siz;
+				topH = Math.max(40, Math.round((_layout$areas$top$siz = layout.areas.top.size) !== null && _layout$areas$top$siz !== void 0 ? _layout$areas$top$siz : prefHeight(topGroups[0].activeDock)));
+				const widths = distributeGroupAxisSizes(W, topGroups, "horizontal");
+				let curX = 0;
+				topGroups.forEach((g, idx) => {
+					const gw = widths[idx];
+					assignGroupBoxes("top", g, curX, midY, gw, topH);
+					curX += gw;
+					if (idx < topGroups.length - 1) splitters.push({
+						kind: "split",
+						area: "top",
+						groupIndex: g.groupIndex,
+						orientation: "vertical",
+						x: curX - 3,
+						y: midY,
+						width: 6,
+						height: topH,
+						currentSize: gw
+					});
+				});
+			} else {
+				let curY = midY;
+				topGroups.forEach((g, idx) => {
+					var _ref5, _g$group$size;
+					const gh = Math.max(40, Math.round((_ref5 = (_g$group$size = g.group.size) !== null && _g$group$size !== void 0 ? _g$group$size : layout.areas.top.size) !== null && _ref5 !== void 0 ? _ref5 : prefHeight(g.activeDock)));
+					assignGroupBoxes("top", g, 0, curY, W, gh);
+					curY += gh;
+					topH += gh;
+					if (idx < topGroups.length - 1) splitters.push({
+						kind: "split",
+						area: "top",
+						groupIndex: g.groupIndex,
+						orientation: "horizontal",
+						x: 0,
+						y: curY - 3,
+						width: W,
+						height: 6,
+						currentSize: gh
+					});
+				});
+			}
+			splitters.push({
+				kind: "area",
+				area: "top",
+				orientation: "horizontal",
+				x: 0,
+				y: midY + topH - 3,
+				width: W,
+				height: 6,
+				currentSize: topH
+			});
+		}
+		const bottomGroups = resolveAreaVisibleGroups("bottom");
+		let bottomH = 0;
+		if (bottomGroups.length > 0) {
+			var _layout$areas$bottom$2;
+			if (((_layout$areas$bottom$2 = layout.areas.bottom.splitOrientation) !== null && _layout$areas$bottom$2 !== void 0 ? _layout$areas$bottom$2 : "horizontal") === "horizontal") {
+				var _layout$areas$bottom$3;
+				bottomH = Math.max(40, Math.round((_layout$areas$bottom$3 = layout.areas.bottom.size) !== null && _layout$areas$bottom$3 !== void 0 ? _layout$areas$bottom$3 : prefHeight(bottomGroups[0].activeDock)));
+				const bY = midY + midH - bottomH;
+				const widths = distributeGroupAxisSizes(W, bottomGroups, "horizontal");
+				let curX = 0;
+				bottomGroups.forEach((g, idx) => {
+					const gw = widths[idx];
+					assignGroupBoxes("bottom", g, curX, bY, gw, bottomH);
+					curX += gw;
+					if (idx < bottomGroups.length - 1) splitters.push({
+						kind: "split",
+						area: "bottom",
+						groupIndex: g.groupIndex,
+						orientation: "vertical",
+						x: curX - 3,
+						y: bY,
+						width: 6,
+						height: bottomH,
+						currentSize: gw
+					});
+				});
+			} else {
+				const ghList = bottomGroups.map((g) => {
+					var _ref6, _g$group$size2;
+					return Math.max(40, Math.round((_ref6 = (_g$group$size2 = g.group.size) !== null && _g$group$size2 !== void 0 ? _g$group$size2 : layout.areas.bottom.size) !== null && _ref6 !== void 0 ? _ref6 : prefHeight(g.activeDock)));
+				});
+				bottomH = ghList.reduce((a, b) => a + b, 0);
+				let curY = midY + midH - bottomH;
+				bottomGroups.forEach((g, idx) => {
+					const gh = ghList[idx];
+					assignGroupBoxes("bottom", g, 0, curY, W, gh);
+					curY += gh;
+					if (idx < bottomGroups.length - 1) splitters.push({
+						kind: "split",
+						area: "bottom",
+						groupIndex: g.groupIndex,
+						orientation: "horizontal",
+						x: 0,
+						y: curY - 3,
+						width: W,
+						height: 6,
+						currentSize: gh
+					});
+				});
+			}
+			splitters.push({
+				kind: "area",
+				area: "bottom",
+				orientation: "horizontal",
+				x: 0,
+				y: midY + midH - bottomH - 3,
+				width: W,
+				height: 6,
+				currentSize: bottomH
+			});
+		}
+		const centerY = midY + topH;
+		const centerH = Math.max(0, midH - topH - bottomH);
+		const leftGroups = resolveAreaVisibleGroups("left");
+		let leftW = 0;
+		if (leftGroups.length > 0) {
+			var _layout$areas$left$sp;
+			if (((_layout$areas$left$sp = layout.areas.left.splitOrientation) !== null && _layout$areas$left$sp !== void 0 ? _layout$areas$left$sp : "vertical") === "vertical") {
+				var _layout$areas$left$si;
+				leftW = Math.max(60, Math.round((_layout$areas$left$si = layout.areas.left.size) !== null && _layout$areas$left$si !== void 0 ? _layout$areas$left$si : prefWidth(leftGroups[0].activeDock)));
+				const heights = distributeGroupAxisSizes(centerH, leftGroups, "vertical");
+				let curY = centerY;
+				leftGroups.forEach((g, idx) => {
+					const gh = heights[idx];
+					assignGroupBoxes("left", g, 0, curY, leftW, gh);
+					curY += gh;
+					if (idx < leftGroups.length - 1) splitters.push({
+						kind: "split",
+						area: "left",
+						groupIndex: g.groupIndex,
+						orientation: "horizontal",
+						x: 0,
+						y: curY - 3,
+						width: leftW,
+						height: 6,
+						currentSize: gh
+					});
+				});
+			} else leftGroups.forEach((g, idx) => {
+				var _ref7, _g$group$size3;
+				const gw = Math.max(60, Math.round((_ref7 = (_g$group$size3 = g.group.size) !== null && _g$group$size3 !== void 0 ? _g$group$size3 : layout.areas.left.size) !== null && _ref7 !== void 0 ? _ref7 : prefWidth(g.activeDock)));
+				assignGroupBoxes("left", g, leftW, centerY, gw, centerH);
+				leftW += gw;
+				if (idx < leftGroups.length - 1) splitters.push({
+					kind: "split",
+					area: "left",
+					groupIndex: g.groupIndex,
+					orientation: "vertical",
+					x: leftW - 3,
+					y: centerY,
+					width: 6,
+					height: centerH,
+					currentSize: gw
+				});
+			});
+			splitters.push({
+				kind: "area",
+				area: "left",
+				orientation: "vertical",
+				x: leftW - 3,
+				y: centerY,
+				width: 6,
+				height: centerH,
+				currentSize: leftW
+			});
+		}
+		const rightGroups = resolveAreaVisibleGroups("right");
+		let rightW = 0;
+		if (rightGroups.length > 0) {
+			var _layout$areas$right$s;
+			if (((_layout$areas$right$s = layout.areas.right.splitOrientation) !== null && _layout$areas$right$s !== void 0 ? _layout$areas$right$s : "vertical") === "vertical") {
+				var _layout$areas$right$s2;
+				rightW = Math.max(60, Math.round((_layout$areas$right$s2 = layout.areas.right.size) !== null && _layout$areas$right$s2 !== void 0 ? _layout$areas$right$s2 : prefWidth(rightGroups[0].activeDock)));
+				const rX = W - rightW;
+				const heights = distributeGroupAxisSizes(centerH, rightGroups, "vertical");
+				let curY = centerY;
+				rightGroups.forEach((g, idx) => {
+					const gh = heights[idx];
+					assignGroupBoxes("right", g, rX, curY, rightW, gh);
+					curY += gh;
+					if (idx < rightGroups.length - 1) splitters.push({
+						kind: "split",
+						area: "right",
+						groupIndex: g.groupIndex,
+						orientation: "horizontal",
+						x: rX,
+						y: curY - 3,
+						width: rightW,
+						height: 6,
+						currentSize: gh
+					});
+				});
+			} else {
+				const gwList = rightGroups.map((g) => {
+					var _ref8, _g$group$size4;
+					return Math.max(60, Math.round((_ref8 = (_g$group$size4 = g.group.size) !== null && _g$group$size4 !== void 0 ? _g$group$size4 : layout.areas.right.size) !== null && _ref8 !== void 0 ? _ref8 : prefWidth(g.activeDock)));
+				});
+				rightW = gwList.reduce((a, b) => a + b, 0);
+				let rCurX = W - rightW;
+				rightGroups.forEach((g, idx) => {
+					const gw = gwList[idx];
+					assignGroupBoxes("right", g, rCurX, centerY, gw, centerH);
+					rCurX += gw;
+					if (idx < rightGroups.length - 1) splitters.push({
+						kind: "split",
+						area: "right",
+						groupIndex: g.groupIndex,
+						orientation: "vertical",
+						x: rCurX - 3,
+						y: centerY,
+						width: 6,
+						height: centerH,
+						currentSize: gw
+					});
+				});
+			}
+			splitters.push({
+				kind: "area",
+				area: "right",
+				orientation: "vertical",
+				x: W - rightW - 3,
+				y: centerY,
+				width: 6,
+				height: centerH,
+				currentSize: rightW
+			});
+		}
+		for (const f of (_layout$floating5 = layout.floating) !== null && _layout$floating5 !== void 0 ? _layout$floating5 : []) {
+			if (!scene.nodes[f.dockId]) continue;
+			const vis = winVis && isVisible(f.dockId);
+			dockBoxes.set(f.dockId, {
+				x: f.x,
+				y: f.y,
+				width: f.width,
+				height: f.height,
+				absX: f.x,
+				absY: f.y,
+				visible: vis,
+				windowId: winId
+			});
+			activeTabByDock.set(f.dockId, {
+				groupTabs: vis ? [f.dockId] : [],
+				activeTab: f.dockId,
+				isFloating: true,
+				area: f.lastArea
+			});
+		}
+		return {
+			dockBoxes,
+			centralBox: {
+				x: leftW,
+				y: centerY,
+				width: Math.max(0, W - leftW - rightW),
+				height: centerH
+			},
+			splitters,
+			activeTabByDock
+		};
+	}
 	//#endregion
 	//#region src/model.ts
 	/** 未转换的容器。 */
@@ -1086,7 +1965,7 @@ var VF = (function(exports) {
 		return (_ref = (_project$components$g = (_project$components$g2 = project.components.get(type)) === null || _project$components$g2 === void 0 ? void 0 : _project$components$g2.decl) !== null && _project$components$g !== void 0 ? _project$components$g : (_STANDARD_COMPONENTS$ = STANDARD_COMPONENTS.get(type)) === null || _STANDARD_COMPONENTS$ === void 0 ? void 0 : _STANDARD_COMPONENTS$.decl) !== null && _ref !== void 0 ? _ref : null;
 	}
 	/**
-	* 统一获取一个画布节点的全部直接子节点 ID（按 docks → central → statusBar → children 顺序去重）。
+	* 统一获取一个画布节点的全部直接子节点 ID（按 docks / dockLayout → central → statusBar → children 顺序去重）。
 	*/
 	function childrenOfNode(n) {
 		var _n$docks, _n$children;
@@ -1096,6 +1975,7 @@ var VF = (function(exports) {
 			if (cid && !list.includes(cid)) list.push(cid);
 		};
 		for (const cid of (_n$docks = n.docks) !== null && _n$docks !== void 0 ? _n$docks : []) add(cid);
+		for (const cid of dockIdsOfLayout(n.dockLayout)) add(cid);
 		add(n.central);
 		add(n.statusBar);
 		for (const cid of (_n$children = n.children) !== null && _n$children !== void 0 ? _n$children : []) add(cid);
@@ -1137,7 +2017,13 @@ var VF = (function(exports) {
 		if (!node) return null;
 		if (node.layout) return node.layout;
 		const kind = LAYOUT_TYPE_KINDS[node.type];
-		return kind ? { kind } : null;
+		if (kind) return { kind };
+		if (node.type === "FloatBox") return {
+			kind: "vbox",
+			padding: 8,
+			gap: 6
+		};
+		return null;
 	}
 	function paddingOf(layout) {
 		const p = layout === null || layout === void 0 ? void 0 : layout.padding;
@@ -1221,7 +2107,7 @@ var VF = (function(exports) {
 	}
 	function isPartitionedWindow(node) {
 		if (!node) return false;
-		return Boolean(node.menuBar || node.statusBar || node.central || node.docks && node.docks.length > 0);
+		return Boolean(node.menuBar || node.statusBar || node.central || node.docks && node.docks.length > 0 || node.dockLayout);
 	}
 	/**
 	* 计算一个窗口（或全部窗口）内所有节点的位置和尺寸。
@@ -1235,14 +2121,45 @@ var VF = (function(exports) {
 			return (_scene$nodes$id$props = (_scene$nodes$id = scene.nodes[id]) === null || _scene$nodes$id === void 0 || (_scene$nodes$id = _scene$nodes$id.props) === null || _scene$nodes$id === void 0 ? void 0 : _scene$nodes$id[prop]) !== null && _scene$nodes$id$props !== void 0 ? _scene$nodes$id$props : null;
 		});
 		const boxes = /* @__PURE__ */ new Map();
+		const isFloatingFloatBox = (cid) => {
+			var _ref6, _getProp, _c$props;
+			const c = scene.nodes[cid];
+			if (!c || c.type !== "FloatBox") return false;
+			return Boolean((_ref6 = (_getProp = getProp(cid, "floating")) !== null && _getProp !== void 0 ? _getProp : (_c$props = c.props) === null || _c$props === void 0 ? void 0 : _c$props.floating) !== null && _ref6 !== void 0 ? _ref6 : false);
+		};
+		const layoutFloatingFloatBox = (cid, parentBox) => {
+			var _ref7, _ref8, _getProp2, _c$props2, _ref9, _getProp3, _c$props3, _ref10, _getProp4, _c$props4, _ref11, _getProp5, _c$props5, _ref12, _getProp6, _c$props6;
+			const c = scene.nodes[cid];
+			const hdrH = Math.max(0, Number((_ref7 = (_ref8 = (_getProp2 = getProp(cid, "headerHeight")) !== null && _getProp2 !== void 0 ? _getProp2 : (_c$props2 = c.props) === null || _c$props2 === void 0 ? void 0 : _c$props2.headerHeight) !== null && _ref8 !== void 0 ? _ref8 : c.headerHeight) !== null && _ref7 !== void 0 ? _ref7 : 24));
+			const fx = Math.round(Number((_ref9 = (_getProp3 = getProp(cid, "floatX")) !== null && _getProp3 !== void 0 ? _getProp3 : (_c$props3 = c.props) === null || _c$props3 === void 0 ? void 0 : _c$props3.floatX) !== null && _ref9 !== void 0 ? _ref9 : 60));
+			const fy = Math.round(Number((_ref10 = (_getProp4 = getProp(cid, "floatY")) !== null && _getProp4 !== void 0 ? _getProp4 : (_c$props4 = c.props) === null || _c$props4 === void 0 ? void 0 : _c$props4.floatY) !== null && _ref10 !== void 0 ? _ref10 : 80));
+			const fw = Math.max(80, Math.round(Number((_ref11 = (_getProp5 = getProp(cid, "floatWidth")) !== null && _getProp5 !== void 0 ? _getProp5 : (_c$props5 = c.props) === null || _c$props5 === void 0 ? void 0 : _c$props5.floatWidth) !== null && _ref11 !== void 0 ? _ref11 : prefWidth(c))));
+			const fh = Math.max(hdrH + 20, Math.round(Number((_ref12 = (_getProp6 = getProp(cid, "floatHeight")) !== null && _getProp6 !== void 0 ? _getProp6 : (_c$props6 = c.props) === null || _c$props6 === void 0 ? void 0 : _c$props6.floatHeight) !== null && _ref12 !== void 0 ? _ref12 : prefHeight(c))));
+			const box = {
+				x: fx - parentBox.absX,
+				y: fy - parentBox.absY,
+				width: fw,
+				height: fh,
+				absX: fx,
+				absY: fy,
+				visible: parentBox.visible && isVisible(cid),
+				windowId: parentBox.windowId
+			};
+			boxes.set(cid, box);
+			layoutSubtree(cid, box);
+		};
 		const layoutSubtree = (parentId, parentBox) => {
-			var _parent$children, _parent$headerHeight;
+			var _parent$children, _parent$headerHeight, _ref13, _ref14, _getProp7, _parent$props;
 			const parent = scene.nodes[parentId];
 			if (!parent) return;
-			const children = ((_parent$children = parent.children) !== null && _parent$children !== void 0 ? _parent$children : []).filter((cid) => !boxes.has(cid) && Boolean(scene.nodes[cid]));
-			if (children.length === 0) return;
-			const headerOffset = parent.type === "Dock" ? (_parent$headerHeight = parent.headerHeight) !== null && _parent$headerHeight !== void 0 ? _parent$headerHeight : 26 : 0;
+			const rawChildren = ((_parent$children = parent.children) !== null && _parent$children !== void 0 ? _parent$children : []).filter((cid) => !boxes.has(cid) && Boolean(scene.nodes[cid]));
+			if (rawChildren.length === 0) return;
+			const headerOffset = parent.type === "Dock" ? (_parent$headerHeight = parent.headerHeight) !== null && _parent$headerHeight !== void 0 ? _parent$headerHeight : 26 : parent.type === "FloatBox" ? Math.max(0, Number((_ref13 = (_ref14 = (_getProp7 = getProp(parentId, "headerHeight")) !== null && _getProp7 !== void 0 ? _getProp7 : (_parent$props = parent.props) === null || _parent$props === void 0 ? void 0 : _parent$props.headerHeight) !== null && _ref14 !== void 0 ? _ref14 : parent.headerHeight) !== null && _ref13 !== void 0 ? _ref13 : 24)) : 0;
 			const layout = layoutOf(parent);
+			const children = [];
+			for (const cid of rawChildren) if (isFloatingFloatBox(cid)) layoutFloatingFloatBox(cid, parentBox);
+			else children.push(cid);
+			if (children.length === 0) return;
 			if (!layout) {
 				for (const cid of children) {
 					var _c$x, _c$y;
@@ -1270,8 +2187,8 @@ var VF = (function(exports) {
 			const innerW = Math.max(0, parentBox.width - padLeft - padRight);
 			const innerH = Math.max(0, parentBox.height - headerOffset - padTop - padBottom);
 			if (layout.kind === "vbox") {
-				var _ref6, _layout$gap;
-				const gap = (_ref6 = (_layout$gap = layout.gap) !== null && _layout$gap !== void 0 ? _layout$gap : layout.rowGap) !== null && _ref6 !== void 0 ? _ref6 : 0;
+				var _ref15, _layout$gap;
+				const gap = (_ref15 = (_layout$gap = layout.gap) !== null && _layout$gap !== void 0 ? _layout$gap : layout.rowGap) !== null && _ref15 !== void 0 ? _ref15 : 0;
 				const visChildren = [];
 				for (const cid of children) if (isVisible(cid)) visChildren.push(cid);
 				else {
@@ -1329,8 +2246,8 @@ var VF = (function(exports) {
 				return;
 			}
 			if (layout.kind === "hbox") {
-				var _ref7, _layout$gap2;
-				const gap = (_ref7 = (_layout$gap2 = layout.gap) !== null && _layout$gap2 !== void 0 ? _layout$gap2 : layout.columnGap) !== null && _ref7 !== void 0 ? _ref7 : 0;
+				var _ref16, _layout$gap2;
+				const gap = (_ref16 = (_layout$gap2 = layout.gap) !== null && _layout$gap2 !== void 0 ? _layout$gap2 : layout.columnGap) !== null && _ref16 !== void 0 ? _ref16 : 0;
 				const visChildren = [];
 				for (const cid of children) if (isVisible(cid)) visChildren.push(cid);
 				else {
@@ -1388,10 +2305,10 @@ var VF = (function(exports) {
 				return;
 			}
 			if (layout.kind === "grid") {
-				var _layout$columns, _ref8, _layout$columnGap, _ref9, _layout$rowGap;
+				var _layout$columns, _ref17, _layout$columnGap, _ref18, _layout$rowGap;
 				const cols = Math.max(1, (_layout$columns = layout.columns) !== null && _layout$columns !== void 0 ? _layout$columns : 2);
-				const colGap = (_ref8 = (_layout$columnGap = layout.columnGap) !== null && _layout$columnGap !== void 0 ? _layout$columnGap : layout.gap) !== null && _ref8 !== void 0 ? _ref8 : 0;
-				const rowGap = (_ref9 = (_layout$rowGap = layout.rowGap) !== null && _layout$rowGap !== void 0 ? _layout$rowGap : layout.gap) !== null && _ref9 !== void 0 ? _ref9 : 0;
+				const colGap = (_ref17 = (_layout$columnGap = layout.columnGap) !== null && _layout$columnGap !== void 0 ? _layout$columnGap : layout.gap) !== null && _ref17 !== void 0 ? _ref17 : 0;
+				const rowGap = (_ref18 = (_layout$rowGap = layout.rowGap) !== null && _layout$rowGap !== void 0 ? _layout$rowGap : layout.gap) !== null && _ref18 !== void 0 ? _ref18 : 0;
 				const items = [];
 				let autoIndex = 0;
 				for (const cid of children) {
@@ -1508,9 +2425,9 @@ var VF = (function(exports) {
 				return;
 			}
 			if (layout.kind === "form") {
-				var _ref10, _layout$columnGap2, _ref11, _layout$rowGap2, _layout$labelWidth;
-				const colGap = (_ref10 = (_layout$columnGap2 = layout.columnGap) !== null && _layout$columnGap2 !== void 0 ? _layout$columnGap2 : layout.gap) !== null && _ref10 !== void 0 ? _ref10 : 8;
-				const rowGap = (_ref11 = (_layout$rowGap2 = layout.rowGap) !== null && _layout$rowGap2 !== void 0 ? _layout$rowGap2 : layout.gap) !== null && _ref11 !== void 0 ? _ref11 : 8;
+				var _ref19, _layout$columnGap2, _ref20, _layout$rowGap2, _layout$labelWidth;
+				const colGap = (_ref19 = (_layout$columnGap2 = layout.columnGap) !== null && _layout$columnGap2 !== void 0 ? _layout$columnGap2 : layout.gap) !== null && _ref19 !== void 0 ? _ref19 : 8;
+				const rowGap = (_ref20 = (_layout$rowGap2 = layout.rowGap) !== null && _layout$rowGap2 !== void 0 ? _layout$rowGap2 : layout.gap) !== null && _ref20 !== void 0 ? _ref20 : 8;
 				const labelW = (_layout$labelWidth = layout.labelWidth) !== null && _layout$labelWidth !== void 0 ? _layout$labelWidth : 96;
 				const fieldW = Math.max(0, innerW - labelW - colGap);
 				let curY = innerY;
@@ -1556,9 +2473,9 @@ var VF = (function(exports) {
 				return;
 			}
 			if (layout.kind === "stack") {
-				var _ref12, _getProp, _parent$props, _ref13, _getProp2, _parent$props2;
-				const activeIdx = Number((_ref12 = (_getProp = getProp(parentId, "currentIndex")) !== null && _getProp !== void 0 ? _getProp : (_parent$props = parent.props) === null || _parent$props === void 0 ? void 0 : _parent$props.currentIndex) !== null && _ref12 !== void 0 ? _ref12 : 0);
-				const activePage = String((_ref13 = (_getProp2 = getProp(parentId, "currentPage")) !== null && _getProp2 !== void 0 ? _getProp2 : (_parent$props2 = parent.props) === null || _parent$props2 === void 0 ? void 0 : _parent$props2.currentPage) !== null && _ref13 !== void 0 ? _ref13 : "");
+				var _ref21, _getProp8, _parent$props2, _ref22, _getProp9, _parent$props3;
+				const activeIdx = Number((_ref21 = (_getProp8 = getProp(parentId, "currentIndex")) !== null && _getProp8 !== void 0 ? _getProp8 : (_parent$props2 = parent.props) === null || _parent$props2 === void 0 ? void 0 : _parent$props2.currentIndex) !== null && _ref21 !== void 0 ? _ref21 : 0);
+				const activePage = String((_ref22 = (_getProp9 = getProp(parentId, "currentPage")) !== null && _getProp9 !== void 0 ? _getProp9 : (_parent$props3 = parent.props) === null || _parent$props3 === void 0 ? void 0 : _parent$props3.currentPage) !== null && _ref22 !== void 0 ? _ref22 : "");
 				children.forEach((cid, idx) => {
 					const active = activePage ? cid === activePage : idx === activeIdx;
 					const box = {
@@ -1594,7 +2511,7 @@ var VF = (function(exports) {
 			};
 			boxes.set(winId, winBox);
 			if (isPartitionedWindow(winNode)) {
-				var _winNode$menuBar$heig, _winNode$docks, _winNode$children;
+				var _winNode$menuBar$heig, _options$getDockLayou;
 				const menuH = winNode.menuBar ? (_winNode$menuBar$heig = winNode.menuBar.height) !== null && _winNode$menuBar$heig !== void 0 ? _winNode$menuBar$heig : 28 : 0;
 				const statusId = winNode.statusBar;
 				const statusNode = statusId ? scene.nodes[statusId] : void 0;
@@ -1614,126 +2531,19 @@ var VF = (function(exports) {
 					boxes.set(statusId, sBox);
 					layoutSubtree(statusId, sBox);
 				}
-				const midY = menuH;
-				const midH = Math.max(0, H - menuH - statusH);
-				const dockIds = (_winNode$docks = winNode.docks) !== null && _winNode$docks !== void 0 ? _winNode$docks : ((_winNode$children = winNode.children) !== null && _winNode$children !== void 0 ? _winNode$children : []).filter((cid) => {
-					var _scene$nodes$cid;
-					return ((_scene$nodes$cid = scene.nodes[cid]) === null || _scene$nodes$cid === void 0 ? void 0 : _scene$nodes$cid.type) === "Dock";
-				});
-				const byArea = {
-					top: [],
-					bottom: [],
-					left: [],
-					right: []
-				};
-				for (const did of dockIds) {
-					var _d$dockArea;
-					const d = scene.nodes[did];
-					if (!d) continue;
-					const area = (_d$dockArea = d.dockArea) !== null && _d$dockArea !== void 0 ? _d$dockArea : "left";
-					if (isVisible(did)) byArea[area].push(did);
-					else {
-						const dBox = {
-							x: 0,
-							y: midY,
-							width: prefWidth(d),
-							height: prefHeight(d),
-							absX: 0,
-							absY: midY,
-							visible: false,
-							windowId: winId
-						};
-						boxes.set(did, dBox);
-						layoutSubtree(did, dBox);
-					}
-				}
-				let topH = 0;
-				for (const did of byArea.top) {
-					const d = scene.nodes[did];
-					const dh = prefHeight(d);
-					const dBox = {
-						x: 0,
-						y: midY + topH,
-						width: W,
-						height: dh,
-						absX: 0,
-						absY: midY + topH,
-						visible: winVis,
-						windowId: winId
-					};
+				const dockRes = computeDockWindowLayout(scene, winId, winNode, W, menuH, Math.max(0, H - menuH - statusH), winVis, isVisible, (_options$getDockLayou = options.getDockLayout) === null || _options$getDockLayou === void 0 ? void 0 : _options$getDockLayou.call(options, winId));
+				for (const [did, dBox] of dockRes.dockBoxes) {
 					boxes.set(did, dBox);
 					layoutSubtree(did, dBox);
-					topH += dh;
-				}
-				let bottomH = 0;
-				for (const did of byArea.bottom) bottomH += prefHeight(scene.nodes[did]);
-				let bCurY = midY + midH - bottomH;
-				for (const did of byArea.bottom) {
-					const d = scene.nodes[did];
-					const dh = prefHeight(d);
-					const dBox = {
-						x: 0,
-						y: bCurY,
-						width: W,
-						height: dh,
-						absX: 0,
-						absY: bCurY,
-						visible: winVis,
-						windowId: winId
-					};
-					boxes.set(did, dBox);
-					layoutSubtree(did, dBox);
-					bCurY += dh;
-				}
-				const centerY = midY + topH;
-				const centerH = Math.max(0, midH - topH - bottomH);
-				let leftW = 0;
-				for (const did of byArea.left) {
-					const d = scene.nodes[did];
-					const dw = prefWidth(d);
-					const dBox = {
-						x: leftW,
-						y: centerY,
-						width: dw,
-						height: centerH,
-						absX: leftW,
-						absY: centerY,
-						visible: winVis,
-						windowId: winId
-					};
-					boxes.set(did, dBox);
-					layoutSubtree(did, dBox);
-					leftW += dw;
-				}
-				let rightW = 0;
-				for (const did of byArea.right) rightW += prefWidth(scene.nodes[did]);
-				let rCurX = W - rightW;
-				for (const did of byArea.right) {
-					const d = scene.nodes[did];
-					const dw = prefWidth(d);
-					const dBox = {
-						x: rCurX,
-						y: centerY,
-						width: dw,
-						height: centerH,
-						absX: rCurX,
-						absY: centerY,
-						visible: winVis,
-						windowId: winId
-					};
-					boxes.set(did, dBox);
-					layoutSubtree(did, dBox);
-					rCurX += dw;
 				}
 				const centralId = winNode.central;
 				if (centralId && scene.nodes[centralId]) {
-					const cx = leftW;
-					const cy = centerY;
+					const { x: cx, y: cy, width: cw, height: ch } = dockRes.centralBox;
 					const cBox = {
 						x: cx,
 						y: cy,
-						width: Math.max(0, W - leftW - rightW),
-						height: centerH,
+						width: cw,
+						height: ch,
 						absX: cx,
 						absY: cy,
 						visible: winVis && isVisible(centralId),
@@ -2144,6 +2954,8 @@ var VF = (function(exports) {
 			_defineProperty(this, "textConditions", /* @__PURE__ */ new Map());
 			_defineProperty(this, "windows", /* @__PURE__ */ new Map());
 			_defineProperty(this, "docks", /* @__PURE__ */ new Map());
+			_defineProperty(this, "dockLayouts", /* @__PURE__ */ new Map());
+			_defineProperty(this, "floatBoxes", /* @__PURE__ */ new Map());
 			_defineProperty(this, "actionSims", /* @__PURE__ */ new Map());
 			_defineProperty(this, "runningActions", /* @__PURE__ */ new Set());
 			_defineProperty(this, "activePromises", /* @__PURE__ */ new Set());
@@ -2162,6 +2974,7 @@ var VF = (function(exports) {
 			this.textConditions.clear();
 			for (const { id, def } of allConditions(this.project.logic)) if ((def === null || def === void 0 ? void 0 : def.type) === "text") this.textConditions.set(id, def.preview === true);
 			this.windows.clear();
+			this.dockLayouts.clear();
 			for (const winId of allWindowIds(this.project.scene)) {
 				var _ref, _n$initialOpen, _n$props, _ref2, _n$modal, _n$props2;
 				const n = this.project.scene.nodes[winId];
@@ -2172,11 +2985,17 @@ var VF = (function(exports) {
 					open,
 					modal
 				});
+				if (isPartitionedWindow(n)) this.dockLayouts.set(winId, normalizeDockLayout(this.project.scene, n));
 			}
 			this.docks.clear();
+			this.floatBoxes.clear();
 			for (const [id, n] of Object.entries(this.project.scene.nodes)) {
 				var _n$props3;
 				if (n.type === "Dock") this.docks.set(id, ((_n$props3 = n.props) === null || _n$props3 === void 0 ? void 0 : _n$props3.visible) !== false);
+				if (n.type === "FloatBox") {
+					var _n$props$floating, _n$props4, _n$props5, _n$props6, _n$props7, _n$props8;
+					this.floatBoxes.set(id, _objectSpread2(_objectSpread2(_objectSpread2(_objectSpread2({ floating: Boolean((_n$props$floating = (_n$props4 = n.props) === null || _n$props4 === void 0 ? void 0 : _n$props4.floating) !== null && _n$props$floating !== void 0 ? _n$props$floating : false) }, typeof ((_n$props5 = n.props) === null || _n$props5 === void 0 ? void 0 : _n$props5.floatX) === "number" ? { floatX: n.props.floatX } : {}), typeof ((_n$props6 = n.props) === null || _n$props6 === void 0 ? void 0 : _n$props6.floatY) === "number" ? { floatY: n.props.floatY } : {}), typeof ((_n$props7 = n.props) === null || _n$props7 === void 0 ? void 0 : _n$props7.floatWidth) === "number" ? { floatWidth: n.props.floatWidth } : {}), typeof ((_n$props8 = n.props) === null || _n$props8 === void 0 ? void 0 : _n$props8.floatHeight) === "number" ? { floatHeight: n.props.floatHeight } : {}));
+				}
 			}
 			for (const [name, def] of Object.entries((_this$project$logic$a = this.project.logic.actions) !== null && _this$project$logic$a !== void 0 ? _this$project$logic$a : {})) if (!this.actionSims.has(name)) this.actionSims.set(name, {
 				mode: "real",
@@ -2207,6 +3026,141 @@ var VF = (function(exports) {
 		/** 触发 app.start，预览开始时调用一次。 */
 		start() {
 			this.dispatch(null, "app.start");
+		}
+		getDockLayout(winId = this.project.scene.root) {
+			const existing = this.dockLayouts.get(winId);
+			if (existing) return cloneDockLayout(existing);
+			return normalizeDockLayout(this.project.scene, this.project.scene.nodes[winId]);
+		}
+		setDockLayout(layout, winId = this.project.scene.root) {
+			const winNode = this.project.scene.nodes[winId];
+			const normalized = normalizeDockLayout(this.project.scene, _objectSpread2(_objectSpread2({}, winNode !== null && winNode !== void 0 ? winNode : {
+				type: "Window",
+				width: 1280,
+				height: 800
+			}), {}, { dockLayout: layout }));
+			this.dockLayouts.set(winId, normalized);
+			this.hooks.onChange();
+		}
+		dockTabify(targetDockId, dockId, winId = this.project.scene.root) {
+			const next = dockTabify(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], targetDockId, dockId);
+			this.dockLayouts.set(winId, next);
+			this.hooks.onLog({
+				title: `停靠 ${dockId}`,
+				lines: [`叠入页签组 ${targetDockId}`]
+			});
+			this.hooks.onChange();
+		}
+		dockActivateTab(dockId, winId = this.project.scene.root) {
+			const next = dockActivateTab(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], dockId);
+			this.dockLayouts.set(winId, next);
+			this.hooks.onLog({
+				title: `停靠 ${dockId}`,
+				lines: [`切换激活页签 ${dockId}`]
+			});
+			this.hooks.onChange();
+		}
+		dockFloat(dockId, rect, winId = this.project.scene.root) {
+			const next = dockFloat(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], dockId, rect);
+			this.dockLayouts.set(winId, next);
+			this.hooks.onLog({
+				title: `停靠 ${dockId}`,
+				lines: [`浮出为独立面板`]
+			});
+			this.hooks.onChange();
+		}
+		dockRestore(dockId, targetArea, winId = this.project.scene.root) {
+			const next = dockRestore(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], dockId, targetArea);
+			this.dockLayouts.set(winId, next);
+			this.hooks.onLog({
+				title: `停靠 ${dockId}`,
+				lines: [`从浮窗恢复停靠`]
+			});
+			this.hooks.onChange();
+		}
+		dockMoveToArea(dockId, area, index, winId = this.project.scene.root) {
+			const next = dockMoveToArea(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], dockId, area, index);
+			this.dockLayouts.set(winId, next);
+			this.hooks.onLog({
+				title: `停靠 ${dockId}`,
+				lines: [`吸附到停靠区 ${area}`]
+			});
+			this.hooks.onChange();
+		}
+		dockSplit(targetDockId, dockId, position = "after", orientation, winId = this.project.scene.root) {
+			const next = dockSplit(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], targetDockId, dockId, position, orientation);
+			this.dockLayouts.set(winId, next);
+			this.hooks.onLog({
+				title: `停靠 ${dockId}`,
+				lines: [`与 ${targetDockId} 并排（${position}）`]
+			});
+			this.hooks.onChange();
+		}
+		dockResizeArea(area, size, winId = this.project.scene.root) {
+			const next = dockResizeArea(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], area, size);
+			this.dockLayouts.set(winId, next);
+			this.hooks.onLog({
+				title: `停靠区 ${area}`,
+				lines: [`调整尺寸为 ${next.areas[area].size}px`]
+			});
+			this.hooks.onChange();
+		}
+		dockResizeSplit(area, groupIndex, size, winId = this.project.scene.root) {
+			const next = dockResizeSplit(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], area, groupIndex, size);
+			this.dockLayouts.set(winId, next);
+			this.hooks.onLog({
+				title: `停靠区 ${area}`,
+				lines: [`调整并排组 #${groupIndex} 尺寸为 ${Math.round(size)}px`]
+			});
+			this.hooks.onChange();
+		}
+		dockSetVisible(dockId, visible) {
+			if (!this.project.scene.nodes[dockId]) return;
+			const winId = this.windowOf(dockId);
+			if (visible) {
+				const curLayout = this.getDockLayout(winId);
+				this.dockLayouts.set(winId, dockActivateTab(curLayout, this.project.scene, this.project.scene.nodes[winId], dockId));
+			}
+			this.runBatch(`停靠面板 ${dockId}`, false, false, (batch) => {
+				var _this$project$logic$o, _dockObj$props, _batch$docks$get;
+				const dockObj = (_this$project$logic$o = this.project.logic.objects) === null || _this$project$logic$o === void 0 ? void 0 : _this$project$logic$o[dockId];
+				const visExpr = dockObj === null || dockObj === void 0 || (_dockObj$props = dockObj.props) === null || _dockObj$props === void 0 ? void 0 : _dockObj$props.visible;
+				if (typeof visExpr === "string" && findStateLeaf(this.project.logic, visExpr)) {
+					this.assign(batch, visExpr, visible);
+					return;
+				}
+				const cur = (_batch$docks$get = batch.docks.get(dockId)) !== null && _batch$docks$get !== void 0 ? _batch$docks$get : true;
+				if (cur !== visible) {
+					batch.docks.set(dockId, visible);
+					batch.lines.push(`停靠面板 ${dockId}: ${cur ? "显示 → 隐藏" : "隐藏 → 显示"}`);
+				}
+			});
+		}
+		/** 统一的停靠指令入口（供测试步骤与 Qt 侧桥接调用）。 */
+		dockOp(op, args = {}) {
+			var _args$dock, _args$target;
+			const dockId = String((_args$dock = args.dock) !== null && _args$dock !== void 0 ? _args$dock : "");
+			const targetId = String((_args$target = args.target) !== null && _args$target !== void 0 ? _args$target : "");
+			if (op === "tabify") this.dockTabify(targetId, dockId);
+			else if (op === "tab" || op === "activateTab") this.dockActivateTab(dockId);
+			else if (op === "float") this.dockFloat(dockId, _objectSpread2(_objectSpread2(_objectSpread2(_objectSpread2({}, typeof args.x === "number" ? { x: args.x } : {}), typeof args.y === "number" ? { y: args.y } : {}), typeof args.width === "number" ? { width: args.width } : {}), typeof args.height === "number" ? { height: args.height } : {}));
+			else if (op === "restore") this.dockRestore(dockId, isDockArea(args.area) ? args.area : void 0);
+			else if (op === "move") {
+				if (isDockArea(args.area)) this.dockMoveToArea(dockId, args.area, typeof args.index === "number" ? args.index : void 0);
+			} else if (op === "split") this.dockSplit(targetId, dockId, args.position === "before" ? "before" : "after", args.orientation === "horizontal" || args.orientation === "vertical" ? args.orientation : void 0);
+			else if (op === "resize" || op === "resizeArea") {
+				if (isDockArea(args.area)) {
+					var _args$size;
+					this.dockResizeArea(args.area, Number((_args$size = args.size) !== null && _args$size !== void 0 ? _args$size : 240));
+				}
+			} else if (op === "resizeSplit") {
+				if (isDockArea(args.area)) {
+					var _args$groupIndex, _args$size2;
+					this.dockResizeSplit(args.area, Number((_args$groupIndex = args.groupIndex) !== null && _args$groupIndex !== void 0 ? _args$groupIndex : 0), Number((_args$size2 = args.size) !== null && _args$size2 !== void 0 ? _args$size2 : 200));
+				}
+			} else if (op === "close") this.dockSetVisible(dockId, false);
+			else if (op === "open") this.dockSetVisible(dockId, true);
+			else if (op === "toggle") this.dockSetVisible(dockId, !this.view(dockId).visible);
 		}
 		parse(source) {
 			const key = String(source);
@@ -2323,11 +3277,11 @@ var VF = (function(exports) {
 		}
 		/** 某个节点（或菜单项）当前应有的样子：静态默认值、scene.json 的值、逻辑计算值依次覆盖。 */
 		view(id) {
-			var _this$project$logic$o2, _decl$props, _node$props, _object$props2;
+			var _this$project$logic$o3, _decl$props, _node$props, _object$props2;
 			const menuItem = findMenuItem(this.project.scene, id);
 			if (menuItem && !this.project.scene.nodes[id]) {
-				var _this$project$logic$o, _menuItem$checked, _object$props;
-				const object = (_this$project$logic$o = this.project.logic.objects) === null || _this$project$logic$o === void 0 ? void 0 : _this$project$logic$o[id];
+				var _this$project$logic$o2, _menuItem$checked, _object$props;
+				const object = (_this$project$logic$o2 = this.project.logic.objects) === null || _this$project$logic$o2 === void 0 ? void 0 : _this$project$logic$o2[id];
 				const props = {
 					text: menuItem.text,
 					checked: menuItem.dock ? this.view(menuItem.dock).visible : Boolean((_menuItem$checked = menuItem.checked) !== null && _menuItem$checked !== void 0 ? _menuItem$checked : false),
@@ -2347,16 +3301,24 @@ var VF = (function(exports) {
 			}
 			const node = this.project.scene.nodes[id];
 			const decl = node ? declFor(this.project, node.type) : null;
-			const object = (_this$project$logic$o2 = this.project.logic.objects) === null || _this$project$logic$o2 === void 0 ? void 0 : _this$project$logic$o2[id];
+			const object = (_this$project$logic$o3 = this.project.logic.objects) === null || _this$project$logic$o3 === void 0 ? void 0 : _this$project$logic$o3[id];
 			const props = {};
 			const declared = (_decl$props = decl === null || decl === void 0 ? void 0 : decl.props) !== null && _decl$props !== void 0 ? _decl$props : {};
 			for (const key of Object.keys(declared)) {
 				const value = declared[key].default;
 				if (value !== void 0) props[key] = cloneValue(value);
 			}
-			if ((node === null || node === void 0 ? void 0 : node.title) !== void 0 && (node.type === "Dock" || node.type === "Dialog")) props.title = node.title;
+			if ((node === null || node === void 0 ? void 0 : node.title) !== void 0 && (node.type === "Dock" || node.type === "Dialog" || node.type === "FloatBox")) props.title = node.title;
 			if (node === null || node === void 0 ? void 0 : node.props) {
 				for (const [k, v] of Object.entries(node.props)) if (k !== "visible") props[k] = cloneValue(v);
+			}
+			if ((node === null || node === void 0 ? void 0 : node.type) === "FloatBox" && this.floatBoxes.has(id)) {
+				const fb = this.floatBoxes.get(id);
+				props.floating = fb.floating;
+				if (fb.floatX !== void 0) props.floatX = fb.floatX;
+				if (fb.floatY !== void 0) props.floatY = fb.floatY;
+				if (fb.floatWidth !== void 0) props.floatWidth = fb.floatWidth;
+				if (fb.floatHeight !== void 0) props.floatHeight = fb.floatHeight;
 			}
 			let visible = true;
 			if (this.windows.has(id) && id !== this.project.scene.root) visible = this.windows.get(id).open;
@@ -2439,9 +3401,37 @@ var VF = (function(exports) {
 				});
 				return;
 			}
+			const node = nodeId ? scene.nodes[nodeId] : void 0;
+			if (nodeId && (node === null || node === void 0 ? void 0 : node.type) === "FloatBox") {
+				const view = this.view(nodeId);
+				if (view.visible && view.enabled) {
+					if (event === "toggle" || event === "change" && typeof value === "boolean") {
+						var _this$floatBoxes$get;
+						const cur = (_this$floatBoxes$get = this.floatBoxes.get(nodeId)) !== null && _this$floatBoxes$get !== void 0 ? _this$floatBoxes$get : { floating: Boolean(view.props.floating) };
+						const nextFloat = typeof value === "boolean" ? value : !cur.floating;
+						if (cur.floating !== nextFloat) {
+							this.floatBoxes.set(nodeId, _objectSpread2(_objectSpread2({}, cur), {}, { floating: nextFloat }));
+							this.hooks.onLog({
+								title: `${nodeId}.${event}`,
+								lines: [`浮动嵌入框 ${nodeId}: ${nextFloat ? "嵌入 → 浮动" : "浮动 → 嵌入"}`]
+							});
+							this.hooks.onChange();
+						}
+					} else if (event === "move" && value && typeof value === "object" && !Array.isArray(value)) {
+						var _this$floatBoxes$get2;
+						const cur = (_this$floatBoxes$get2 = this.floatBoxes.get(nodeId)) !== null && _this$floatBoxes$get2 !== void 0 ? _this$floatBoxes$get2 : { floating: Boolean(view.props.floating) };
+						const nx = typeof value.x === "number" ? Math.round(value.x) : cur.floatX;
+						const ny = typeof value.y === "number" ? Math.round(value.y) : cur.floatY;
+						const nw = typeof value.width === "number" ? Math.round(value.width) : cur.floatWidth;
+						const nh = typeof value.height === "number" ? Math.round(value.height) : cur.floatHeight;
+						this.floatBoxes.set(nodeId, _objectSpread2(_objectSpread2(_objectSpread2(_objectSpread2(_objectSpread2({}, cur), {}, { floating: true }, nx !== void 0 ? { floatX: nx } : {}), ny !== void 0 ? { floatY: ny } : {}), nw !== void 0 ? { floatWidth: nw } : {}), nh !== void 0 ? { floatHeight: nh } : {}));
+						this.hooks.onChange();
+					}
+				}
+			}
 			const object = nodeId ? (_logic$objects2 = logic.objects) === null || _logic$objects2 === void 0 ? void 0 : _logic$objects2[nodeId] : void 0;
 			const steps = nodeId ? object === null || object === void 0 || (_object$events2 = object.events) === null || _object$events2 === void 0 ? void 0 : _object$events2[event] : globalSteps(logic, event);
-			const bindTarget = nodeId && event === "change" && value !== void 0 ? object === null || object === void 0 ? void 0 : object.bind : void 0;
+			const bindTarget = nodeId && (event === "change" || (node === null || node === void 0 ? void 0 : node.type) === "FloatBox" && event === "toggle") && value !== void 0 ? object === null || object === void 0 ? void 0 : object.bind : void 0;
 			if (!steps && !bindTarget) return;
 			const title = nodeId ? `${nodeId}.${event}` : `全局事件 ${event}`;
 			if (nodeId) {
@@ -2461,7 +3451,6 @@ var VF = (function(exports) {
 					});
 					return;
 				}
-				const node = scene.nodes[nodeId];
 				if ((node === null || node === void 0 ? void 0 : node.type) === "SpinBox" && event === "change" && typeof value === "number" && Number.isFinite(value)) {
 					var _view$props$min, _view$props$max;
 					const min = Number((_view$props$min = view.props.min) !== null && _view$props$min !== void 0 ? _view$props$min : 0);
@@ -2491,30 +3480,38 @@ var VF = (function(exports) {
 			return scope;
 		}
 		toggleDockInBatch(batch, dockId) {
-			var _this$project$logic$o3, _dockObj$props, _batch$docks$get;
-			const dockObj = (_this$project$logic$o3 = this.project.logic.objects) === null || _this$project$logic$o3 === void 0 ? void 0 : _this$project$logic$o3[dockId];
-			const visExpr = dockObj === null || dockObj === void 0 || (_dockObj$props = dockObj.props) === null || _dockObj$props === void 0 ? void 0 : _dockObj$props.visible;
+			var _this$project$logic$o4, _dockObj$props2;
+			const dockObj = (_this$project$logic$o4 = this.project.logic.objects) === null || _this$project$logic$o4 === void 0 ? void 0 : _this$project$logic$o4[dockId];
+			const visExpr = dockObj === null || dockObj === void 0 || (_dockObj$props2 = dockObj.props) === null || _dockObj$props2 === void 0 ? void 0 : _dockObj$props2.visible;
+			let nextVis = true;
 			if (typeof visExpr === "string" && findStateLeaf(this.project.logic, visExpr)) {
-				const cur = Boolean(batch.work.get(visExpr));
-				this.assign(batch, visExpr, !cur);
-				return;
+				nextVis = !Boolean(batch.work.get(visExpr));
+				this.assign(batch, visExpr, nextVis);
+			} else {
+				var _batch$docks$get2;
+				const cur = (_batch$docks$get2 = batch.docks.get(dockId)) !== null && _batch$docks$get2 !== void 0 ? _batch$docks$get2 : true;
+				nextVis = !cur;
+				batch.docks.set(dockId, nextVis);
+				batch.lines.push(`停靠面板 ${dockId}: ${cur ? "显示 → 隐藏" : "隐藏 → 显示"}`);
 			}
-			const cur = (_batch$docks$get = batch.docks.get(dockId)) !== null && _batch$docks$get !== void 0 ? _batch$docks$get : true;
-			batch.docks.set(dockId, !cur);
-			batch.lines.push(`停靠面板 ${dockId}: ${cur ? "显示 → 隐藏" : "隐藏 → 显示"}`);
+			if (nextVis) {
+				const winId = this.windowOf(dockId);
+				const curLayout = this.getDockLayout(winId);
+				this.dockLayouts.set(winId, dockActivateTab(curLayout, this.project.scene, this.project.scene.nodes[winId], dockId));
+			}
 		}
 		/** 外部（如用户按 Esc 或点击窗口标题栏关闭按钮）关闭窗口时，将窗口开关同步回运行层。 */
 		closeWindow(id) {
 			const win = this.windows.get(id);
 			if (!win || !win.open) return;
 			this.runBatch(`关闭窗口 ${id}`, false, false, (batch) => {
-				var _this$project$logic$o4;
+				var _this$project$logic$o5;
 				batch.windows.set(id, {
 					open: false,
 					modal: win.modal
 				});
 				batch.lines.push(`关闭窗口 ${id}`);
-				const steps = (_this$project$logic$o4 = this.project.logic.objects) === null || _this$project$logic$o4 === void 0 || (_this$project$logic$o4 = _this$project$logic$o4[id]) === null || _this$project$logic$o4 === void 0 || (_this$project$logic$o4 = _this$project$logic$o4.events) === null || _this$project$logic$o4 === void 0 ? void 0 : _this$project$logic$o4["close"];
+				const steps = (_this$project$logic$o5 = this.project.logic.objects) === null || _this$project$logic$o5 === void 0 || (_this$project$logic$o5 = _this$project$logic$o5[id]) === null || _this$project$logic$o5 === void 0 || (_this$project$logic$o5 = _this$project$logic$o5.events) === null || _this$project$logic$o5 === void 0 ? void 0 : _this$project$logic$o5["close"];
 				if (steps) this.runSteps(steps, batch, 0, {});
 			});
 		}
@@ -2995,6 +3992,7 @@ var VF = (function(exports) {
 		return sorted(Object.keys(val).map((k) => [k, canonicalValue(val[k])]));
 	}
 	function dumpRuntime(runtime, scene) {
+		var _rootNode$docks$lengt, _rootNode$docks;
 		const views = [];
 		for (const id of Object.keys(scene.nodes)) {
 			if (id === scene.root) continue;
@@ -3007,6 +4005,15 @@ var VF = (function(exports) {
 			}]);
 		}
 		const stateEntries = runtime.stateSnapshot().map(([k, v]) => [k, canonicalValue(v)]);
+		const rootNode = scene.nodes[scene.root];
+		if (rootNode && (((_rootNode$docks$lengt = (_rootNode$docks = rootNode.docks) === null || _rootNode$docks === void 0 ? void 0 : _rootNode$docks.length) !== null && _rootNode$docks$lengt !== void 0 ? _rootNode$docks$lengt : 0) > 0 || rootNode.dockLayout)) {
+			const docks = canonicalValue(runtime.getDockLayout(scene.root));
+			return JSON.stringify({
+				docks,
+				state: sorted(stateEntries),
+				views: sorted(views)
+			});
+		}
 		return JSON.stringify({
 			state: sorted(stateEntries),
 			views: sorted(views)
@@ -3157,11 +4164,23 @@ var VF = (function(exports) {
 			getProp: (id, prop) => {
 				var _runtime$view$props$p;
 				return (_runtime$view$props$p = runtime.view(id).props[prop]) !== null && _runtime$view$props$p !== void 0 ? _runtime$view$props$p : null;
-			}
+			},
+			getDockLayout: (winId) => runtime.getDockLayout(winId)
 		});
 		const out = {};
 		for (const [id, box] of boxes) out[id] = box;
 		return out;
+	}
+	function dockLayout() {
+		return JSON.stringify(runtime.getDockLayout(scene.root));
+	}
+	function dockOp(op, argsJson) {
+		let args = {};
+		if (argsJson) try {
+			args = JSON.parse(argsJson);
+		} catch (_unused) {}
+		runtime.dockOp(op, args);
+		return take();
 	}
 	function dump() {
 		return dumpRuntime(runtime, scene);
@@ -3170,6 +4189,8 @@ var VF = (function(exports) {
 	exports.closeWindow = closeWindow;
 	exports.computeLayout = computeLayout;
 	exports.dispatch = dispatch;
+	exports.dockLayout = dockLayout;
+	exports.dockOp = dockOp;
 	exports.dump = dump;
 	exports.finishActionError = finishActionError;
 	exports.finishActionSuccess = finishActionSuccess;

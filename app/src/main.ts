@@ -1,5 +1,11 @@
 // 编辑器界面：素材栏、图层、设计窗口（编辑模式 / 预览模式）、文档与 YAML 页签、问题栏。
 import { isMap, parseDocument, type Document } from "yaml";
+import {
+  computeDockWindowLayout,
+  syncDockHeaderDom,
+  syncDockSplittersDom,
+  type DockPreviewCallbacks,
+} from "./dock";
 import { listDir, readText, removeFile, watchProject, writeText } from "./fs";
 import { initDocView, syncDocView, syncPreviewSelectionToTextarea } from "./docview";
 import { initLibrary, renderLibraryPalette } from "./library";
@@ -546,8 +552,66 @@ function applyViews(): void {
   const boxes = computeSceneLayout(project.scene, {
     isVisible: (nid) => runtime.view(nid).visible,
     getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
+    getDockLayout: (wid) => runtime.getDockLayout(wid),
   });
-  const rootNode = node(project.scene.root);
+  const rootId = project.scene.root;
+  const rootNode = node(rootId);
+  const stageEl = $("stage");
+
+  let dockInfoMap:
+    | Map<string, { groupTabs: string[]; activeTab: string; isFloating: boolean; area?: "left" | "right" | "top" | "bottom" }>
+    | undefined;
+  const dockCallbacks: DockPreviewCallbacks = {
+    getMode: () => mode,
+    getScene: () => project.scene,
+    getWindowSize: () => ({ width: rootNode?.width ?? 1280, height: rootNode?.height ?? 800 }),
+    getDockTitle: (did) => String(runtime.view(did).props.title ?? node(did)?.title ?? did),
+    onActivateTab: (did) => previewRuntime?.dockActivateTab(did),
+    onTabify: (targetId, did) => previewRuntime?.dockTabify(targetId, did),
+    onSplit: (targetId, did, pos, orient) => previewRuntime?.dockSplit(targetId, did, pos, orient),
+    onMoveToArea: (did, area) => previewRuntime?.dockMoveToArea(did, area),
+    onFloat: (did, rect) => previewRuntime?.dockFloat(did, rect),
+    onRestore: (did) => previewRuntime?.dockRestore(did),
+    onClose: (did) => previewRuntime?.dockSetVisible(did, false),
+    onResizeArea: (area, size) => previewRuntime?.dockResizeArea(area, size),
+    onResizeSplit: (area, idx, size) => previewRuntime?.dockResizeSplit(area, idx, size),
+  };
+
+  if (rootNode && isPartitionedWindow(rootNode)) {
+    const menuH = rootNode.menuBar ? Math.max(0, Math.round(rootNode.menuBar.height ?? 28)) : 0;
+    const statusNode = rootNode.statusBar ? project.scene.nodes[rootNode.statusBar] : undefined;
+    const statusVis = statusNode && rootNode.statusBar ? runtime.view(rootNode.statusBar).visible : false;
+    const statusH = statusNode && statusVis ? Math.round(statusNode.height ?? 28) : 0;
+    const midY = menuH;
+    const midH = Math.max(0, (rootNode.height ?? 800) - menuH - statusH);
+    const dockRes = computeDockWindowLayout(
+      project.scene,
+      rootId,
+      rootNode,
+      rootNode.width ?? 1280,
+      midY,
+      midH,
+      true,
+      (nid) => runtime.view(nid).visible,
+      runtime.getDockLayout(rootId),
+    );
+    dockInfoMap = dockRes.activeTabByDock;
+    syncDockSplittersDom(stageEl, dockRes.splitters, dockCallbacks);
+  }
+
+  if (rootNode?.menuBar) {
+    for (const menu of rootNode.menuBar.menus ?? []) {
+      for (const item of menu.items ?? []) {
+        const btn = stageEl.querySelector<HTMLButtonElement>(`[data-vf-menu-item="${item.id}"]`);
+        if (btn) {
+          const mView = runtime.view(item.id);
+          const prefix = item.checkable || item.dock ? (mView.props.checked ? "✓ " : "  ") : "";
+          btn.textContent = prefix + String(mView.props.text ?? item.text);
+        }
+      }
+    }
+  }
+
   for (const [id, entry] of mounted) {
     const view = runtime.view(id);
     const n = node(id);
@@ -586,8 +650,14 @@ function applyViews(): void {
     entry.wrapper.toggleAttribute("data-vf-disabled", !view.enabled);
     const type = n?.type;
     if (type === "Dock") {
-      const header = entry.wrapper.querySelector(".vf-dock-header");
-      if (header) header.textContent = String(view.props.title ?? n?.title ?? id);
+      const header = entry.wrapper.querySelector<HTMLElement>(".vf-dock-header");
+      const info = dockInfoMap?.get(id);
+      if (header) {
+        syncDockHeaderDom(entry.wrapper, header, id, n?.headerHeight ?? 26, info, stageEl, dockCallbacks);
+      }
+      entry.wrapper.style.zIndex = info?.isFloating ? "30" : "";
+    } else if (type === "FloatBox") {
+      entry.wrapper.style.zIndex = view.props.floating ? "35" : "";
     }
     if (type === "Shape" || type === "Line") {
       paintGraphic(id, entry, view.props);

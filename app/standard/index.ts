@@ -1,10 +1,11 @@
-// 工具自带的 8 种标准控件：文字、按钮、输入框、数字框、下拉框、复选框、列表、分隔线。
+// 工具自带的标准控件与标准容器：文字、按钮、输入框、数字框、下拉框、复选框、列表、分隔线、浮动嵌入框。
 // 每种包含共用声明（component.json）、网页实现（index.js / style.css）和对应的 Qt 映射。
 import type { Value } from "../src/expr.ts";
 import type { ComponentCreate, ComponentDecl, LoadedComponent } from "../src/model.ts";
 import buttonDecl from "./Button/component.json" with { type: "json" };
 import checkBoxDecl from "./CheckBox/component.json" with { type: "json" };
 import comboBoxDecl from "./ComboBox/component.json" with { type: "json" };
+import floatBoxDecl from "./FloatBox/component.json" with { type: "json" };
 import labelDecl from "./Label/component.json" with { type: "json" };
 import listDecl from "./List/component.json" with { type: "json" };
 import separatorDecl from "./Separator/component.json" with { type: "json" };
@@ -206,6 +207,79 @@ const createSeparator: ComponentCreate = (el, { props }) => {
   return { update, destroy: () => line.remove() };
 };
 
+const createFloatBox: ComponentCreate = (el, { props, emit, mode }) => {
+  const root = document.createElement("div");
+  root.className = "vf-std-floatbox";
+  const header = document.createElement("div");
+  header.className = "vf-std-floatbox-header";
+  const title = document.createElement("span");
+  title.className = "vf-std-floatbox-title";
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.className = "vf-std-floatbox-toggle";
+  header.append(title, toggleBtn);
+  const body = document.createElement("div");
+  body.className = "vf-std-floatbox-body";
+  root.append(header, body);
+  el.append(root);
+
+  let current = props;
+
+  toggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (current.enabled === false) return;
+    const next = !Boolean(current.floating);
+    emit("toggle", next);
+    emit("change", next);
+  });
+
+  header.addEventListener("pointerdown", (e) => {
+    if (mode !== "preview" || current.enabled === false) return;
+    if (e.button !== 0 || e.target === toggleBtn) return;
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const baseX = Number(current.floatX ?? 60);
+    const baseY = Number(current.floatY ?? 80);
+    let moved = false;
+    const onMove = (me: PointerEvent) => {
+      const dx = Math.round(me.clientX - startX);
+      const dy = Math.round(me.clientY - startY);
+      if (!moved && Math.hypot(dx, dy) >= 4) {
+        moved = true;
+        if (!current.floating) {
+          emit("toggle", true);
+          emit("change", true);
+        }
+      }
+      if (moved) {
+        emit("move", { x: Math.max(0, baseX + dx), y: Math.max(0, baseY + dy) });
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+
+  const update = (next: Record<string, Value>) => {
+    current = next;
+    const floating = Boolean(next.floating);
+    const hdrH = Number(next.headerHeight ?? 24);
+    header.style.height = `${hdrH}px`;
+    root.dataset.floating = String(floating);
+    root.dataset.disabled = String(next.enabled === false);
+    title.textContent = String(next.title ?? "浮动嵌入框");
+    toggleBtn.textContent = floating ? "嵌入" : "浮动";
+    toggleBtn.title = floating ? "嵌入回原布局" : "脱离布局浮动";
+    toggleBtn.disabled = next.enabled === false;
+  };
+  update(props);
+  return { update, destroy: () => root.remove() };
+};
+
 export const STANDARD_COMPONENT_LIST: StandardComponent[] = [
   {
     decl: labelDecl as ComponentDecl,
@@ -285,6 +359,18 @@ export const STANDARD_COMPONENT_LIST: StandardComponent[] = [
     styleText: `.vf-std-separator { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
 .vf-std-separator::after { content: ""; display: block; width: 100%; height: 1px; background: var(--color-border, #e2e8f0); }
 .vf-std-separator[data-orientation="vertical"]::after { width: 1px; height: 100%; }`,
+  },
+  {
+    decl: floatBoxDecl as ComponentDecl,
+    folder: "FloatBox",
+    create: createFloatBox,
+    styleText: `.vf-std-floatbox { box-sizing: border-box; display: flex; flex-direction: column; width: 100%; height: 100%; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); pointer-events: none; overflow: hidden; }
+.vf-std-floatbox[data-floating="true"] { border-color: var(--color-primary, #2563eb); box-shadow: 0 12px 28px rgba(15, 23, 42, 0.35); }
+.vf-std-floatbox-header { box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 8px; height: 24px; background: rgba(148, 163, 184, 0.14); border-bottom: 1px solid var(--color-border, #cbd5e1); color: var(--color-text, #1e293b); font-size: 12px; font-weight: 600; user-select: none; pointer-events: auto; cursor: grab; }
+.vf-std-floatbox-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vf-std-floatbox-toggle { padding: 1px 6px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; line-height: 1.3; cursor: pointer; }
+.vf-std-floatbox-toggle:hover:not(:disabled) { border-color: var(--color-primary, #2563eb); color: var(--color-primary, #2563eb); }
+.vf-std-floatbox-body { flex: 1; min-height: 0; pointer-events: none; }`,
   },
 ];
 

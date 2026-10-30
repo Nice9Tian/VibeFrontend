@@ -198,6 +198,7 @@ function buildHtmlPage(): string {
         rootSize,
         isVisible: (nid) => runtime.view(nid).visible,
         getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
+        getDockLayout: (wid) => runtime.getDockLayout(wid),
       });
       for (const [id, entry] of mounted) {
         const view = runtime.view(id);

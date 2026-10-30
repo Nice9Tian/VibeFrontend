@@ -18,8 +18,9 @@ class Ui;
 //   type:控件ID:文字         在控件里逐个字符输入
 //   input:控件ID:值          直接输入完整文本或数字（TextInput / SpinBox）
 //   select:控件ID:值或下标   在下拉框或列表中选择某一项（ComboBox / List）
-//   toggle:控件ID            切换复选框或可勾选按钮（CheckBox / Button）
+//   toggle:控件ID            切换复选框、可勾选按钮或浮动嵌入框（CheckBox / Button / FloatBox）
 //   close:窗口ID             模拟用户按 Esc 或点标题栏关闭按钮关闭对话框（QDialog::reject）
+//   dock:动作:参数...        执行停靠面板操作（tabify / tab / float / restore / move / split / resize / resizeSplit / close / open）
 //   request:事件名[:JSON]    触发业务发给界面的请求事件
 //   mock:动作名:模式[:毫秒]  切换动作模拟方式（real / success / error）及可选延迟毫秒数
 //   resize:宽x高             调整主窗口尺寸

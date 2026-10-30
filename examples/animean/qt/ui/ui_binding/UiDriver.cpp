@@ -58,7 +58,8 @@ QString toText(const QJsonValue &value)
 // 逻辑认为各控件应有的样子，和各控件实际的样子，逐项对照
 QStringList compare(Ui &ui)
 {
-    const QJsonObject views = QJsonDocument::fromJson(ui.stateDump().toUtf8()).object().value(QStringLiteral("views")).toObject();
+    const QJsonObject stateRoot = QJsonDocument::fromJson(ui.stateDump().toUtf8()).object();
+    const QJsonObject views = stateRoot.value(QStringLiteral("views")).toObject();
     const QJsonObject widgets = QJsonDocument::fromJson(ui.widgetDump().toUtf8()).object();
     QStringList lines;
     for (auto it = widgets.begin(); it != widgets.end(); ++it) {
@@ -77,6 +78,14 @@ QStringList compare(Ui &ui)
                 lines.append(QStringLiteral("check MISMATCH %1.props.%2 wanted=%3 actual=%4")
                                  .arg(it.key(), prop.key(), toText(wantedProps.value(prop.key())), toText(prop.value())));
             }
+        }
+    }
+    if (stateRoot.contains(QStringLiteral("docks"))) {
+        const QJsonObject wantedDocks = stateRoot.value(QStringLiteral("docks")).toObject();
+        const QJsonObject actualDocks = QJsonDocument::fromJson(ui.dockDump().toUtf8()).object();
+        if (wantedDocks != actualDocks) {
+            lines.append(QStringLiteral("check MISMATCH docks wanted=%1 actual=%2")
+                             .arg(toText(wantedDocks), toText(actualDocks)));
         }
     }
     if (lines.isEmpty())
@@ -144,6 +153,112 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             const bool saved = ui.window()->grab().save(file);
             output.append(QStringLiteral("shot %1 %2").arg(saved ? QStringLiteral("saved") : QStringLiteral("FAILED"), file));
             continue;
+        }
+        if (verb == QLatin1String("dock")) {
+            const QString op = id;
+            const QString arg1 = step.section(QLatin1Char(':'), 2, 2);
+            const QString arg2 = step.section(QLatin1Char(':'), 3, 3);
+            const QString arg3 = step.section(QLatin1Char(':'), 4, 4);
+            const QString arg4 = step.section(QLatin1Char(':'), 5, 5);
+            QJsonObject args;
+            if (op == QLatin1String("tabify")) {
+                args.insert(QStringLiteral("target"), arg1);
+                args.insert(QStringLiteral("dock"), arg2);
+            } else if (op == QLatin1String("tab") || op == QLatin1String("activateTab")) {
+                if (auto *tabBtn = ui.window()->findChild<QPushButton *>(QStringLiteral("vf_dock_tab_") + arg1)) {
+                    if (!tabBtn->isHidden()) {
+                        click(tabBtn);
+                        QApplication::processEvents();
+                        continue;
+                    }
+                }
+                args.insert(QStringLiteral("dock"), arg1);
+            } else if (op == QLatin1String("float")) {
+                args.insert(QStringLiteral("dock"), arg1);
+                if (!arg2.isEmpty()) {
+                    const QStringList parts = arg2.split(QLatin1Char(','));
+                    if (parts.size() >= 2) {
+                        args.insert(QStringLiteral("x"), parts.at(0).toInt());
+                        args.insert(QStringLiteral("y"), parts.at(1).toInt());
+                    }
+                    if (parts.size() >= 4) {
+                        args.insert(QStringLiteral("width"), parts.at(2).toInt());
+                        args.insert(QStringLiteral("height"), parts.at(3).toInt());
+                    }
+                }
+            } else if (op == QLatin1String("restore")) {
+                if (arg2.isEmpty()) {
+                    if (auto *resBtn = ui.window()->findChild<QPushButton *>(QStringLiteral("vf_dock_restore_") + arg1)) {
+                        if (!resBtn->isHidden()) {
+                            click(resBtn);
+                            QApplication::processEvents();
+                            continue;
+                        }
+                    }
+                }
+                args.insert(QStringLiteral("dock"), arg1);
+                if (!arg2.isEmpty())
+                    args.insert(QStringLiteral("area"), arg2);
+            } else if (op == QLatin1String("move")) {
+                args.insert(QStringLiteral("dock"), arg1);
+                args.insert(QStringLiteral("area"), arg2);
+                if (!arg3.isEmpty())
+                    args.insert(QStringLiteral("index"), arg3.toInt());
+            } else if (op == QLatin1String("split")) {
+                args.insert(QStringLiteral("target"), arg1);
+                args.insert(QStringLiteral("dock"), arg2);
+                if (!arg3.isEmpty())
+                    args.insert(QStringLiteral("position"), arg3);
+                if (!arg4.isEmpty())
+                    args.insert(QStringLiteral("orientation"), arg4);
+            } else if (op == QLatin1String("resize") || op == QLatin1String("resizeArea")) {
+                args.insert(QStringLiteral("area"), arg1);
+                args.insert(QStringLiteral("size"), arg2.toInt());
+            } else if (op == QLatin1String("resizeSplit")) {
+                args.insert(QStringLiteral("area"), arg1);
+                args.insert(QStringLiteral("groupIndex"), arg2.toInt());
+                args.insert(QStringLiteral("size"), arg3.toInt());
+            } else if (op == QLatin1String("close")) {
+                if (auto *closeBtn = ui.window()->findChild<QPushButton *>(QStringLiteral("vf_dock_close_") + arg1)) {
+                    if (!closeBtn->isHidden()) {
+                        click(closeBtn);
+                        QApplication::processEvents();
+                        continue;
+                    }
+                }
+                args.insert(QStringLiteral("dock"), arg1);
+            } else if (op == QLatin1String("open") || op == QLatin1String("toggle")) {
+                args.insert(QStringLiteral("dock"), arg1);
+            }
+            const QString jsonArgs = QString::fromUtf8(QJsonDocument(args).toJson(QJsonDocument::Compact));
+            ui.runDockOp(op, jsonArgs);
+            QApplication::processEvents();
+            continue;
+        }
+        if (verb == QLatin1String("floatbox")) {
+            const QString op = id;
+            const QString fbId = step.section(QLatin1Char(':'), 2, 2);
+            const QString coordStr = step.section(QLatin1Char(':'), 3, 3);
+            if (op == QLatin1String("move")) {
+                QWidget *fbWidget = ui.window()->findChild<QWidget *>(fbId);
+                QWidget *hdrWidget = ui.window()->findChild<QWidget *>(QStringLiteral("vf_floatbox_hdr_") + fbId);
+                const QStringList parts = coordStr.split(QLatin1Char(','));
+                if (fbWidget && hdrWidget && parts.size() >= 2) {
+                    const int targetX = parts.at(0).toInt();
+                    const int targetY = parts.at(1).toInt();
+                    const QPoint startGlobal = hdrWidget->mapToGlobal(hdrWidget->rect().center());
+                    const QPoint delta(targetX - fbWidget->x(), targetY - fbWidget->y());
+                    const QPoint endGlobal = startGlobal + delta;
+                    QMouseEvent press(QEvent::MouseButtonPress, hdrWidget->rect().center(), startGlobal, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                    QApplication::sendEvent(hdrWidget, &press);
+                    QMouseEvent move(QEvent::MouseMove, hdrWidget->rect().center() + delta, endGlobal, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                    QApplication::sendEvent(hdrWidget, &move);
+                    QMouseEvent release(QEvent::MouseButtonRelease, hdrWidget->rect().center() + delta, endGlobal, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                    QApplication::sendEvent(hdrWidget, &release);
+                    QApplication::processEvents();
+                    continue;
+                }
+            }
         }
 
         QWidget *widget = ui.window()->findChild<QWidget *>(id);
@@ -224,6 +339,8 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             } else if (auto *btn = qobject_cast<QPushButton *>(widget)) {
                 if (btn->isCheckable())
                     btn->toggle();
+            } else if (auto *fbToggle = widget->findChild<QPushButton *>(QStringLiteral("vf_floatbox_toggle_") + id)) {
+                click(fbToggle);
             }
         } else {
             output.append(QStringLiteral("error 不认识的步骤 %1").arg(step));

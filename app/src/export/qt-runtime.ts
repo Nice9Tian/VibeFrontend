@@ -189,10 +189,28 @@ export function computeLayout(width: number, height: number): Record<string, { x
     rootSize: { width, height },
     isVisible: (id) => runtime.view(id).visible,
     getProp: (id, prop) => runtime.view(id).props[prop] ?? null,
+    getDockLayout: (winId) => runtime.getDockLayout(winId),
   });
   const out: Record<string, { x: number; y: number; width: number; height: number; absX: number; absY: number; visible: boolean; windowId: string }> = {};
   for (const [id, box] of boxes) out[id] = box;
   return out;
+}
+
+export function dockLayout(): string {
+  return JSON.stringify(runtime.getDockLayout(scene.root));
+}
+
+export function dockOp(op: string, argsJson: string): OutgoingEvent[] {
+  let args: Record<string, Value> = {};
+  if (argsJson) {
+    try {
+      args = JSON.parse(argsJson) as Record<string, Value>;
+    } catch {
+      // 忽略格式错误
+    }
+  }
+  runtime.dockOp(op, args);
+  return take();
 }
 
 export function dump(): string {

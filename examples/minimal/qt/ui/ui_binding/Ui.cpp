@@ -8,27 +8,34 @@
 #include <QAbstractAnimation>
 #include <QAction>
 #include <QApplication>
+#include <QBoxLayout>
 #include <QComboBox>
 #include <QDialog>
 #include <QDockWidget>
 #include <QEvent>
 #include <QFile>
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QHash>
 #include <QJSEngine>
 #include <QJSValue>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QLabel>
 #include <QListWidget>
 #include <QMainWindow>
+#include <QMap>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMetaMethod>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QPushButton>
+#include <QSet>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QStatusBar>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -111,6 +118,45 @@ QLabel *addPlaceholder(QFrame *frame, const QString &text, QVBoxLayout **layoutO
     return label;
 }
 
+struct DockEntry
+{
+    QString id;
+    QDockWidget *dock = nullptr;
+    QWidget *header = nullptr;
+    QWidget *body = nullptr;
+    QString defaultArea;
+    int headerHeight = 26;
+};
+
+struct FloatBoxEntry
+{
+    QString id;
+    QFrame *frame = nullptr;
+    QWidget *header = nullptr;
+    QWidget *body = nullptr;
+    QLabel *titleLabel = nullptr;
+    QPushButton *toggleBtn = nullptr;
+    QWidget *origParent = nullptr;
+    QBoxLayout *origLayout = nullptr;
+    int origIndex = -1;
+    int headerHeight = 24;
+    int designWidth = 200;
+    int designHeight = 120;
+    QSizePolicy origSizePolicy;
+    bool isFloating = false;
+};
+
+Qt::DockWidgetArea qtAreaFor(const QString &area)
+{
+    if (area == QLatin1String("right"))
+        return Qt::RightDockWidgetArea;
+    if (area == QLatin1String("top"))
+        return Qt::TopDockWidgetArea;
+    if (area == QLatin1String("bottom"))
+        return Qt::BottomDockWidgetArea;
+    return Qt::LeftDockWidgetArea;
+}
+
 } // namespace
 
 struct Ui::Private
@@ -125,12 +171,20 @@ struct Ui::Private
     QList<Control> controls;          // 第 0 个是窗口本身
     QList<QWidget *> dialogs;         // 弹出窗口与模态对话框
     QList<QPair<QString, QAction *>> menuActions;
+    QMap<QString, DockEntry> docks;
+    QSet<QString> inactiveTabDocks;
+    QList<FloatBoxEntry> floatBoxes;
+    QHash<QObject *, QString> floatBoxHeaderIds;
+    QString draggingFloatBoxId;
+    QPoint dragStartGlobal;
+    QPoint dragStartBoxPos;
     QStatusBar *statusBar = nullptr;
     QWidget *statusBarControl = nullptr;
     QHash<QObject *, int> byWidget;
     int pressed = -1;                 // 鼠标左键是在哪个控件上按下的
     bool doubleClick = false;
     bool started = false;             // app.start 触发之前，显示和隐藏不播放效果
+    bool applyingLayout = false;
     // 界面销毁后，还没放完的效果再回调时靠它知道不能再碰界面
     std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 
@@ -138,6 +192,10 @@ struct Ui::Private
     int add(const QString &id, QWidget *widget, QList<QPair<QString, QByteArray>> props = {}, int effect = -1);
     int addExternal(const QString &id, QFrame *frame, const QString &text);
     void addMenuAction(const QString &id, QAction *action);
+    void registerDock(const QString &id, QDockWidget *dock, QWidget *header, QWidget *body, const QString &defaultArea, int headerHeight);
+    void registerFloatBox(const QString &id, QFrame *frame, QWidget *header, QWidget *body, int headerHeight, int designWidth, int designHeight);
+    void applyDockLayout(const QJSValue &views);
+    void applyFloatBoxes(const QJSValue &views);
     int controlAt(const QPoint &globalPos) const;
 
     void dispatch(const QString &control, const QString &event, const QJSValue &value = QJSValue());
@@ -188,6 +246,10 @@ Ui::~Ui()
     d->byWidget.clear();
     d->dialogs.clear();
     d->menuActions.clear();
+    d->docks.clear();
+    d->inactiveTabDocks.clear();
+    d->floatBoxes.clear();
+    d->floatBoxHeaderIds.clear();
     d->controls.clear();
     d->statusBar = nullptr;
     d->statusBarControl = nullptr;
@@ -248,6 +310,8 @@ QString Ui::layoutDump() const
     QJsonObject all;
     for (int index = 1; index < d->controls.size(); ++index) {
         const Control &control = d->controls.at(index);
+        if (d->inactiveTabDocks.contains(control.id))
+            continue;
         QWidget *w = control.widget;
         if (!w || w->isHidden())
             continue;
@@ -274,6 +338,63 @@ QString Ui::layoutDump() const
     return QString::fromUtf8(QJsonDocument(all).toJson(QJsonDocument::Compact));
 }
 
+QString Ui::dockDump() const
+{
+    const QString rawJson = d->call("dockLayout").toString();
+    QJsonObject rootObj = QJsonDocument::fromJson(rawJson.toUtf8()).object();
+    QJsonObject areasObj = rootObj.value(QStringLiteral("areas")).toObject();
+    for (const QString &areaKey : { QStringLiteral("top"), QStringLiteral("bottom"), QStringLiteral("left"), QStringLiteral("right") }) {
+        QJsonObject areaSpec = areasObj.value(areaKey).toObject();
+        QJsonArray groups = areaSpec.value(QStringLiteral("groups")).toArray();
+        for (int gi = 0; gi < groups.size(); ++gi) {
+            QJsonObject gObj = groups.at(gi).toObject();
+            const QJsonArray tabs = gObj.value(QStringLiteral("tabs")).toArray();
+            QString actualActive;
+            for (const QJsonValue &tv : tabs) {
+                const QString tid = tv.toString();
+                if (!d->docks.contains(tid))
+                    continue;
+                const DockEntry &entry = d->docks.value(tid);
+                if (!entry.dock->isHidden() && !entry.body->isHidden() && !entry.dock->property("vfFloating").toBool()) {
+                    actualActive = tid;
+                    const Qt::DockWidgetArea actualArea = d->window.dockWidgetArea(entry.dock);
+                    if (actualArea != qtAreaFor(areaKey))
+                        gObj.insert(QStringLiteral("areaMismatch"), int(actualArea));
+                }
+            }
+            if (!actualActive.isEmpty() && gObj.value(QStringLiteral("active")).toString() != actualActive) {
+                const QString wantedActive = gObj.value(QStringLiteral("active")).toString();
+                if (d->docks.contains(wantedActive) && !d->docks.value(wantedActive).dock->isHidden())
+                    gObj.insert(QStringLiteral("active"), actualActive);
+            }
+            groups[gi] = gObj;
+        }
+        areaSpec.insert(QStringLiteral("groups"), groups);
+        areasObj.insert(areaKey, areaSpec);
+    }
+    rootObj.insert(QStringLiteral("areas"), areasObj);
+
+    QJsonArray floatingArr = rootObj.value(QStringLiteral("floating")).toArray();
+    for (int fi = 0; fi < floatingArr.size(); ++fi) {
+        QJsonObject fObj = floatingArr.at(fi).toObject();
+        const QString did = fObj.value(QStringLiteral("dockId")).toString();
+        if (d->docks.contains(did)) {
+            const DockEntry &entry = d->docks.value(did);
+            if (!entry.dock->property("vfFloating").toBool()) {
+                fObj.insert(QStringLiteral("floatingMismatch"), true);
+            } else if (!entry.dock->isHidden()) {
+                fObj.insert(QStringLiteral("x"), entry.dock->x());
+                fObj.insert(QStringLiteral("y"), entry.dock->y());
+                fObj.insert(QStringLiteral("width"), entry.dock->width());
+                fObj.insert(QStringLiteral("height"), entry.dock->height());
+            }
+        }
+        floatingArr[fi] = fObj;
+    }
+    rootObj.insert(QStringLiteral("floating"), floatingArr);
+    return QString::fromUtf8(QJsonDocument(rootObj).toJson(QJsonDocument::Compact));
+}
+
 void Ui::triggerRequest(const QString &name, const QString &jsonArgs)
 {
     QJSValue args = d->engine.newObject();
@@ -289,6 +410,11 @@ void Ui::setActionSimulation(const QString &name, const QString &mode, int delay
     d->call("setActionSim", { name, mode, delayMs });
 }
 
+void Ui::runDockOp(const QString &op, const QString &jsonArgs)
+{
+    d->drain(d->call("dockOp", { op, jsonArgs }));
+}
+
 // ---- 鼠标事件 ----
 //
 // 和工具里的规则相同：每个控件都有 click、dblclick、mousedown、mouseup、mouseenter、mouseleave；
@@ -301,6 +427,44 @@ bool Ui::eventFilter(QObject *watched, QEvent *event)
         return false;
     }
 
+    if (watched == &d->window && event->type() == QEvent::Resize && d->started && !d->applyingLayout) {
+        d->applyingLayout = true;
+        const QJSValue views = d->call("views");
+        d->applyDockLayout(views);
+        d->applyFloatBoxes(views);
+        d->syncStatusBar();
+        d->applyingLayout = false;
+    }
+
+    if (d->floatBoxHeaderIds.contains(watched)) {
+        const QString fbId = d->floatBoxHeaderIds.value(watched);
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto *mouse = static_cast<QMouseEvent *>(event);
+            if (mouse->button() == Qt::LeftButton) {
+                for (const FloatBoxEntry &fb : d->floatBoxes) {
+                    if (fb.id == fbId && fb.isFloating) {
+                        d->draggingFloatBoxId = fbId;
+                        d->dragStartGlobal = mouse->globalPosition().toPoint();
+                        d->dragStartBoxPos = fb.frame->pos();
+                        break;
+                    }
+                }
+            }
+        } else if (event->type() == QEvent::MouseMove && d->draggingFloatBoxId == fbId) {
+            auto *mouse = static_cast<QMouseEvent *>(event);
+            const QPoint delta = mouse->globalPosition().toPoint() - d->dragStartGlobal;
+            const int nx = qMax(0, d->dragStartBoxPos.x() + delta.x());
+            const int ny = qMax(0, d->dragStartBoxPos.y() + delta.y());
+            QJSValue moveObj = d->engine.newObject();
+            moveObj.setProperty(QStringLiteral("x"), nx);
+            moveObj.setProperty(QStringLiteral("y"), ny);
+            d->dispatch(fbId, QStringLiteral("move"), moveObj);
+        } else if (event->type() == QEvent::MouseButtonRelease && d->draggingFloatBoxId == fbId) {
+            d->draggingFloatBoxId.clear();
+        }
+        return false;
+    }
+
     const int index = d->byWidget.value(watched, -1);
     if (index < 0)
         return false;
@@ -308,8 +472,14 @@ bool Ui::eventFilter(QObject *watched, QEvent *event)
 
     switch (event->type()) {
     case QEvent::Resize:
-        if (watched == &d->window)
+        if (watched == &d->window) {
             d->syncStatusBar();
+            if (!d->docks.isEmpty() || !d->floatBoxes.isEmpty()) {
+                const QJSValue v = d->call("views");
+                d->applyDockLayout(v);
+                d->applyFloatBoxes(v);
+            }
+        }
         break;
     case QEvent::Close:
         if (index > 0 && d->dialogs.contains(d->controls.at(index).widget))
@@ -411,6 +581,339 @@ void Ui::Private::addMenuAction(const QString &id, QAction *action)
         dispatch(id, QStringLiteral("click"));
         dispatch(QString(), QStringLiteral("window.click"));
     });
+}
+
+void Ui::Private::registerDock(const QString &id, QDockWidget *dock, QWidget *header, QWidget *body, const QString &defaultArea, int headerHeight)
+{
+    DockEntry entry;
+    entry.id = id;
+    entry.dock = dock;
+    entry.header = header;
+    entry.body = body;
+    entry.defaultArea = defaultArea;
+    entry.headerHeight = headerHeight;
+    auto *hLay = new QHBoxLayout(header);
+    hLay->setContentsMargins(6, 0, 4, 0);
+    hLay->setSpacing(4);
+    dock->setProperty("vfArea", defaultArea);
+    dock->setProperty("vfFloating", false);
+    docks.insert(id, entry);
+}
+
+void Ui::Private::registerFloatBox(const QString &id, QFrame *frame, QWidget *header, QWidget *body, int headerHeight, int designWidth, int designHeight)
+{
+    FloatBoxEntry fb;
+    fb.id = id;
+    fb.frame = frame;
+    fb.header = header;
+    fb.body = body;
+    fb.origParent = frame->parentWidget();
+    fb.origLayout = fb.origParent ? qobject_cast<QBoxLayout *>(fb.origParent->layout()) : nullptr;
+    fb.origIndex = fb.origLayout ? fb.origLayout->indexOf(frame) : -1;
+    fb.headerHeight = headerHeight;
+    fb.designWidth = designWidth;
+    fb.designHeight = designHeight;
+    fb.origSizePolicy = frame->sizePolicy();
+
+    auto *hLay = new QHBoxLayout(header);
+    hLay->setContentsMargins(8, 0, 6, 0);
+    hLay->setSpacing(6);
+    fb.titleLabel = new QLabel(id, header);
+    fb.titleLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    fb.toggleBtn = new QPushButton(QStringLiteral("浮出"), header);
+    fb.toggleBtn->setObjectName(QStringLiteral("vf_floatbox_toggle_") + id);
+    fb.toggleBtn->setFixedHeight(qMax(16, headerHeight - 6));
+    hLay->addWidget(fb.titleLabel, 1);
+    hLay->addWidget(fb.toggleBtn, 0);
+
+    QObject::connect(fb.toggleBtn, &QPushButton::clicked, q, [this, id] {
+        dispatch(id, QStringLiteral("toggle"));
+        const QJSValue v = call("views").property(id).property(QStringLiteral("props")).property(QStringLiteral("floating"));
+        dispatch(id, QStringLiteral("change"), v);
+    });
+
+    header->setObjectName(QStringLiteral("vf_floatbox_hdr_") + id);
+    header->installEventFilter(q);
+    floatBoxHeaderIds.insert(header, id);
+    floatBoxes.append(fb);
+}
+
+void Ui::Private::applyDockLayout(const QJSValue &views)
+{
+    if (docks.isEmpty())
+        return;
+
+    const QString dockJson = call("dockLayout").toString();
+    const QJsonObject layoutObj = QJsonDocument::fromJson(dockJson.toUtf8()).object();
+    const QJsonObject areasObj = layoutObj.value(QStringLiteral("areas")).toObject();
+    const QJSValue boxesObj = call("computeLayout", { window.width(), window.height() });
+
+    for (auto it = docks.begin(); it != docks.end(); ++it)
+        window.removeDockWidget(it->dock);
+    inactiveTabDocks.clear();
+
+    auto populateHeader = [this, &views](DockEntry &entry, const QStringList &visibleTabs, const QString &activeId, bool isFloating) {
+        if (QLayout *lay = entry.header->layout()) {
+            while (QLayoutItem *item = lay->takeAt(0)) {
+                if (QWidget *w = item->widget())
+                    delete w;
+                delete item;
+            }
+            auto *hLay = static_cast<QHBoxLayout *>(lay);
+            for (const QString &tid : visibleTabs) {
+                QString title = views.property(tid).property(QStringLiteral("props")).property(QStringLiteral("title")).toString();
+                if (title.isEmpty())
+                    title = tid;
+                auto *tabBtn = new QPushButton(title, entry.header);
+                tabBtn->setObjectName(QStringLiteral("vf_dock_tab_") + tid);
+                tabBtn->setFlat(true);
+                const QString tabId = tid;
+                QObject::connect(tabBtn, &QPushButton::clicked, q, [this, tabId] {
+                    const QString json = QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("dock"), tabId } }).toJson(QJsonDocument::Compact));
+                    q->runDockOp(QStringLiteral("activateTab"), json);
+                });
+                hLay->addWidget(tabBtn, 0);
+            }
+            hLay->addStretch(1);
+            if (isFloating) {
+                auto *restoreBtn = new QPushButton(QStringLiteral("还原"), entry.header);
+                restoreBtn->setObjectName(QStringLiteral("vf_dock_restore_") + activeId);
+                restoreBtn->setFixedHeight(qMax(16, entry.headerHeight - 6));
+                QObject::connect(restoreBtn, &QPushButton::clicked, q, [this, activeId] {
+                    const QString json = QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("dock"), activeId } }).toJson(QJsonDocument::Compact));
+                    q->runDockOp(QStringLiteral("restore"), json);
+                });
+                hLay->addWidget(restoreBtn, 0);
+            }
+            auto *closeBtn = new QPushButton(QStringLiteral("×"), entry.header);
+            closeBtn->setObjectName(QStringLiteral("vf_dock_close_") + activeId);
+            closeBtn->setFixedSize(qMax(16, entry.headerHeight - 6), qMax(16, entry.headerHeight - 6));
+            QObject::connect(closeBtn, &QPushButton::clicked, q, [this, activeId] {
+                const QString json = QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("dock"), activeId } }).toJson(QJsonDocument::Compact));
+                q->runDockOp(QStringLiteral("close"), json);
+            });
+            hLay->addWidget(closeBtn, 0);
+        }
+    };
+
+    struct ActiveDockedGeom
+    {
+        DockEntry *entry = nullptr;
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
+    };
+    QList<ActiveDockedGeom> activeGeoms;
+
+    for (const QString &areaKey : { QStringLiteral("top"), QStringLiteral("bottom"), QStringLiteral("left"), QStringLiteral("right") }) {
+        const QJsonObject areaSpec = areasObj.value(areaKey).toObject();
+        const QString splitOrient = areaSpec.value(QStringLiteral("splitOrientation")).toString();
+        const QJsonArray groups = areaSpec.value(QStringLiteral("groups")).toArray();
+        QDockWidget *prevAnchor = nullptr;
+
+        for (const QJsonValue &gVal : groups) {
+            const QJsonObject gObj = gVal.toObject();
+            const QJsonArray tabsArr = gObj.value(QStringLiteral("tabs")).toArray();
+            QStringList allTabs;
+            QStringList visibleTabs;
+            for (const QJsonValue &tv : tabsArr) {
+                const QString tid = tv.toString();
+                if (!docks.contains(tid))
+                    continue;
+                allTabs.append(tid);
+                if (views.property(tid).property(QStringLiteral("visible")).toBool())
+                    visibleTabs.append(tid);
+            }
+            if (visibleTabs.isEmpty()) {
+                for (const QString &tid : allTabs) {
+                    DockEntry &de = docks[tid];
+                    de.dock->setProperty("vfFloating", false);
+                    de.dock->setProperty("vfArea", areaKey);
+                    de.dock->setVisible(false);
+                }
+                continue;
+            }
+            const QString rawActive = gObj.value(QStringLiteral("active")).toString();
+            const QString activeId = visibleTabs.contains(rawActive) ? rawActive : visibleTabs.first();
+            const QJSValue boxVal = boxesObj.property(activeId);
+            const int bx = boxVal.property(QStringLiteral("x")).toInt();
+            const int by = boxVal.property(QStringLiteral("y")).toInt();
+            const int bw = qMax(40, boxVal.property(QStringLiteral("width")).toInt());
+            const int bh = qMax(30, boxVal.property(QStringLiteral("height")).toInt());
+
+            DockEntry &activeEntry = docks[activeId];
+            activeEntry.dock->setProperty("vfFloating", false);
+            activeEntry.dock->setProperty("vfArea", areaKey);
+            activeEntry.dock->setMinimumSize(0, 0);
+            activeEntry.dock->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+            if (areaKey == QLatin1String("left") || areaKey == QLatin1String("right")) {
+                activeEntry.dock->setFixedWidth(bw);
+            } else {
+                activeEntry.dock->setFixedHeight(bh);
+            }
+            activeEntry.header->setVisible(true);
+            activeEntry.body->setVisible(true);
+            populateHeader(activeEntry, visibleTabs, activeId, false);
+            if (!prevAnchor) {
+                window.addDockWidget(qtAreaFor(areaKey), activeEntry.dock);
+            } else {
+                const Qt::Orientation qtOrient = (splitOrient == QLatin1String("horizontal")) ? Qt::Horizontal : Qt::Vertical;
+                window.splitDockWidget(prevAnchor, activeEntry.dock, qtOrient);
+            }
+            activeEntry.dock->setVisible(true);
+            prevAnchor = activeEntry.dock;
+            activeGeoms.append({ &activeEntry, bx, by, bw, bh });
+
+            for (const QString &tid : allTabs) {
+                if (tid == activeId)
+                    continue;
+                DockEntry &tabEntry = docks[tid];
+                tabEntry.dock->setProperty("vfFloating", false);
+                tabEntry.dock->setProperty("vfArea", areaKey);
+                if (visibleTabs.contains(tid)) {
+                    tabEntry.dock->setParent(&window);
+                    tabEntry.dock->setMinimumSize(0, 0);
+                    tabEntry.dock->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+                    tabEntry.dock->setGeometry(bx, by, bw, bh);
+                    tabEntry.header->setVisible(false);
+                    tabEntry.body->setVisible(false);
+                    tabEntry.dock->setVisible(true);
+                    tabEntry.dock->lower();
+                    inactiveTabDocks.insert(tid);
+                } else {
+                    tabEntry.dock->setVisible(false);
+                }
+            }
+        }
+    }
+
+    const QJsonArray floatingArr = layoutObj.value(QStringLiteral("floating")).toArray();
+    for (const QJsonValue &fVal : floatingArr) {
+        const QJsonObject fObj = fVal.toObject();
+        const QString did = fObj.value(QStringLiteral("dockId")).toString();
+        if (!docks.contains(did))
+            continue;
+        DockEntry &fEntry = docks[did];
+        const bool vis = views.property(did).property(QStringLiteral("visible")).toBool();
+        const int fx = fObj.value(QStringLiteral("x")).toInt();
+        const int fy = fObj.value(QStringLiteral("y")).toInt();
+        const int fw = qMax(80, fObj.value(QStringLiteral("width")).toInt());
+        const int fh = qMax(60, fObj.value(QStringLiteral("height")).toInt());
+        fEntry.dock->setParent(&window);
+        fEntry.dock->setProperty("vfFloating", true);
+        fEntry.dock->setProperty("vfLastArea", fObj.value(QStringLiteral("lastArea")).toString());
+        fEntry.dock->setMinimumSize(0, 0);
+        fEntry.dock->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        fEntry.dock->setGeometry(fx, fy, fw, fh);
+        fEntry.header->setVisible(vis);
+        fEntry.body->setVisible(vis);
+        fEntry.dock->setVisible(vis);
+        if (vis) {
+            populateHeader(fEntry, QStringList{ did }, did, true);
+            fEntry.header->setGeometry(0, 0, fw, fEntry.headerHeight);
+            fEntry.body->setGeometry(0, fEntry.headerHeight, fw, qMax(0, fh - fEntry.headerHeight));
+            if (fEntry.body->layout())
+                fEntry.body->layout()->activate();
+            fEntry.dock->raise();
+        }
+    }
+
+    if (window.layout())
+        window.layout()->activate();
+    QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+
+    for (const ActiveDockedGeom &ag : activeGeoms) {
+        ag.entry->dock->setGeometry(ag.x, ag.y, ag.w, ag.h);
+        ag.entry->header->setGeometry(0, 0, ag.w, ag.entry->headerHeight);
+        ag.entry->body->setGeometry(0, ag.entry->headerHeight, ag.w, qMax(0, ag.h - ag.entry->headerHeight));
+        if (ag.entry->body->layout())
+            ag.entry->body->layout()->activate();
+    }
+
+    if (QWidget *cw = window.centralWidget()) {
+        const QString cid = cw->objectName();
+        if (!cid.isEmpty()) {
+            const QJSValue cBox = boxesObj.property(cid);
+            if (cBox.isObject()) {
+                cw->setGeometry(
+                    cBox.property(QStringLiteral("x")).toInt(),
+                    cBox.property(QStringLiteral("y")).toInt(),
+                    cBox.property(QStringLiteral("width")).toInt(),
+                    cBox.property(QStringLiteral("height")).toInt());
+                if (cw->layout())
+                    cw->layout()->activate();
+            }
+        }
+    }
+
+    for (const QJsonValue &fVal : floatingArr) {
+        const QString did = fVal.toObject().value(QStringLiteral("dockId")).toString();
+        if (docks.contains(did) && !docks[did].dock->isHidden())
+            docks[did].dock->raise();
+    }
+}
+
+void Ui::Private::applyFloatBoxes(const QJSValue &views)
+{
+    if (floatBoxes.isEmpty())
+        return;
+    const QJSValue boxesObj = call("computeLayout", { window.width(), window.height() });
+    for (FloatBoxEntry &fb : floatBoxes) {
+        const QJSValue view = views.property(fb.id);
+        const bool vis = view.property(QStringLiteral("visible")).toBool();
+        const QJSValue props = view.property(QStringLiteral("props"));
+        const QString title = props.property(QStringLiteral("title")).toString();
+        const bool wantFloat = props.property(QStringLiteral("floating")).toBool();
+        fb.titleLabel->setText(title.isEmpty() ? fb.id : title);
+        fb.toggleBtn->setText(wantFloat ? QStringLiteral("还原") : QStringLiteral("浮出"));
+
+        if (wantFloat) {
+            const QJSValue boxVal = boxesObj.property(fb.id);
+            const int fx = boxVal.property(QStringLiteral("absX")).toInt();
+            const int fy = boxVal.property(QStringLiteral("absY")).toInt();
+            const int fw = qMax(80, boxVal.property(QStringLiteral("width")).toInt());
+            const int fh = qMax(fb.headerHeight + 20, boxVal.property(QStringLiteral("height")).toInt());
+            if (!fb.isFloating) {
+                if (fb.origLayout)
+                    fb.origLayout->removeWidget(fb.frame);
+                fb.frame->setParent(&window);
+                fb.isFloating = true;
+                if (fb.origLayout)
+                    fb.origLayout->activate();
+            }
+            fb.frame->setMinimumSize(fw, fh);
+            fb.frame->setMaximumSize(fw, fh);
+            fb.frame->setGeometry(fx, fy, fw, fh);
+            fb.frame->setVisible(vis);
+            if (fb.frame->layout())
+                fb.frame->layout()->activate();
+            if (fb.body->layout())
+                fb.body->layout()->activate();
+            if (vis)
+                fb.frame->raise();
+        } else {
+            if (fb.isFloating) {
+                fb.frame->setParent(fb.origParent);
+                fb.frame->setMinimumWidth(0);
+                fb.frame->setMaximumWidth(QWIDGETSIZE_MAX);
+                fb.frame->setFixedHeight(fb.designHeight);
+                fb.frame->setSizePolicy(fb.origSizePolicy);
+                if (fb.origLayout) {
+                    const int insIdx = qBound(0, fb.origIndex, fb.origLayout->count());
+                    fb.origLayout->insertWidget(insIdx, fb.frame);
+                    fb.origLayout->activate();
+                }
+                fb.isFloating = false;
+                fb.frame->setVisible(vis);
+                if (fb.frame->layout())
+                    fb.frame->layout()->activate();
+                if (fb.body->layout())
+                    fb.body->layout()->activate();
+            }
+        }
+    }
+    QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
 }
 
 // 某个位置上最里面的那个控件；不在任何控件上（包括窗口之外）时返回 -1，在窗口空白处返回 0。
@@ -628,6 +1131,8 @@ void Ui::Private::applyView()
         }
         setShown(index, view.property(QStringLiteral("visible")).toBool());
     }
+    applyDockLayout(views);
+    applyFloatBoxes(views);
     QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
 }
 

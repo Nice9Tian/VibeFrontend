@@ -1,5 +1,22 @@
 // 逻辑运行层：保存状态，计算条件和属性，按批处理事件。
 // 不依赖网页和 Tauri：工具的预览、命令行，以及导出后嵌进 Qt 的 JS 引擎，运行的都是这一份。
+import {
+  cloneDockLayout,
+  dockActivateTab,
+  dockFloat,
+  dockMoveToArea,
+  dockResizeArea,
+  dockResizeSplit,
+  dockRestore,
+  dockSplit,
+  dockTabify,
+  isDockArea,
+  normalizeDockLayout,
+  type DockArea,
+  type DockFloatRect,
+  type DockLayoutSpec,
+  type DockSplitOrientation,
+} from "./dock.ts";
 import { evalExpr, parseAssignment, parseExpr, type Expr, type Value } from "./expr.ts";
 import {
   allConditions,
@@ -13,6 +30,7 @@ import {
   findStateLeaf,
   globalSteps,
   isBusinessState,
+  isPartitionedWindow,
   layoutOf,
   requestEvent,
   type RuntimeProject,
@@ -143,6 +161,14 @@ function readTailValue(base: Value, tail: string[]): Value {
   return cursor;
 }
 
+interface FloatBoxRuntimeState {
+  floating: boolean;
+  floatX?: number;
+  floatY?: number;
+  floatWidth?: number;
+  floatHeight?: number;
+}
+
 /** 一批步骤执行时用到的东西。 */
 interface Batch {
   /** 状态的工作副本：后面的步骤读到前面步骤写入的新值，全部执行完再一次生效 */
@@ -171,6 +197,10 @@ export class Runtime {
   private windows = new Map<string, { open: boolean; modal: boolean }>();
   /** 停靠面板未绑定状态时的显隐开关 */
   private docks = new Map<string, boolean>();
+  /** 主窗口停靠排列状态 */
+  private dockLayouts = new Map<string, DockLayoutSpec>();
+  /** 浮动嵌入框未绑定状态时的运行态属性 */
+  private floatBoxes = new Map<string, FloatBoxRuntimeState>();
   /** 动作模拟设置 */
   private actionSims = new Map<string, ActionSimConfig>();
   /** 正在进行中的异步动作集合 */
@@ -195,16 +225,30 @@ export class Runtime {
       if (def?.type === "text") this.textConditions.set(id, def.preview === true);
     }
     this.windows.clear();
+    this.dockLayouts.clear();
     for (const winId of allWindowIds(this.project.scene)) {
       const n = this.project.scene.nodes[winId];
       const isRoot = winId === this.project.scene.root;
       const open = isRoot ? true : Boolean(n?.initialOpen ?? n?.props?.open ?? false);
       const modal = isRoot ? false : Boolean(n?.modal ?? n?.props?.modal ?? n?.type === "Dialog");
       this.windows.set(winId, { open, modal });
+      if (isPartitionedWindow(n)) {
+        this.dockLayouts.set(winId, normalizeDockLayout(this.project.scene, n));
+      }
     }
     this.docks.clear();
+    this.floatBoxes.clear();
     for (const [id, n] of Object.entries(this.project.scene.nodes)) {
       if (n.type === "Dock") this.docks.set(id, n.props?.visible !== false);
+      if (n.type === "FloatBox") {
+        this.floatBoxes.set(id, {
+          floating: Boolean(n.props?.floating ?? false),
+          ...(typeof n.props?.floatX === "number" ? { floatX: n.props.floatX } : {}),
+          ...(typeof n.props?.floatY === "number" ? { floatY: n.props.floatY } : {}),
+          ...(typeof n.props?.floatWidth === "number" ? { floatWidth: n.props.floatWidth } : {}),
+          ...(typeof n.props?.floatHeight === "number" ? { floatHeight: n.props.floatHeight } : {}),
+        });
+      }
     }
     for (const [name, def] of Object.entries(this.project.logic.actions ?? {})) {
       if (!this.actionSims.has(name)) {
@@ -247,6 +291,169 @@ export class Runtime {
   /** 触发 app.start，预览开始时调用一次。 */
   start(): void {
     this.dispatch(null, "app.start");
+  }
+
+  // ---------- 停靠排列读写与操作 ----------
+
+  getDockLayout(winId = this.project.scene.root): DockLayoutSpec {
+    const existing = this.dockLayouts.get(winId);
+    if (existing) return cloneDockLayout(existing);
+    return normalizeDockLayout(this.project.scene, this.project.scene.nodes[winId]);
+  }
+
+  setDockLayout(layout: DockLayoutSpec, winId = this.project.scene.root): void {
+    const winNode = this.project.scene.nodes[winId];
+    const normalized = normalizeDockLayout(this.project.scene, {
+      ...(winNode ?? { type: "Window", width: 1280, height: 800 }),
+      dockLayout: layout,
+    });
+    this.dockLayouts.set(winId, normalized);
+    this.hooks.onChange();
+  }
+
+  dockTabify(targetDockId: string, dockId: string, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockTabify(cur, this.project.scene, this.project.scene.nodes[winId], targetDockId, dockId);
+    this.dockLayouts.set(winId, next);
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`叠入页签组 ${targetDockId}`] });
+    this.hooks.onChange();
+  }
+
+  dockActivateTab(dockId: string, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockActivateTab(cur, this.project.scene, this.project.scene.nodes[winId], dockId);
+    this.dockLayouts.set(winId, next);
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`切换激活页签 ${dockId}`] });
+    this.hooks.onChange();
+  }
+
+  dockFloat(dockId: string, rect?: Partial<DockFloatRect>, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockFloat(cur, this.project.scene, this.project.scene.nodes[winId], dockId, rect);
+    this.dockLayouts.set(winId, next);
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`浮出为独立面板`] });
+    this.hooks.onChange();
+  }
+
+  dockRestore(dockId: string, targetArea?: DockArea, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockRestore(cur, this.project.scene, this.project.scene.nodes[winId], dockId, targetArea);
+    this.dockLayouts.set(winId, next);
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`从浮窗恢复停靠`] });
+    this.hooks.onChange();
+  }
+
+  dockMoveToArea(dockId: string, area: DockArea, index?: number, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockMoveToArea(cur, this.project.scene, this.project.scene.nodes[winId], dockId, area, index);
+    this.dockLayouts.set(winId, next);
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`吸附到停靠区 ${area}`] });
+    this.hooks.onChange();
+  }
+
+  dockSplit(
+    targetDockId: string,
+    dockId: string,
+    position: "before" | "after" = "after",
+    orientation?: DockSplitOrientation,
+    winId = this.project.scene.root,
+  ): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockSplit(
+      cur,
+      this.project.scene,
+      this.project.scene.nodes[winId],
+      targetDockId,
+      dockId,
+      position,
+      orientation,
+    );
+    this.dockLayouts.set(winId, next);
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`与 ${targetDockId} 并排（${position}）`] });
+    this.hooks.onChange();
+  }
+
+  dockResizeArea(area: DockArea, size: number, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockResizeArea(cur, this.project.scene, this.project.scene.nodes[winId], area, size);
+    this.dockLayouts.set(winId, next);
+    this.hooks.onLog({ title: `停靠区 ${area}`, lines: [`调整尺寸为 ${next.areas[area].size}px`] });
+    this.hooks.onChange();
+  }
+
+  dockResizeSplit(area: DockArea, groupIndex: number, size: number, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockResizeSplit(cur, this.project.scene, this.project.scene.nodes[winId], area, groupIndex, size);
+    this.dockLayouts.set(winId, next);
+    this.hooks.onLog({ title: `停靠区 ${area}`, lines: [`调整并排组 #${groupIndex} 尺寸为 ${Math.round(size)}px`] });
+    this.hooks.onChange();
+  }
+
+  dockSetVisible(dockId: string, visible: boolean): void {
+    if (!this.project.scene.nodes[dockId]) return;
+    const winId = this.windowOf(dockId);
+    if (visible) {
+      const curLayout = this.getDockLayout(winId);
+      this.dockLayouts.set(winId, dockActivateTab(curLayout, this.project.scene, this.project.scene.nodes[winId], dockId));
+    }
+    this.runBatch(`停靠面板 ${dockId}`, false, false, (batch) => {
+      const dockObj = this.project.logic.objects?.[dockId];
+      const visExpr = dockObj?.props?.visible;
+      if (typeof visExpr === "string" && findStateLeaf(this.project.logic, visExpr)) {
+        this.assign(batch, visExpr, visible);
+        return;
+      }
+      const cur = batch.docks.get(dockId) ?? true;
+      if (cur !== visible) {
+        batch.docks.set(dockId, visible);
+        batch.lines.push(`停靠面板 ${dockId}: ${cur ? "显示 → 隐藏" : "隐藏 → 显示"}`);
+      }
+    });
+  }
+
+  /** 统一的停靠指令入口（供测试步骤与 Qt 侧桥接调用）。 */
+  dockOp(op: string, args: Record<string, Value> = {}): void {
+    const dockId = String(args.dock ?? "");
+    const targetId = String(args.target ?? "");
+    if (op === "tabify") {
+      this.dockTabify(targetId, dockId);
+    } else if (op === "tab" || op === "activateTab") {
+      this.dockActivateTab(dockId);
+    } else if (op === "float") {
+      this.dockFloat(dockId, {
+        ...(typeof args.x === "number" ? { x: args.x } : {}),
+        ...(typeof args.y === "number" ? { y: args.y } : {}),
+        ...(typeof args.width === "number" ? { width: args.width } : {}),
+        ...(typeof args.height === "number" ? { height: args.height } : {}),
+      });
+    } else if (op === "restore") {
+      this.dockRestore(dockId, isDockArea(args.area) ? args.area : undefined);
+    } else if (op === "move") {
+      if (isDockArea(args.area)) {
+        this.dockMoveToArea(dockId, args.area, typeof args.index === "number" ? args.index : undefined);
+      }
+    } else if (op === "split") {
+      this.dockSplit(
+        targetId,
+        dockId,
+        args.position === "before" ? "before" : "after",
+        args.orientation === "horizontal" || args.orientation === "vertical" ? args.orientation : undefined,
+      );
+    } else if (op === "resize" || op === "resizeArea") {
+      if (isDockArea(args.area)) {
+        this.dockResizeArea(args.area, Number(args.size ?? 240));
+      }
+    } else if (op === "resizeSplit") {
+      if (isDockArea(args.area)) {
+        this.dockResizeSplit(args.area, Number(args.groupIndex ?? 0), Number(args.size ?? 200));
+      }
+    } else if (op === "close") {
+      this.dockSetVisible(dockId, false);
+    } else if (op === "open") {
+      this.dockSetVisible(dockId, true);
+    } else if (op === "toggle") {
+      this.dockSetVisible(dockId, !this.view(dockId).visible);
+    }
   }
 
   // ---------- 读取 ----------
@@ -429,13 +636,21 @@ export class Runtime {
       const value = declared[key].default;
       if (value !== undefined) props[key] = cloneValue(value);
     }
-    if (node?.title !== undefined && (node.type === "Dock" || node.type === "Dialog")) {
+    if (node?.title !== undefined && (node.type === "Dock" || node.type === "Dialog" || node.type === "FloatBox")) {
       props.title = node.title;
     }
     if (node?.props) {
       for (const [k, v] of Object.entries(node.props)) {
         if (k !== "visible") props[k] = cloneValue(v);
       }
+    }
+    if (node?.type === "FloatBox" && this.floatBoxes.has(id)) {
+      const fb = this.floatBoxes.get(id)!;
+      props.floating = fb.floating;
+      if (fb.floatX !== undefined) props.floatX = fb.floatX;
+      if (fb.floatY !== undefined) props.floatY = fb.floatY;
+      if (fb.floatWidth !== undefined) props.floatWidth = fb.floatWidth;
+      if (fb.floatHeight !== undefined) props.floatHeight = fb.floatHeight;
     }
     let visible = true;
     if (this.windows.has(id) && id !== this.project.scene.root) {
@@ -527,9 +742,43 @@ export class Runtime {
       return;
     }
 
+    const node = nodeId ? scene.nodes[nodeId] : undefined;
+    if (nodeId && node?.type === "FloatBox") {
+      const view = this.view(nodeId);
+      if (view.visible && view.enabled) {
+        if (event === "toggle" || (event === "change" && typeof value === "boolean")) {
+          const cur = this.floatBoxes.get(nodeId) ?? { floating: Boolean(view.props.floating) };
+          const nextFloat = typeof value === "boolean" ? value : !cur.floating;
+          if (cur.floating !== nextFloat) {
+            this.floatBoxes.set(nodeId, { ...cur, floating: nextFloat });
+            this.hooks.onLog({
+              title: `${nodeId}.${event}`,
+              lines: [`浮动嵌入框 ${nodeId}: ${nextFloat ? "嵌入 → 浮动" : "浮动 → 嵌入"}`],
+            });
+            this.hooks.onChange();
+          }
+        } else if (event === "move" && value && typeof value === "object" && !Array.isArray(value)) {
+          const cur = this.floatBoxes.get(nodeId) ?? { floating: Boolean(view.props.floating) };
+          const nx = typeof value.x === "number" ? Math.round(value.x) : cur.floatX;
+          const ny = typeof value.y === "number" ? Math.round(value.y) : cur.floatY;
+          const nw = typeof value.width === "number" ? Math.round(value.width) : cur.floatWidth;
+          const nh = typeof value.height === "number" ? Math.round(value.height) : cur.floatHeight;
+          this.floatBoxes.set(nodeId, {
+            ...cur,
+            floating: true,
+            ...(nx !== undefined ? { floatX: nx } : {}),
+            ...(ny !== undefined ? { floatY: ny } : {}),
+            ...(nw !== undefined ? { floatWidth: nw } : {}),
+            ...(nh !== undefined ? { floatHeight: nh } : {}),
+          });
+          this.hooks.onChange();
+        }
+      }
+    }
+
     const object = nodeId ? logic.objects?.[nodeId] : undefined;
     const steps = nodeId ? object?.events?.[event] : globalSteps(logic, event);
-    const bindTarget = nodeId && event === "change" && value !== undefined ? object?.bind : undefined;
+    const bindTarget = nodeId && (event === "change" || (node?.type === "FloatBox" && event === "toggle")) && value !== undefined ? object?.bind : undefined;
     if (!steps && !bindTarget) return;
 
     const title = nodeId ? `${nodeId}.${event}` : `全局事件 ${event}`;
@@ -549,7 +798,6 @@ export class Runtime {
         }
         return;
       }
-      const node = scene.nodes[nodeId];
       if (node?.type === "SpinBox" && event === "change" && typeof value === "number" && Number.isFinite(value)) {
         const min = Number(view.props.min ?? 0);
         const max = Number(view.props.max ?? 9999);
@@ -587,14 +835,22 @@ export class Runtime {
   private toggleDockInBatch(batch: Batch, dockId: string): void {
     const dockObj = this.project.logic.objects?.[dockId];
     const visExpr = dockObj?.props?.visible;
+    let nextVis = true;
     if (typeof visExpr === "string" && findStateLeaf(this.project.logic, visExpr)) {
       const cur = Boolean(batch.work.get(visExpr));
-      this.assign(batch, visExpr, !cur);
-      return;
+      nextVis = !cur;
+      this.assign(batch, visExpr, nextVis);
+    } else {
+      const cur = batch.docks.get(dockId) ?? true;
+      nextVis = !cur;
+      batch.docks.set(dockId, nextVis);
+      batch.lines.push(`停靠面板 ${dockId}: ${cur ? "显示 → 隐藏" : "隐藏 → 显示"}`);
     }
-    const cur = batch.docks.get(dockId) ?? true;
-    batch.docks.set(dockId, !cur);
-    batch.lines.push(`停靠面板 ${dockId}: ${cur ? "显示 → 隐藏" : "隐藏 → 显示"}`);
+    if (nextVis) {
+      const winId = this.windowOf(dockId);
+      const curLayout = this.getDockLayout(winId);
+      this.dockLayouts.set(winId, dockActivateTab(curLayout, this.project.scene, this.project.scene.nodes[winId], dockId));
+    }
   }
 
   /** 外部（如用户按 Esc 或点击窗口标题栏关闭按钮）关闭窗口时，将窗口开关同步回运行层。 */

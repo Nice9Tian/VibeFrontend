@@ -310,7 +310,7 @@ function usesExtendedLayout(context: Context): boolean {
   return (
     window.partitioned ||
     Boolean(window.layout) ||
-    controls.some((c) => Boolean(c.layout) || c.kind === "dock" || c.kind === "dialog")
+    controls.some((c) => Boolean(c.layout) || c.kind === "dock" || c.kind === "dialog" || c.kind === "floatbox")
   );
 }
 
@@ -699,7 +699,7 @@ function buildFunction(context: Context): string[] {
         `    auto *${v} = new QDockWidget(${qstr(control.title ?? control.id)}, &window);`,
         `    ${v}->setFeatures(QDockWidget::NoDockWidgetFeatures);`,
         `    ${v}->setStyleSheet(QStringLiteral("QDockWidget { border: none; }"));`,
-        `    auto *hdr_${v} = new QLabel(${qstr(control.title ?? control.id)}, ${v});`,
+        `    auto *hdr_${v} = new QWidget(${v});`,
         `    hdr_${v}->setFixedHeight(${hdrH});`,
         `    ${v}->setTitleBarWidget(hdr_${v});`,
         `    auto *${control.bodyVariable} = new QWidget(${v});`,
@@ -717,6 +717,7 @@ function buildFunction(context: Context): string[] {
         const orient = area === "left" || area === "right" ? "Qt::Horizontal" : "Qt::Vertical";
         lines.push(`    window.splitDockWidget(${prevDock}, ${v}, ${orient});`);
       }
+      lines.push(`    registerDock(${qstr(control.id)}, ${v}, hdr_${v}, ${control.bodyVariable}, ${qstr(area)}, ${hdrH});`);
       prevDockByArea.set(area, v);
     } else if (control.kind === "dialog") {
       lines.push(
@@ -727,6 +728,22 @@ function buildFunction(context: Context): string[] {
         `    ${v}->setFixedSize(${control.width}, ${control.height});`,
         `    ${v}->setModal(${control.modal !== false ? "true" : "false"});`,
         `    dialogs.append(${v});`,
+      );
+    } else if (control.kind === "floatbox") {
+      const hdrH = control.headerHeight ?? 24;
+      lines.push(
+        "",
+        `    // ${control.id}：浮动嵌入框`,
+        `    auto *${v} = new QFrame(${control.parentVariable});`,
+        `    ${v}->setFrameShape(QFrame::NoFrame);`,
+        `    auto *hdr_${v} = new QWidget(${v});`,
+        `    hdr_${v}->setFixedHeight(${hdrH});`,
+        `    auto *${control.bodyVariable} = new QWidget(${v});`,
+        `    auto *outer_${v} = new QVBoxLayout(${v});`,
+        `    outer_${v}->setContentsMargins(0, 0, 0, 0);`,
+        `    outer_${v}->setSpacing(0);`,
+        `    outer_${v}->addWidget(hdr_${v});`,
+        `    outer_${v}->addWidget(${control.bodyVariable}, 1);`,
       );
     } else {
       const label =
@@ -820,6 +837,14 @@ function buildFunction(context: Context): string[] {
       for (const c of childPlans) {
         lines.push(`    ${c.variable}->setGeometry(${c.x}, ${c.y}, ${c.width}, ${c.height});`);
       }
+    }
+  }
+
+  for (const control of controls) {
+    if (control.kind === "floatbox") {
+      lines.push(
+        `    registerFloatBox(${qstr(control.id)}, ${control.variable}, hdr_${control.variable}, ${control.bodyVariable}, ${control.headerHeight ?? 24}, ${prefWidthPlan(control)}, ${prefHeightPlan(control)});`,
+      );
     }
   }
 

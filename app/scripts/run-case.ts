@@ -89,6 +89,16 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string }> = [
     steps:
       "click:newProjectBtn;check;state;click:cancelNewProjectBtn;check;state;click:newProjectBtn;close:newProjectDialog;check;state;click:menuToggleTimeline;check;state;click:menuToggleTimeline;check;state",
   },
+  {
+    name: "17. 停靠面板连续编排（叠页签 → 切页签 → 浮出 → 恢复 → 改大小 → 分栏并排 → 改分栏大小 → 关闭与菜单重开）",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;check;state;dock:tab:layersDock;check;state;dock:float:inspectorDock:320,140,280,460;check;state;dock:restore:inspectorDock;check;state;dock:resize:left:260;check;state;dock:split:layersDock:inspectorDock:after;check;state;dock:resizeSplit:left:0:240;check;state;dock:close:timelineDock;check;state;click:menuToggleTimeline;check;state;dock:move:inspectorDock:right;dock:resize:left:240;check;state",
+  },
+  {
+    name: "18. 浮动嵌入框（FloatBox）嵌入与窗口内浮出切换及拖拽移位",
+    steps:
+      "toggle:onionSkinBox;check;state;floatbox:move:onionSkinBox:420,180;check;state;toggle:onionSkinBox;check;state",
+  },
 ];
 
 async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string[]> {
@@ -122,6 +132,65 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
       const [modeStr = "real", delayStr] = rest.split(":");
       const delayMs = delayStr !== undefined && Number.isFinite(Number(delayStr)) ? Math.max(0, Number(delayStr)) : 0;
       runtime.setActionSimulation(id, { mode: (modeStr || "real") as ActionSimMode, delayMs });
+    } else if (verb === "dock") {
+      const op = id.trim();
+      const parts = rest.split(":").map((s) => s.trim());
+      const arg1 = parts[0] ?? "";
+      const arg2 = parts[1] ?? "";
+      const arg3 = parts[2] ?? "";
+      const arg4 = parts[3] ?? "";
+      const args: Record<string, Value> = {};
+      if (op === "tabify") {
+        args.target = arg1;
+        args.dock = arg2;
+      } else if (op === "tab" || op === "activateTab") {
+        args.dock = arg1;
+      } else if (op === "float") {
+        args.dock = arg1;
+        if (arg2) {
+          const coords = arg2.split(",").map((s) => Number(s.trim()));
+          if (coords.length >= 2) {
+            args.x = coords[0];
+            args.y = coords[1];
+          }
+          if (coords.length >= 4) {
+            args.width = coords[2];
+            args.height = coords[3];
+          }
+        }
+      } else if (op === "restore") {
+        args.dock = arg1;
+        if (arg2) args.area = arg2;
+      } else if (op === "move") {
+        args.dock = arg1;
+        args.area = arg2;
+        if (arg3) args.index = Number(arg3);
+      } else if (op === "split") {
+        args.target = arg1;
+        args.dock = arg2;
+        if (arg3) args.position = arg3;
+        if (arg4) args.orientation = arg4;
+      } else if (op === "resize" || op === "resizeArea") {
+        args.area = arg1;
+        args.size = Number(arg2);
+      } else if (op === "resizeSplit") {
+        args.area = arg1;
+        args.groupIndex = Number(arg2);
+        args.size = Number(arg3);
+      } else if (op === "close" || op === "open" || op === "toggle") {
+        args.dock = arg1;
+      }
+      runtime.dockOp(op, args);
+    } else if (verb === "floatbox" && id.trim() === "move") {
+      const parts = rest.split(":").map((s) => s.trim());
+      const fbId = parts[0] ?? "";
+      const coords = (parts[1] ?? "").split(",").map((s) => Number(s.trim()));
+      if (fbId && coords.length >= 2) {
+        runtime.dispatch(fbId, "move", {
+          x: coords[0],
+          y: coords[1],
+        });
+      }
     } else if (!project.scene.nodes[id] && !findMenuItem(project.scene, id)) {
       outLines.push(`error 找不到控件 ${id}（步骤 ${step}）`);
     } else if (verb === "close" || verb === "reject") {
@@ -214,6 +283,10 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
         runtime.dispatch(id, "change", !view.props.value);
       } else if (node?.type === "Button" && view.props.checkable) {
         runtime.dispatch(id, "toggle", !view.props.checked);
+      } else if (node?.type === "FloatBox") {
+        const nextVal = !Boolean(view.props.floating);
+        runtime.dispatch(id, "toggle", nextVal);
+        runtime.dispatch(id, "change", nextVal);
       }
     } else {
       outLines.push(`error 不认识的步骤 ${step}`);

@@ -1,4 +1,5 @@
 // 检查设计项目：画布、逻辑、说明、函数、动作和效果之间能不能对上。结果显示在工具的问题栏里，导出前也会检查一遍。
+import { dockIdsOfLayout } from "./dock.ts";
 import { parseAssignment, parseExpr, pathsIn } from "./expr.ts";
 import {
   allStateLeaves,
@@ -496,6 +497,22 @@ export function check(project: Project): Problem[] {
     }
     if (node.dockArea && !["left", "right", "top", "bottom"].includes(node.dockArea)) {
       error(`停靠面板 ${id}：dockArea 应为 left、right、top、bottom 之一，现在是“${node.dockArea}”`, id);
+    }
+    if (node.dockLayout) {
+      for (const did of dockIdsOfLayout(node.dockLayout)) {
+        const dn = scene.nodes[did];
+        if (dn && dn.type !== "Dock") {
+          error(`窗口 ${id}：dockLayout 引用的“${did}”不是 Dock 节点`, id);
+        }
+      }
+      for (const [areaKey, areaSpec] of Object.entries(node.dockLayout.areas ?? {})) {
+        if (!["left", "right", "top", "bottom"].includes(areaKey)) {
+          error(`窗口 ${id}：dockLayout.areas 的键应为 left、right、top、bottom 之一，现在是“${areaKey}”`, id);
+        }
+        if (areaSpec?.splitOrientation && !["horizontal", "vertical"].includes(areaSpec.splitOrientation)) {
+          error(`窗口 ${id}：dockLayout.areas.${areaKey}.splitOrientation 应为 horizontal 或 vertical`, id);
+        }
+      }
     }
     if (node.rotation) hint(`控件 ${id} 设置了旋转（${node.rotation}°），导出成 Qt 时暂不处理旋转`, id);
     if (node.type === "External") {

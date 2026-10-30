@@ -70,6 +70,55 @@
           "inspectorDock",
           "timelineDock"
         ],
+        "dockLayout": {
+          "areas": {
+            "top": {
+              "size": 68,
+              "groups": [
+                {
+                  "tabs": [
+                    "toolsDock"
+                  ],
+                  "active": "toolsDock"
+                }
+              ]
+            },
+            "left": {
+              "size": 240,
+              "groups": [
+                {
+                  "tabs": [
+                    "layersDock"
+                  ],
+                  "active": "layersDock"
+                }
+              ]
+            },
+            "right": {
+              "size": 260,
+              "groups": [
+                {
+                  "tabs": [
+                    "inspectorDock"
+                  ],
+                  "active": "inspectorDock"
+                }
+              ]
+            },
+            "bottom": {
+              "size": 96,
+              "groups": [
+                {
+                  "tabs": [
+                    "timelineDock"
+                  ],
+                  "active": "timelineDock"
+                }
+              ]
+            }
+          },
+          "floating": []
+        },
         "children": [
           "toolsDock",
           "layersDock",
@@ -364,7 +413,8 @@
         },
         "children": [
           "inspectorTabs",
-          "inspectorStack"
+          "inspectorStack",
+          "onionSkinBox"
         ]
       },
       "inspectorTabs": {
@@ -544,6 +594,36 @@
         "height": 28,
         "props": {
           "text": "尚未导出",
+          "tone": "muted"
+        }
+      },
+      "onionSkinBox": {
+        "type": "FloatBox",
+        "width": 240,
+        "height": 74,
+        "layout": {
+          "kind": "vbox",
+          "padding": 8,
+          "gap": 6
+        },
+        "props": {
+          "title": "洋葱皮预览",
+          "floating": false,
+          "floatX": 360,
+          "floatY": 160,
+          "floatWidth": 240,
+          "floatHeight": 96
+        },
+        "children": [
+          "onionSkinLabel"
+        ]
+      },
+      "onionSkinLabel": {
+        "type": "Label",
+        "width": 224,
+        "height": 28,
+        "props": {
+          "text": "前后各显示 2 帧残影",
           "tone": "muted"
         }
       },
@@ -1833,6 +1913,85 @@
         "set": {
           "frameShape": 4,
           "frameShadow": 48
+        }
+      }
+    },
+    "FloatBox": {
+      "type": "FloatBox",
+      "label": "浮动嵌入框",
+      "description": "可在嵌入布局与窗口内浮动面板之间切换的标准容器",
+      "defaultSize": {
+        "width": 220,
+        "height": 120
+      },
+      "entry": "index.js",
+      "style": "style.css",
+      "props": {
+        "title": {
+          "type": "string",
+          "default": "浮动嵌入框",
+          "logic": true
+        },
+        "floating": {
+          "type": "boolean",
+          "default": false,
+          "logic": true
+        },
+        "floatX": {
+          "type": "number",
+          "default": 60,
+          "logic": true
+        },
+        "floatY": {
+          "type": "number",
+          "default": 80,
+          "logic": true
+        },
+        "floatWidth": {
+          "type": "number",
+          "default": 220,
+          "logic": true
+        },
+        "floatHeight": {
+          "type": "number",
+          "default": 120,
+          "logic": true
+        },
+        "headerHeight": {
+          "type": "number",
+          "default": 24
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "logic": true
+        }
+      },
+      "events": [
+        "toggle",
+        "change",
+        "move"
+      ],
+      "children": true,
+      "qt": {
+        "widget": "QFrame",
+        "props": {
+          "title": "vfTitle",
+          "floating": "vfFloating",
+          "floatX": "vfFloatX",
+          "floatY": "vfFloatY",
+          "floatWidth": "vfFloatWidth",
+          "floatHeight": "vfFloatHeight"
+        },
+        "events": {
+          "toggle": {
+            "signal": "toggled",
+            "type": "boolean"
+          },
+          "change": {
+            "signal": "toggled",
+            "type": "boolean"
+          }
         }
       }
     }
