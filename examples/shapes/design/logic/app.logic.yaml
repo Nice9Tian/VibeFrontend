@@ -1,0 +1,30 @@
+version: 1
+
+state:
+  flow:
+    highlighted: { type: boolean, initial: false }
+    startFill: { type: string, initial: '#dbeafe' }
+    lineStroke: { type: string, initial: '#2563eb' }
+
+objects:
+  startBox:
+    doc: docs/window.md#start-box
+    props:
+      fill: flow.startFill
+    events:
+      click:
+        - set: flow.highlighted = not flow.highlighted
+        - if: flow.highlighted
+          then:
+            - set: flow.startFill = '#fef08a'
+            - set: flow.lineStroke = '#f59e0b'
+          else:
+            - set: flow.startFill = '#dbeafe'
+            - set: flow.lineStroke = '#2563eb'
+
+  lineStartToDecision:
+    props:
+      stroke: flow.lineStroke
+
+  decisionDiamond:
+    doc: docs/window.md#decision-diamond
