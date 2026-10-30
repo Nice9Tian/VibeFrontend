@@ -8,14 +8,46 @@ const host = process.env.TAURI_DEV_HOST;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.resolve(process.env.VF_PROJECT ?? path.join(here, "..", "project"));
 
+function mimeTypeForPath(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".bmp":
+      return "image/bmp";
+    case ".ico":
+      return "image/x-icon";
+    case ".svg":
+      return "image/svg+xml";
+    case ".json":
+      return "application/json; charset=utf-8";
+    default:
+      return "text/plain; charset=utf-8";
+  }
+}
+
 /**
  * 只在开发时使用：让网页在普通浏览器里也能读写项目文件夹，
  * 接口与 src-tauri/src/lib.rs 中的命令一一对应。Tauri 窗口中不走这里。
  */
 function devProjectFs(): Plugin {
-  const resolveInProject = (rel: string): string | null => {
-    const full = path.resolve(projectDir, rel);
-    const inside = full === projectDir || full.startsWith(projectDir + path.sep);
+  const resolveInProject = (rel: string, allowRoot = false): string | null => {
+    if (!rel) return allowRoot ? projectDir : null;
+    const normalized = rel.replace(/\\/g, "/");
+    if (normalized.startsWith("/") || /^[a-zA-Z]:/.test(normalized)) return null;
+    const parts = normalized.split("/");
+    if (parts.some((p) => !p || p === "." || p === ".." || p.includes(":") || /[\u0000-\u001f\u007f]/.test(p))) {
+      return null;
+    }
+    const full = path.resolve(projectDir, ...parts);
+    const inside = full.startsWith(projectDir + path.sep);
     return inside ? full : null;
   };
   return {
@@ -23,8 +55,8 @@ function devProjectFs(): Plugin {
     configureServer(server) {
       server.middlewares.use("/__fs", (req, res) => {
         const url = new URL(req.url ?? "/", "http://localhost");
-        const full = resolveInProject(url.searchParams.get("path") ?? "");
-        const send = (status: number, body: string, type = "text/plain; charset=utf-8") => {
+        const rawRel = url.searchParams.get("path") ?? "";
+        const send = (status: number, body: string | Buffer, type = "text/plain; charset=utf-8") => {
           res.statusCode = status;
           res.setHeader("Content-Type", type);
           res.end(body);
@@ -41,18 +73,21 @@ function devProjectFs(): Plugin {
           req.on("close", () => watcher.close());
           return;
         }
-        if (!full) return send(400, "路径不在项目文件夹内");
-        if (url.pathname === "/read") {
-          if (!fs.existsSync(full)) return send(404, "");
-          return send(200, fs.readFileSync(full, "utf8"));
-        }
         if (url.pathname === "/list") {
+          const full = resolveInProject(rawRel, true);
+          if (!full) return send(400, "路径不在项目文件夹内");
           if (!fs.existsSync(full)) return send(200, "[]", "application/json");
           const entries = fs
             .readdirSync(full, { withFileTypes: true })
             .map((e) => ({ name: e.name, isDir: e.isDirectory() }))
             .sort((a, b) => a.name.localeCompare(b.name));
           return send(200, JSON.stringify(entries), "application/json");
+        }
+        const full = resolveInProject(rawRel, false);
+        if (!full) return send(400, "路径不在项目文件夹内");
+        if (url.pathname === "/read") {
+          if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return send(404, "");
+          return send(200, fs.readFileSync(full), mimeTypeForPath(full));
         }
         if (url.pathname === "/write" && req.method === "POST") {
           const chunks: Buffer[] = [];

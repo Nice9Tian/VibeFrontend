@@ -1,6 +1,9 @@
 // 编辑器界面：素材栏、图层、设计窗口（编辑模式 / 预览模式）、文档与 YAML 页签、问题栏。
 import { isMap, parseDocument, type Document } from "yaml";
-import { watchProject, writeText } from "./fs";
+import { listDir, readText, watchProject, writeText } from "./fs";
+import { initDocView, syncDocView } from "./docview";
+import { initLibrary, renderLibraryPalette } from "./library";
+import { initPreviewLauncher, initStandalonePreviewWindow, syncStandalonePreviewTitle } from "./previewwindow";
 import {
   allWindowIds,
   appendSection,
@@ -2819,6 +2822,7 @@ function renderPalette(): void {
   }
   $("palette-project").replaceChildren(...items);
   renderShapePalette();
+  void renderLibraryPalette();
 }
 
 function startPaletteDrag(down: PointerEvent, type: string): void {
@@ -3023,6 +3027,7 @@ function renderRight(): void {
       noteWithButton($("yaml-note"), LOGIC_PATH);
     }
   }
+  syncDocView();
 }
 
 /** 把 YAML 编辑器滚动到以 prefix 开头的那一行。 */
@@ -3303,13 +3308,49 @@ function renderAll(): void {
   renderRight();
   renderProblems();
   renderConditions();
+  syncStandalonePreviewTitle(project);
 }
 
 async function main(): Promise<void> {
   project = await loadProject(null);
   designRuntime = new Runtime(project);
+  initLibrary({
+    getProject: () => project,
+    getMode: () => mode,
+    getZoom: () => viewZoom(),
+    readText,
+    writeText,
+    listDir,
+    reload,
+    toast,
+    openMenu,
+    copyComponentRef: (type) => void copyReference(componentReference(project, type)),
+    setSelection,
+    setNodeTool: (type) => setTool(tool.kind === "node" && tool.type === type ? { kind: "select" } : { kind: "node", type }),
+    getActiveNodeTool: () => (tool.kind === "node" ? tool.type : null),
+    addNodeAt: addNode,
+    renderProblems,
+  });
+  initDocView({
+    getProject: () => project,
+    getSelectedId: () => selectedId,
+    onViewFullDoc: () => select(null),
+  });
+  initPreviewLauncher(
+    () => project,
+    (id) => {
+      if (node(id)) {
+        select(id);
+        showRightTab("doc");
+      }
+    },
+  );
   renderAll();
   renderLog();
+  initStandalonePreviewWindow({
+    getProject: () => project,
+    enterPreviewMode: () => setMode("preview"),
+  });
   watchProject(() => void reload());
 }
 
