@@ -1153,3 +1153,561 @@ body:not(.preview) #stage.show-grid {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+
+/* ---------- 收藏的素材与对比弹窗（见 library.ts） ---------- */
+
+.palette-item.library-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.library-badge {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 16px;
+  border: 1px solid var(--line);
+}
+
+.library-badge.status-modified {
+  border-color: #2563eb;
+  background: #e8f0fe;
+  color: #1d4ed8;
+}
+
+.library-badge.status-outdated {
+  border-color: #d97706;
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.library-badge.status-diverged {
+  border-color: var(--error);
+  background: #fdecec;
+  color: var(--error);
+}
+
+.vf-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 4500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.vf-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(920px, 92vw);
+  max-height: 84vh;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
+  user-select: text;
+}
+
+.vf-modal-header,
+.vf-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.vf-modal-footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+.vf-modal-header button,
+.vf-modal-footer button {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.vf-modal-header button:hover,
+.vf-modal-footer button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.vf-compare-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vf-compare-section {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.vf-compare-file {
+  padding: 6px 10px;
+  background: #f7f8fa;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.vf-compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.vf-compare-grid > div {
+  min-width: 0;
+  border-right: 1px solid var(--line);
+}
+
+.vf-compare-grid > div:last-child {
+  border-right: 0;
+}
+
+.vf-compare-col-head {
+  padding: 4px 10px;
+  background: #fcfcfd;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.vf-compare-grid pre {
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  max-height: 240px;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+/* ---------- 文档所见即所得预览（见 docview.ts） ---------- */
+
+.pane textarea[hidden],
+.doc-preview[hidden],
+.doc-format-bar[hidden] {
+  display: none !important;
+}
+
+.doc-mode-switch {
+  margin-right: 6px;
+}
+
+.doc-mode-switch button {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+
+.doc-preview {
+  flex: 1;
+  min-height: 0;
+  margin: 0 8px 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  overflow: auto;
+  user-select: text;
+  line-height: 1.6;
+}
+
+.doc-preview.readonly {
+  background: #fafafa;
+}
+
+.doc-preview-empty {
+  padding: 16px 4px;
+}
+
+.doc-quick-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed var(--line);
+  user-select: none;
+}
+
+.doc-quick-bar button,
+.doc-table-actions button {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fafafa;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.doc-quick-bar button:hover,
+.doc-table-actions button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.doc-marker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  user-select: none;
+}
+
+.doc-section-tag {
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  color: #3730a3;
+}
+
+.doc-section-end {
+  background: #f3f4f6;
+  border: 1px dashed #d1d5db;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.doc-lock-tag {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  color: #92400e;
+}
+
+.doc-raw-html {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 4px;
+  background: #f8fafc;
+}
+
+.doc-raw-html-badge {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 4px;
+  user-select: none;
+}
+
+.doc-raw-html pre {
+  margin: 0;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.doc-heading {
+  margin: 10px 0 6px;
+  outline: none;
+}
+
+.doc-h1 {
+  font-size: 18px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 4px;
+}
+
+.doc-h2 {
+  font-size: 15px;
+  color: #111827;
+}
+
+.doc-h3,
+.doc-h4,
+.doc-h5,
+.doc-h6 {
+  font-size: 13.5px;
+}
+
+.doc-p {
+  margin: 6px 0;
+  min-height: 1.4em;
+  outline: none;
+  white-space: pre-wrap;
+}
+
+.doc-heading:focus,
+.doc-p:focus,
+.doc-blockquote:focus,
+.doc-list li:focus,
+.doc-table th:focus,
+.doc-table td:focus {
+  background: rgba(37, 99, 235, 0.04);
+  border-radius: 3px;
+}
+
+.doc-blockquote {
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--accent);
+  background: #f8fafc;
+  color: #334155;
+  outline: none;
+}
+
+.doc-code-wrap {
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.doc-code-head {
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--line);
+  background: #f1f5f9;
+  color: var(--muted);
+  font-size: 11px;
+  user-select: none;
+}
+
+.doc-code-wrap pre {
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+}
+
+.doc-code-wrap code {
+  display: block;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  outline: none;
+}
+
+.doc-list {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.doc-list li {
+  margin: 2px 0;
+  outline: none;
+}
+
+.doc-table-wrap {
+  margin: 8px 0;
+  overflow-x: auto;
+}
+
+.doc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.doc-table th,
+.doc-table td {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  text-align: left;
+  outline: none;
+}
+
+.doc-table th {
+  background: #f8fafc;
+  font-weight: 600;
+}
+
+.doc-table-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  user-select: none;
+}
+
+.doc-preview code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #f1f5f9;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+}
+
+.doc-code-wrap code {
+  padding: 0;
+  background: transparent;
+}
+
+.doc-img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.doc-format-bar {
+  position: fixed;
+  z-index: 4200;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+}
+
+.doc-format-bar button {
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.doc-format-bar button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ---------- 独立预览窗口（见 previewwindow.ts） ---------- */
+
+.preview-window-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.preview-window-btn:hover {
+  border-color: var(--preview);
+  color: var(--preview);
+}
+
+body.standalone-preview {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "center";
+}
+
+body.standalone-preview.standalone-show-log {
+  grid-template-rows: minmax(0, 1fr) 150px;
+  grid-template-areas:
+    "center"
+    "bottom";
+}
+
+body.standalone-preview #topbar,
+body.standalone-preview #left,
+body.standalone-preview #right,
+body.standalone-preview #center-bar > .segmented,
+body.standalone-preview #view-tools,
+body.standalone-preview #stage-title {
+  display: none !important;
+}
+
+body.standalone-preview:not(.standalone-show-log) #bottom {
+  display: none !important;
+}
+
+body.standalone-preview.standalone-show-log #tab-problems,
+body.standalone-preview.standalone-show-log #problems {
+  display: none !important;
+}
+
+body.standalone-preview.standalone-show-log #log {
+  display: block !important;
+}
+
+body.standalone-preview #center-bar {
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+body.standalone-preview #preview-bar {
+  width: 100%;
+}
+
+.preview-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.preview-bar-actions button,
+.preview-expand-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.preview-bar-actions button[aria-pressed="true"] {
+  border-color: var(--preview);
+  background: #fff1e8;
+  color: var(--preview);
+}
+
+.preview-expand-btn {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  z-index: 3500;
+  display: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+body.standalone-preview.preview-bar-collapsed #center-bar {
+  display: none !important;
+}
+
+body.standalone-preview.preview-bar-collapsed .preview-expand-btn {
+  display: inline-block;
+}
+
+body.standalone-preview #stage-scroll {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow: auto;
+  background: var(--bg);
+}
+
+body.standalone-preview #stage-space {
+  width: auto !important;
+  height: auto !important;
+  position: static !important;
+}
+
+body.standalone-preview #stage-space > #stage-frame {
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  transform: none !important;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+body.standalone-preview #stage {
+  border-radius: 6px;
+}
+
