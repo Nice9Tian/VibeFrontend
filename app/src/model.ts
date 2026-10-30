@@ -5,6 +5,7 @@ import { LINE_DECL, SHAPE_DECL, type ShapePreset } from "./shapes.ts";
 import { STANDARD_COMPONENTS } from "../standard/index.ts";
 import {
   computeDockWindowLayout,
+  dockFindLocation,
   dockIdsOfLayout,
   remapDockLayoutReferences,
   removeDockLayoutReferences,
@@ -776,9 +777,16 @@ export function isLayoutPositionedNode(scene: Scene, id: string): boolean {
 
 /**
  * 缩放节点后更新其宽高（受 SizePolicy 夹紧保护）；若节点在 size 中声明了 preferredWidth/Height 或 fixedWidth/Height，
- * 同步更新对应字段，使排版计算立即反映缩放后的新尺寸。
+ * 同步更新对应字段，使排版计算立即反映缩放后的新尺寸；若节点是 Dock，同步更新所属主窗口的 dockLayout 尺寸。
  */
-export function syncResizedNodeDimensions(node: SceneNode, width: number, height: number, minSize = 8): void {
+export function syncResizedNodeDimensions(
+  node: SceneNode,
+  width: number,
+  height: number,
+  minSize = 8,
+  scene?: Scene,
+  id?: string,
+): void {
   const rawW = Math.max(minSize, Math.round(width));
   const rawH = Math.max(minSize, Math.round(height));
   if (node.size?.fixedWidth !== undefined) node.size.fixedWidth = rawW;
@@ -789,6 +797,33 @@ export function syncResizedNodeDimensions(node: SceneNode, width: number, height
   node.height = nextH;
   if (node.size?.preferredWidth !== undefined) node.size.preferredWidth = nextW;
   if (node.size?.preferredHeight !== undefined) node.size.preferredHeight = nextH;
+
+  if (node.type === "Dock" && scene && id) {
+    const parentId = parentOfNode(scene, id);
+    const parent = parentId ? scene.nodes[parentId] : undefined;
+    if (parent?.dockLayout) {
+      const loc = dockFindLocation(parent.dockLayout, id);
+      if (loc?.kind === "area") {
+        const areaSpec = parent.dockLayout.areas[loc.area];
+        if (loc.area === "left" || loc.area === "right") {
+          if (areaSpec.size !== undefined) areaSpec.size = nextW;
+          if (areaSpec.groups.length > 1 && areaSpec.groups[loc.groupIndex]) {
+            const orient = areaSpec.splitOrientation ?? "vertical";
+            areaSpec.groups[loc.groupIndex].size = orient === "horizontal" ? nextW : nextH;
+          }
+        } else {
+          if (areaSpec.size !== undefined) areaSpec.size = nextH;
+          if (areaSpec.groups.length > 1 && areaSpec.groups[loc.groupIndex]) {
+            const orient = areaSpec.splitOrientation ?? "horizontal";
+            areaSpec.groups[loc.groupIndex].size = orient === "vertical" ? nextH : nextW;
+          }
+        }
+      } else if (loc?.kind === "floating" && parent.dockLayout.floating?.[loc.index]) {
+        parent.dockLayout.floating[loc.index].width = nextW;
+        parent.dockLayout.floating[loc.index].height = nextH;
+      }
+    }
+  }
 }
 
 /**
@@ -821,6 +856,8 @@ export function computeSceneLayout(
     const fy = Math.round(Number(getProp(cid, "floatY") ?? c.props?.floatY ?? 80));
     const fw = Math.max(80, Math.round(Number(getProp(cid, "floatWidth") ?? c.props?.floatWidth ?? prefWidth(c))));
     const fh = Math.max(hdrH + 20, Math.round(Number(getProp(cid, "floatHeight") ?? c.props?.floatHeight ?? prefHeight(c))));
+    const winBox = boxes.get(parentBox.windowId);
+    const winVis = winBox ? winBox.visible : parentBox.visible;
     const box: ComputedBox = {
       x: fx - parentBox.absX,
       y: fy - parentBox.absY,
@@ -828,7 +865,7 @@ export function computeSceneLayout(
       height: fh,
       absX: fx,
       absY: fy,
-      visible: parentBox.visible && isVisible(cid),
+      visible: winVis && isVisible(cid),
       windowId: parentBox.windowId,
     };
     boxes.set(cid, box);

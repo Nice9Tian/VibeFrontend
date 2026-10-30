@@ -9,6 +9,7 @@ import {
   layoutOf,
   removeNodeReferences,
   syncResizedNodeDimensions,
+  type DockLayoutSpec,
   type Scene,
   type SceneNode,
 } from "./model.ts";
@@ -533,12 +534,12 @@ export function applyResizeToScene(
     if (isLayoutPositionedNode(next, id)) {
       delete n.x;
       delete n.y;
-      syncResizedNodeDimensions(n, box.width, box.height, MIN_NODE_SIZE);
+      syncResizedNodeDimensions(n, box.width, box.height, MIN_NODE_SIZE, next, id);
     } else {
       const local = worldRectToNodeLocalInScene(next, id, box);
       n.x = local.x;
       n.y = local.y;
-      syncResizedNodeDimensions(n, local.width, local.height, MIN_NODE_SIZE);
+      syncResizedNodeDimensions(n, local.width, local.height, MIN_NODE_SIZE, next, id);
     }
   } else {
     n.width = Math.round(box.width);
@@ -626,4 +627,13 @@ export function applyDeleteFromScene(
   for (const id of removed) delete next.nodes[id];
   const nextLogic = removeYaml && yamlCandidates.length > 0 ? removeYamlObjects(logicText, yamlCandidates) : logicText;
   return { scene: next, logicText: nextLogic, removed, yamlCandidates };
+}
+
+/** 将窗口停靠排列写入 scene.nodes[winId].dockLayout，供画布持久化与撤销重做使用。 */
+export function applyDockLayoutToScene(scene: Scene, dockLayout: DockLayoutSpec, winId = scene.root): Scene {
+  const next = cloneScene(scene);
+  const winNode = next.nodes[winId];
+  if (!winNode) return next;
+  winNode.dockLayout = JSON.parse(JSON.stringify(dockLayout)) as DockLayoutSpec;
+  return next;
 }

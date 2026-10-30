@@ -1978,11 +1978,13 @@ body.standalone-preview #stage {
   transition: background 0.12s ease;
 }
 
-.dock-splitter.vertical {
+.dock-splitter.vertical,
+.dock-splitter-vertical {
   cursor: col-resize;
 }
 
-.dock-splitter.horizontal {
+.dock-splitter.horizontal,
+.dock-splitter-horizontal {
   cursor: row-resize;
 }
 

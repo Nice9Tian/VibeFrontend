@@ -26,27 +26,19 @@ export default function create(el, { props, emit, mode }) {
   });
 
   header.addEventListener("pointerdown", (e) => {
-    if (mode !== "preview" || current.enabled === false) return;
+    if (mode !== "preview" || current.enabled === false || !Boolean(current.floating)) return;
     if (e.button !== 0 || e.target === toggleBtn) return;
     e.stopPropagation();
     const startX = e.clientX;
     const startY = e.clientY;
     const baseX = Number(current.floatX ?? 60);
     const baseY = Number(current.floatY ?? 80);
-    let moved = false;
+    const rect = root.getBoundingClientRect();
+    const zoom = rect.width > 0 && root.offsetWidth > 0 ? rect.width / root.offsetWidth : 1;
     const onMove = (me) => {
-      const dx = Math.round(me.clientX - startX);
-      const dy = Math.round(me.clientY - startY);
-      if (!moved && Math.hypot(dx, dy) >= 4) {
-        moved = true;
-        if (!current.floating) {
-          emit("toggle", true);
-          emit("change", true);
-        }
-      }
-      if (moved) {
-        emit("move", { x: Math.max(0, baseX + dx), y: Math.max(0, baseY + dy) });
-      }
+      const dx = Math.round((me.clientX - startX) / zoom);
+      const dy = Math.round((me.clientY - startY) / zoom);
+      emit("move", { x: Math.max(0, baseX + dx), y: Math.max(0, baseY + dy) });
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);

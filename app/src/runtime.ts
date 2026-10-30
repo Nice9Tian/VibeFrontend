@@ -199,8 +199,12 @@ export class Runtime {
   private docks = new Map<string, boolean>();
   /** 主窗口停靠排列状态 */
   private dockLayouts = new Map<string, DockLayoutSpec>();
+  /** 上次 reset/adopt 时画布节点上的 dockLayout 快照（用于判断 scene.json 中的 dockLayout 是否被外部修改或撤销/重做） */
+  private lastSceneDockLayouts = new Map<string, string>();
   /** 浮动嵌入框未绑定状态时的运行态属性 */
   private floatBoxes = new Map<string, FloatBoxRuntimeState>();
+  /** 上次 reset/adopt 时画布 FloatBox 节点的 props 快照 */
+  private lastSceneFloatBoxProps = new Map<string, string>();
   /** 动作模拟设置 */
   private actionSims = new Map<string, ActionSimConfig>();
   /** 正在进行中的异步动作集合 */
@@ -226,6 +230,7 @@ export class Runtime {
     }
     this.windows.clear();
     this.dockLayouts.clear();
+    this.lastSceneDockLayouts.clear();
     for (const winId of allWindowIds(this.project.scene)) {
       const n = this.project.scene.nodes[winId];
       const isRoot = winId === this.project.scene.root;
@@ -234,10 +239,12 @@ export class Runtime {
       this.windows.set(winId, { open, modal });
       if (isPartitionedWindow(n)) {
         this.dockLayouts.set(winId, normalizeDockLayout(this.project.scene, n));
+        this.lastSceneDockLayouts.set(winId, JSON.stringify(n?.dockLayout ?? null));
       }
     }
     this.docks.clear();
     this.floatBoxes.clear();
+    this.lastSceneFloatBoxProps.clear();
     for (const [id, n] of Object.entries(this.project.scene.nodes)) {
       if (n.type === "Dock") this.docks.set(id, n.props?.visible !== false);
       if (n.type === "FloatBox") {
@@ -248,6 +255,7 @@ export class Runtime {
           ...(typeof n.props?.floatWidth === "number" ? { floatWidth: n.props.floatWidth } : {}),
           ...(typeof n.props?.floatHeight === "number" ? { floatHeight: n.props.floatHeight } : {}),
         });
+        this.lastSceneFloatBoxProps.set(id, JSON.stringify(n.props ?? null));
       }
     }
     for (const [name, def] of Object.entries(this.project.logic.actions ?? {})) {
@@ -265,9 +273,14 @@ export class Runtime {
 
   /** 换成新加载的项目；状态结构没变的部分保留当前值。 */
   adopt(project: RuntimeProject): void {
+    const prevSceneDockLayouts = new Map(this.lastSceneDockLayouts);
+    const prevSceneFloatBoxProps = new Map(this.lastSceneFloatBoxProps);
     const oldState = new Map(this.state);
     const oldConditions = new Map(this.textConditions);
     const oldWindows = new Map(this.windows);
+    const oldDocks = new Map(this.docks);
+    const oldDockLayouts = new Map(this.dockLayouts);
+    const oldFloatBoxes = new Map(this.floatBoxes);
     const oldSims = new Map(this.actionSims);
     this.project = project;
     this.exprCache.clear();
@@ -283,9 +296,28 @@ export class Runtime {
     for (const [id, win] of oldWindows) {
       if (this.windows.has(id)) this.windows.set(id, win);
     }
+    for (const [id, vis] of oldDocks) {
+      if (this.docks.has(id)) this.docks.set(id, vis);
+    }
+    for (const [winId, layout] of oldDockLayouts) {
+      if (!this.dockLayouts.has(winId)) continue;
+      const oldWinDockLayout = prevSceneDockLayouts.get(winId) ?? "null";
+      const newWinDockLayout = this.lastSceneDockLayouts.get(winId) ?? "null";
+      if (oldWinDockLayout === newWinDockLayout) {
+        this.dockLayouts.set(winId, normalizeDockLayout(project.scene, { ...project.scene.nodes[winId], dockLayout: layout }));
+      }
+    }
+    for (const [id, fb] of oldFloatBoxes) {
+      if (this.floatBoxes.has(id)) {
+        const oldProps = prevSceneFloatBoxProps.get(id) ?? "null";
+        const newProps = this.lastSceneFloatBoxProps.get(id) ?? "null";
+        if (oldProps === newProps) this.floatBoxes.set(id, { ...fb });
+      }
+    }
     for (const [name, sim] of oldSims) {
       this.actionSims.set(name, sim);
     }
+    this.syncActiveTabsWithVisibility();
   }
 
   /** 触发 app.start，预览开始时调用一次。 */
@@ -308,6 +340,7 @@ export class Runtime {
       dockLayout: layout,
     });
     this.dockLayouts.set(winId, normalized);
+    this.lastSceneDockLayouts.set(winId, JSON.stringify(winNode?.dockLayout ?? null));
     this.hooks.onChange();
   }
 
@@ -387,6 +420,32 @@ export class Runtime {
     this.dockLayouts.set(winId, next);
     this.hooks.onLog({ title: `停靠区 ${area}`, lines: [`调整并排组 #${groupIndex} 尺寸为 ${Math.round(size)}px`] });
     this.hooks.onChange();
+  }
+
+  /** 当停靠面板显隐变化后，若某个页签组的当前 active 面板已隐藏，则自动切换到同组内仍可见的页签。 */
+  private syncActiveTabsWithVisibility(): boolean {
+    let anyChanged = false;
+    for (const [winId, layout] of this.dockLayouts) {
+      let winChanged = false;
+      const next = cloneDockLayout(layout);
+      for (const area of ["top", "bottom", "left", "right"] as const) {
+        for (const group of next.areas[area]?.groups ?? []) {
+          const activeId = group.active ?? group.tabs[0];
+          if (activeId && !this.view(activeId).visible) {
+            const firstVisible = group.tabs.find((tid) => this.view(tid).visible);
+            if (firstVisible && firstVisible !== group.active) {
+              group.active = firstVisible;
+              winChanged = true;
+            }
+          }
+        }
+      }
+      if (winChanged) {
+        this.dockLayouts.set(winId, next);
+        anyChanged = true;
+      }
+    }
+    return anyChanged;
   }
 
   dockSetVisible(dockId: string, visible: boolean): void {
@@ -949,6 +1008,9 @@ export class Runtime {
     this.state = batch.work;
     this.windows = batch.windows;
     this.docks = batch.docks;
+    if (this.syncActiveTabsWithVisibility()) {
+      changed = true;
+    }
     if (batch.lines.length > 0 || !quietWhenEmpty) {
       if (batch.lines.length === 0) batch.lines.push("（没有状态变化）");
       this.hooks.onLog({ title, lines: batch.lines });

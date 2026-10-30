@@ -2,6 +2,8 @@
 import { isMap, parseDocument, type Document } from "yaml";
 import {
   computeDockWindowLayout,
+  dockFindLocation,
+  isDockArea,
   syncDockHeaderDom,
   syncDockSplittersDom,
   type DockPreviewCallbacks,
@@ -214,6 +216,7 @@ function currentLayoutBoxes() {
   return computeSceneLayout(project.scene, {
     isVisible: (nid) => runtime.view(nid).visible,
     getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
+    getDockLayout: (wid) => runtime.getDockLayout(wid),
   });
 }
 
@@ -561,20 +564,56 @@ function applyViews(): void {
   let dockInfoMap:
     | Map<string, { groupTabs: string[]; activeTab: string; isFloating: boolean; area?: "left" | "right" | "top" | "bottom" }>
     | undefined;
+  const persistPreviewDockLayout = (label: string, commit = true) => {
+    if (!previewRuntime || !rootNode) return;
+    const nextLayout = previewRuntime.getDockLayout(rootId);
+    rootNode.dockLayout = nextLayout;
+    previewRuntime.setDockLayout(nextLayout, rootId);
+    designRuntime.setDockLayout(nextLayout, rootId);
+    if (commit) void saveScene({ label });
+  };
   const dockCallbacks: DockPreviewCallbacks = {
     getMode: () => mode,
     getScene: () => project.scene,
+    getDockLayout: () => runtime.getDockLayout(rootId),
     getWindowSize: () => ({ width: rootNode?.width ?? 1280, height: rootNode?.height ?? 800 }),
     getDockTitle: (did) => String(runtime.view(did).props.title ?? node(did)?.title ?? did),
-    onActivateTab: (did) => previewRuntime?.dockActivateTab(did),
-    onTabify: (targetId, did) => previewRuntime?.dockTabify(targetId, did),
-    onSplit: (targetId, did, pos, orient) => previewRuntime?.dockSplit(targetId, did, pos, orient),
-    onMoveToArea: (did, area) => previewRuntime?.dockMoveToArea(did, area),
-    onFloat: (did, rect) => previewRuntime?.dockFloat(did, rect),
-    onRestore: (did) => previewRuntime?.dockRestore(did),
-    onClose: (did) => previewRuntime?.dockSetVisible(did, false),
-    onResizeArea: (area, size) => previewRuntime?.dockResizeArea(area, size),
-    onResizeSplit: (area, idx, size) => previewRuntime?.dockResizeSplit(area, idx, size),
+    onActivateTab: (did) => {
+      previewRuntime?.dockActivateTab(did);
+      persistPreviewDockLayout("切换停靠页签", true);
+    },
+    onTabify: (targetId, did) => {
+      previewRuntime?.dockTabify(targetId, did);
+      persistPreviewDockLayout("叠入停靠页签", true);
+    },
+    onSplit: (targetId, did, pos, orient) => {
+      previewRuntime?.dockSplit(targetId, did, pos, orient);
+      persistPreviewDockLayout("分栏并排停靠", true);
+    },
+    onMoveToArea: (did, area) => {
+      previewRuntime?.dockMoveToArea(did, area);
+      persistPreviewDockLayout("移动停靠区", true);
+    },
+    onFloat: (did, rect, commit = true) => {
+      previewRuntime?.dockFloat(did, rect);
+      persistPreviewDockLayout("浮出停靠面板", commit);
+    },
+    onRestore: (did) => {
+      previewRuntime?.dockRestore(did);
+      persistPreviewDockLayout("恢复停靠面板", true);
+    },
+    onClose: (did) => {
+      previewRuntime?.dockSetVisible(did, false);
+      persistPreviewDockLayout("关闭停靠面板", false);
+    },
+    onResizeArea: (area, size, commit = true) => {
+      previewRuntime?.dockResizeArea(area, size);
+      persistPreviewDockLayout("调整停靠区大小", commit);
+    },
+    onResizeSplit: (area, idx, size, commit = true) => {
+      previewRuntime?.dockResizeSplit(area, idx, size);
+      persistPreviewDockLayout("调整并排分栏大小", commit);
+    },
   };
 
   if (rootNode && isPartitionedWindow(rootNode)) {
@@ -616,6 +655,18 @@ function applyViews(): void {
     const view = runtime.view(id);
     const n = node(id);
     const box = boxes.get(id);
+    if (n?.type === "FloatBox") {
+      const wantFloat = Boolean(view.props.floating);
+      if (wantFloat && entry.wrapper.parentElement !== stageEl) {
+        stageEl.append(entry.wrapper);
+      } else if (!wantFloat) {
+        const origPid = parentOf(id);
+        const origParentEl = origPid && origPid !== rootId ? mounted.get(origPid)?.wrapper : stageEl;
+        if (origParentEl && entry.wrapper.parentElement !== origParentEl) {
+          origParentEl.append(entry.wrapper);
+        }
+      }
+    }
     if (box && n?.type !== "Line") {
       if (n?.type === "Dialog" && id !== project.scene.root && rootNode) {
         const dx = Math.round((rootNode.width - box.width) / 2);
@@ -629,9 +680,10 @@ function applyViews(): void {
           transformOrigin: "center center",
         });
       } else {
+        const useAbs = n?.type === "FloatBox" && Boolean(view.props.floating) && entry.wrapper.parentElement === stageEl;
         Object.assign(entry.wrapper.style, {
-          left: `${box.x}px`,
-          top: `${box.y}px`,
+          left: `${useAbs ? box.absX : box.x}px`,
+          top: `${useAbs ? box.absY : box.y}px`,
           width: `${box.width}px`,
           height: `${box.height}px`,
           transform: n?.rotation ? `rotate(${n.rotation}deg)` : "",
@@ -1807,7 +1859,11 @@ overlay.addEventListener("pointermove", (e) => {
     }
     const nextW = Math.max(MIN_SIZE, Math.round(box.width));
     const nextH = Math.max(MIN_SIZE, Math.round(box.height));
-    syncResizedNodeDimensions(n, nextW, nextH, MIN_SIZE);
+    syncResizedNodeDimensions(n, nextW, nextH, MIN_SIZE, project.scene, gesture.id);
+    if (n.type === "Dock") {
+      const rootNode = node(project.scene.root);
+      if (rootNode?.dockLayout) designRuntime.setDockLayout(rootNode.dockLayout, project.scene.root);
+    }
     if (!isRoot && !isLayoutPositionedNode(project.scene, gesture.id)) {
       const local = worldRectToNodeLocalInScene(project.scene, gesture.id, {
         x: box.x,
@@ -1854,7 +1910,11 @@ overlay.addEventListener("pointermove", (e) => {
       if (eachNode.type === "Line" && scaled.props) {
         eachNode.props = scaled.props;
       } else {
-        syncResizedNodeDimensions(eachNode, scaled.width, scaled.height, MIN_SIZE);
+        syncResizedNodeDimensions(eachNode, scaled.width, scaled.height, MIN_SIZE, project.scene, id);
+        if (eachNode.type === "Dock") {
+          const rootNode = node(project.scene.root);
+          if (rootNode?.dockLayout) designRuntime.setDockLayout(rootNode.dockLayout, project.scene.root);
+        }
         if (isLayoutPositionedNode(project.scene, id)) {
           delete eachNode.x;
           delete eachNode.y;
@@ -2545,8 +2605,27 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
     }
     if (isDockInPartition) {
       parent.docks ??= [];
-      if (index === undefined || index < 0) parent.docks.push(fresh);
-      else parent.docks.splice(index, 0, fresh);
+      const sourceDockIdx = parent.docks.indexOf(root);
+      const dockInsertIdx = sourceDockIdx >= 0 ? sourceDockIdx + 1 : index;
+      if (dockInsertIdx === undefined || dockInsertIdx < 0 || dockInsertIdx > parent.docks.length) {
+        parent.docks.push(fresh);
+      } else {
+        parent.docks.splice(dockInsertIdx, 0, fresh);
+      }
+      if (parent.dockLayout) {
+        const loc = dockFindLocation(parent.dockLayout, root);
+        if (loc?.kind === "area") {
+          parent.dockLayout.areas[loc.area].groups.splice(loc.groupIndex + 1, 0, { tabs: [fresh], active: fresh });
+        } else {
+          const area = isDockArea(copy.dockArea) ? copy.dockArea : "left";
+          parent.dockLayout.areas[area].groups.push({ tabs: [fresh], active: fresh });
+        }
+      }
+      if (parent.children) {
+        const childIdx = parent.children.indexOf(root);
+        if (childIdx >= 0) parent.children.splice(childIdx + 1, 0, fresh);
+        else if (!parent.children.includes(fresh)) parent.children.push(fresh);
+      }
     } else {
       parent.children ??= [];
       if (index === undefined || index < 0) parent.children.push(fresh);
@@ -2823,7 +2902,27 @@ async function reorder(id: string, toFront: boolean): Promise<void> {
   if (parent.docks?.includes(id)) {
     const rest = parent.docks.filter((child) => child !== id);
     parent.docks = toFront ? [...rest, id] : [id, ...rest];
-  } else if (parent.children?.includes(id)) {
+  }
+  if (parent.dockLayout) {
+    const loc = dockFindLocation(parent.dockLayout, id);
+    if (loc?.kind === "area") {
+      const areaSpec = parent.dockLayout.areas[loc.area];
+      const grp = areaSpec.groups[loc.groupIndex];
+      if (grp && grp.tabs.length > 1) {
+        const restTabs = grp.tabs.filter((t) => t !== id);
+        grp.tabs = toFront ? [...restTabs, id] : [id, ...restTabs];
+      } else if (areaSpec.groups.length > 1) {
+        const [movedGrp] = areaSpec.groups.splice(loc.groupIndex, 1);
+        if (toFront) areaSpec.groups.push(movedGrp);
+        else areaSpec.groups.unshift(movedGrp);
+      }
+    } else if (loc?.kind === "floating" && parent.dockLayout.floating && parent.dockLayout.floating.length > 1) {
+      const [movedFloat] = parent.dockLayout.floating.splice(loc.index, 1);
+      if (toFront) parent.dockLayout.floating.push(movedFloat);
+      else parent.dockLayout.floating.unshift(movedFloat);
+    }
+  }
+  if (parent.children?.includes(id)) {
     const rest = parent.children.filter((child) => child !== id);
     parent.children = toFront ? [...rest, id] : [id, ...rest];
   }

@@ -943,25 +943,19 @@ var VF = (function(exports) {
 		});
 		header.addEventListener("pointerdown", (e) => {
 			var _current$floatX, _current$floatY;
-			if (mode !== "preview" || current.enabled === false) return;
+			if (mode !== "preview" || current.enabled === false || !Boolean(current.floating)) return;
 			if (e.button !== 0 || e.target === toggleBtn) return;
 			e.stopPropagation();
 			const startX = e.clientX;
 			const startY = e.clientY;
 			const baseX = Number((_current$floatX = current.floatX) !== null && _current$floatX !== void 0 ? _current$floatX : 60);
 			const baseY = Number((_current$floatY = current.floatY) !== null && _current$floatY !== void 0 ? _current$floatY : 80);
-			let moved = false;
+			const rect = root.getBoundingClientRect();
+			const zoom = rect.width > 0 && root.offsetWidth > 0 ? rect.width / root.offsetWidth : 1;
 			const onMove = (me) => {
-				const dx = Math.round(me.clientX - startX);
-				const dy = Math.round(me.clientY - startY);
-				if (!moved && Math.hypot(dx, dy) >= 4) {
-					moved = true;
-					if (!current.floating) {
-						emit("toggle", true);
-						emit("change", true);
-					}
-				}
-				if (moved) emit("move", {
+				const dx = Math.round((me.clientX - startX) / zoom);
+				const dy = Math.round((me.clientY - startY) / zoom);
+				emit("move", {
 					x: Math.max(0, baseX + dx),
 					y: Math.max(0, baseY + dy)
 				});
@@ -1208,19 +1202,48 @@ var VF = (function(exports) {
 				active: did
 			});
 		}
+		const out = {
+			areas,
+			floating
+		};
 		for (const area of DOCK_AREAS) {
 			const areaSpec = areas[area];
-			if (areaSpec.size === void 0 && areaSpec.groups.length > 0) {
+			if (areaSpec.groups.length === 0) {
+				delete areaSpec.size;
+				delete areaSpec.splitOrientation;
+				continue;
+			}
+			if (areaSpec.size === void 0) {
 				var _areaSpec$groups$0$ac;
 				const firstId = (_areaSpec$groups$0$ac = areaSpec.groups[0].active) !== null && _areaSpec$groups$0$ac !== void 0 ? _areaSpec$groups$0$ac : areaSpec.groups[0].tabs[0];
 				const firstNode = firstId ? scene.nodes[firstId] : void 0;
 				if (firstNode) areaSpec.size = area === "left" || area === "right" ? prefWidth(firstNode) : prefHeight(firstNode);
 			}
+			if (areaSpec.groups.length === 1) {
+				delete areaSpec.splitOrientation;
+				delete areaSpec.groups[0].size;
+			} else {
+				var _areaSpec$splitOrient;
+				const orient = (_areaSpec$splitOrient = areaSpec.splitOrientation) !== null && _areaSpec$splitOrient !== void 0 ? _areaSpec$splitOrient : defaultSplitOrientation(area);
+				areaSpec.splitOrientation = orient;
+				if (areaSpec.groups.some((g) => g.size === void 0)) {
+					const distributed = distributeGroupAxisSizes(computeReferenceAreaSplitSpan(out, scene, winNode, area), areaSpec.groups.map((group) => {
+						var _ref;
+						const activeId = group.active && group.tabs.includes(group.active) ? group.active : group.tabs[0];
+						return {
+							group,
+							activeDock: (_ref = activeId ? scene.nodes[activeId] : void 0) !== null && _ref !== void 0 ? _ref : {
+								type: "Dock",
+								width: 240,
+								height: 280
+							}
+						};
+					}), orient);
+					for (let gi = 0; gi < areaSpec.groups.length; gi++) areaSpec.groups[gi].size = distributed[gi];
+				}
+			}
 		}
-		return {
-			areas,
-			floating
-		};
+		return out;
 	}
 	function dockFindLocation(layout, dockId) {
 		var _layout$floating3;
@@ -1259,16 +1282,25 @@ var VF = (function(exports) {
 		const areaSpec = layout.areas[loc.area];
 		const group = areaSpec.groups[loc.groupIndex];
 		group.tabs = group.tabs.filter((id) => id !== dockId);
-		if (group.tabs.length === 0) areaSpec.groups.splice(loc.groupIndex, 1);
-		else if (group.active === dockId || !group.active || !group.tabs.includes(group.active)) group.active = group.tabs[Math.min(loc.tabIndex, group.tabs.length - 1)];
+		if (group.tabs.length === 0) {
+			areaSpec.groups.splice(loc.groupIndex, 1);
+			if (areaSpec.groups.length === 0) {
+				delete areaSpec.size;
+				delete areaSpec.splitOrientation;
+			} else if (areaSpec.groups.length === 1) {
+				delete areaSpec.splitOrientation;
+				delete areaSpec.groups[0].size;
+			}
+		} else if (group.active === dockId || !group.active || !group.tabs.includes(group.active)) group.active = group.tabs[Math.min(loc.tabIndex, group.tabs.length - 1)];
 		return { lastArea: loc.area };
 	}
 	/** 将 dockId 叠入 targetDockId 所在的页签组，并激活 dockId。 */
 	function dockTabify(layout, scene, winNode, targetDockId, dockId) {
+		var _winNode$width, _winNode$height, _winNode$width2, _winNode$height2;
 		const next = normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
 			type: "Window",
-			width: 0,
-			height: 0,
+			width: (_winNode$width = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width !== void 0 ? _winNode$width : 1280,
+			height: (_winNode$height = winNode === null || winNode === void 0 ? void 0 : winNode.height) !== null && _winNode$height !== void 0 ? _winNode$height : 800,
 			dockLayout: cloneDockLayout(layout)
 		}));
 		if (targetDockId === dockId) return next;
@@ -1282,26 +1314,27 @@ var VF = (function(exports) {
 		targetLoc.group.active = dockId;
 		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
 			type: "Window",
-			width: 0,
-			height: 0,
+			width: (_winNode$width2 = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width2 !== void 0 ? _winNode$width2 : 1280,
+			height: (_winNode$height2 = winNode === null || winNode === void 0 ? void 0 : winNode.height) !== null && _winNode$height2 !== void 0 ? _winNode$height2 : 800,
 			dockLayout: next
 		}));
 	}
 	/** 切换页签组内的当前激活页签。 */
 	function dockActivateTab(layout, scene, winNode, dockId) {
+		var _winNode$width3, _winNode$height3;
 		const next = cloneDockLayout(layout);
 		const loc = dockFindLocation(next, dockId);
 		if (loc && loc.kind === "area") loc.group.active = dockId;
 		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
 			type: "Window",
-			width: 0,
-			height: 0,
+			width: (_winNode$width3 = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width3 !== void 0 ? _winNode$width3 : 1280,
+			height: (_winNode$height3 = winNode === null || winNode === void 0 ? void 0 : winNode.height) !== null && _winNode$height3 !== void 0 ? _winNode$height3 : 800,
 			dockLayout: next
 		}));
 	}
 	/** 将停靠面板拖出/切换为浮窗（或更新浮窗位置和尺寸）。 */
 	function dockFloat(layout, scene, winNode, dockId, rect) {
-		var _prevFloat$width, _prevFloat$height, _ref, _rect$x, _ref2, _rect$y, _rect$width, _rect$height, _next$floating;
+		var _prevFloat$width, _prevFloat$height, _ref2, _rect$x, _ref3, _rect$y, _rect$width, _rect$height, _next$floating, _winNode$width4, _winNode$height4;
 		const next = cloneDockLayout(layout);
 		const dNode = scene.nodes[dockId];
 		if (!dNode || dNode.type !== "Dock") return next;
@@ -1314,27 +1347,27 @@ var VF = (function(exports) {
 		const item = {
 			dockId,
 			lastArea: resolvedArea,
-			x: Math.round((_ref = (_rect$x = rect === null || rect === void 0 ? void 0 : rect.x) !== null && _rect$x !== void 0 ? _rect$x : prevFloat === null || prevFloat === void 0 ? void 0 : prevFloat.x) !== null && _ref !== void 0 ? _ref : 80),
-			y: Math.round((_ref2 = (_rect$y = rect === null || rect === void 0 ? void 0 : rect.y) !== null && _rect$y !== void 0 ? _rect$y : prevFloat === null || prevFloat === void 0 ? void 0 : prevFloat.y) !== null && _ref2 !== void 0 ? _ref2 : 90),
+			x: Math.round((_ref2 = (_rect$x = rect === null || rect === void 0 ? void 0 : rect.x) !== null && _rect$x !== void 0 ? _rect$x : prevFloat === null || prevFloat === void 0 ? void 0 : prevFloat.x) !== null && _ref2 !== void 0 ? _ref2 : 80),
+			y: Math.round((_ref3 = (_rect$y = rect === null || rect === void 0 ? void 0 : rect.y) !== null && _rect$y !== void 0 ? _rect$y : prevFloat === null || prevFloat === void 0 ? void 0 : prevFloat.y) !== null && _ref3 !== void 0 ? _ref3 : 90),
 			width: Math.max(80, Math.round((_rect$width = rect === null || rect === void 0 ? void 0 : rect.width) !== null && _rect$width !== void 0 ? _rect$width : defW)),
 			height: Math.max(60, Math.round((_rect$height = rect === null || rect === void 0 ? void 0 : rect.height) !== null && _rect$height !== void 0 ? _rect$height : defH))
 		};
 		next.floating = [...(_next$floating = next.floating) !== null && _next$floating !== void 0 ? _next$floating : [], item];
 		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
 			type: "Window",
-			width: 0,
-			height: 0,
+			width: (_winNode$width4 = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width4 !== void 0 ? _winNode$width4 : 1280,
+			height: (_winNode$height4 = winNode === null || winNode === void 0 ? void 0 : winNode.height) !== null && _winNode$height4 !== void 0 ? _winNode$height4 : 800,
 			dockLayout: next
 		}));
 	}
 	/** 将浮窗恢复回原来的停靠区（或指定停靠区）。 */
 	function dockRestore(layout, scene, winNode, dockId, targetArea) {
-		var _ref3;
+		var _ref4, _winNode$width5, _winNode$height5;
 		const next = cloneDockLayout(layout);
 		const dNode = scene.nodes[dockId];
 		if (!dNode || dNode.type !== "Dock") return next;
 		const { lastArea } = detachDockFromLayout(next, dockId);
-		const area = (_ref3 = targetArea !== null && targetArea !== void 0 ? targetArea : lastArea) !== null && _ref3 !== void 0 ? _ref3 : isDockArea(dNode.dockArea) ? dNode.dockArea : "left";
+		const area = (_ref4 = targetArea !== null && targetArea !== void 0 ? targetArea : lastArea) !== null && _ref4 !== void 0 ? _ref4 : isDockArea(dNode.dockArea) ? dNode.dockArea : "left";
 		next.areas[area].groups.push({
 			tabs: [dockId],
 			active: dockId
@@ -1342,13 +1375,14 @@ var VF = (function(exports) {
 		if (next.areas[area].size === void 0) next.areas[area].size = area === "left" || area === "right" ? prefWidth(dNode) : prefHeight(dNode);
 		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
 			type: "Window",
-			width: 0,
-			height: 0,
+			width: (_winNode$width5 = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width5 !== void 0 ? _winNode$width5 : 1280,
+			height: (_winNode$height5 = winNode === null || winNode === void 0 ? void 0 : winNode.height) !== null && _winNode$height5 !== void 0 ? _winNode$height5 : 800,
 			dockLayout: next
 		}));
 	}
 	/** 将面板移动/吸附到指定停靠区。 */
 	function dockMoveToArea(layout, scene, winNode, dockId, area, index) {
+		var _winNode$width6, _winNode$height6;
 		const next = cloneDockLayout(layout);
 		const dNode = scene.nodes[dockId];
 		if (!dNode || dNode.type !== "Dock") return next;
@@ -1363,14 +1397,14 @@ var VF = (function(exports) {
 		if (next.areas[area].size === void 0) next.areas[area].size = area === "left" || area === "right" ? prefWidth(dNode) : prefHeight(dNode);
 		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
 			type: "Window",
-			width: 0,
-			height: 0,
+			width: (_winNode$width6 = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width6 !== void 0 ? _winNode$width6 : 1280,
+			height: (_winNode$height6 = winNode === null || winNode === void 0 ? void 0 : winNode.height) !== null && _winNode$height6 !== void 0 ? _winNode$height6 : 800,
 			dockLayout: next
 		}));
 	}
 	/** 将 dockId 与 targetDockId 在同一停靠区内并排放置（split）。 */
 	function dockSplit(layout, scene, winNode, targetDockId, dockId, position = "after", orientation) {
-		var _ref4;
+		var _ref5, _winNode$width7, _winNode$height7;
 		const next = cloneDockLayout(layout);
 		if (targetDockId === dockId) return next;
 		const targetLocBefore = dockFindLocation(next, targetDockId);
@@ -1380,7 +1414,7 @@ var VF = (function(exports) {
 		const targetLoc = dockFindLocation(next, targetDockId);
 		if (!targetLoc || targetLoc.kind !== "area") return dockMoveToArea(next, scene, winNode, dockId, area);
 		const areaSpec = next.areas[area];
-		areaSpec.splitOrientation = (_ref4 = orientation !== null && orientation !== void 0 ? orientation : areaSpec.splitOrientation) !== null && _ref4 !== void 0 ? _ref4 : defaultSplitOrientation(area);
+		areaSpec.splitOrientation = (_ref5 = orientation !== null && orientation !== void 0 ? orientation : areaSpec.splitOrientation) !== null && _ref5 !== void 0 ? _ref5 : defaultSplitOrientation(area);
 		const insertIdx = position === "before" ? targetLoc.groupIndex : targetLoc.groupIndex + 1;
 		areaSpec.groups.splice(insertIdx, 0, {
 			tabs: [dockId],
@@ -1388,33 +1422,107 @@ var VF = (function(exports) {
 		});
 		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
 			type: "Window",
-			width: 0,
-			height: 0,
+			width: (_winNode$width7 = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width7 !== void 0 ? _winNode$width7 : 1280,
+			height: (_winNode$height7 = winNode === null || winNode === void 0 ? void 0 : winNode.height) !== null && _winNode$height7 !== void 0 ? _winNode$height7 : 800,
 			dockLayout: next
 		}));
 	}
 	/** 拖动停靠区与中央区之间的分隔条，调整停靠区厚度（宽度或高度）。 */
 	function dockResizeArea(layout, scene, winNode, area, size) {
+		var _winNode$width8, _winNode$height8;
 		const next = cloneDockLayout(layout);
 		const clamped = Math.max(area === "left" || area === "right" ? 80 : 48, Math.min(900, Math.round(size)));
 		next.areas[area].size = clamped;
 		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
 			type: "Window",
-			width: 0,
-			height: 0,
+			width: (_winNode$width8 = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width8 !== void 0 ? _winNode$width8 : 1280,
+			height: (_winNode$height8 = winNode === null || winNode === void 0 ? void 0 : winNode.height) !== null && _winNode$height8 !== void 0 ? _winNode$height8 : 800,
 			dockLayout: next
 		}));
 	}
-	/** 拖动同一停靠区内并排组之间的分隔条，调整第 groupIndex 个并排组的像素尺寸。 */
+	function computeReferenceAreaSplitSpan(layout, scene, winNode, area) {
+		var _winNode$menuBar$heig, _statusNode$height, _areaSpec$splitOrient2, _layout$areas$top$gro2, _layout$areas$top4, _layout$areas$bottom$2, _layout$areas$bottom4;
+		const W = (winNode === null || winNode === void 0 ? void 0 : winNode.width) && winNode.width > 0 ? winNode.width : 1280;
+		const H = (winNode === null || winNode === void 0 ? void 0 : winNode.height) && winNode.height > 0 ? winNode.height : 800;
+		const menuH = (winNode === null || winNode === void 0 ? void 0 : winNode.menuBar) ? Math.max(0, Math.round((_winNode$menuBar$heig = winNode.menuBar.height) !== null && _winNode$menuBar$heig !== void 0 ? _winNode$menuBar$heig : 28)) : 0;
+		const statusNode = (winNode === null || winNode === void 0 ? void 0 : winNode.statusBar) ? scene.nodes[winNode.statusBar] : void 0;
+		const statusH = statusNode ? Math.round((_statusNode$height = statusNode.height) !== null && _statusNode$height !== void 0 ? _statusNode$height : 28) : 0;
+		const midH = Math.max(0, H - menuH - statusH);
+		const areaSpec = layout.areas[area];
+		if (((_areaSpec$splitOrient2 = areaSpec === null || areaSpec === void 0 ? void 0 : areaSpec.splitOrientation) !== null && _areaSpec$splitOrient2 !== void 0 ? _areaSpec$splitOrient2 : defaultSplitOrientation(area)) === "horizontal") {
+			var _areaSpec$groups$0$ac2, _areaSpec$groups$, _areaSpec$groups$2, _areaSpec$size;
+			if (area === "top" || area === "bottom") return W;
+			const firstId = (_areaSpec$groups$0$ac2 = areaSpec === null || areaSpec === void 0 || (_areaSpec$groups$ = areaSpec.groups[0]) === null || _areaSpec$groups$ === void 0 ? void 0 : _areaSpec$groups$.active) !== null && _areaSpec$groups$0$ac2 !== void 0 ? _areaSpec$groups$0$ac2 : areaSpec === null || areaSpec === void 0 || (_areaSpec$groups$2 = areaSpec.groups[0]) === null || _areaSpec$groups$2 === void 0 ? void 0 : _areaSpec$groups$2.tabs[0];
+			const firstNode = firstId ? scene.nodes[firstId] : void 0;
+			return Math.max(80, Math.round((_areaSpec$size = areaSpec === null || areaSpec === void 0 ? void 0 : areaSpec.size) !== null && _areaSpec$size !== void 0 ? _areaSpec$size : firstNode ? prefWidth(firstNode) : 240));
+		}
+		let topH = 0;
+		if (((_layout$areas$top$gro2 = (_layout$areas$top4 = layout.areas.top) === null || _layout$areas$top4 === void 0 ? void 0 : _layout$areas$top4.groups.length) !== null && _layout$areas$top$gro2 !== void 0 ? _layout$areas$top$gro2 : 0) > 0) {
+			var _layout$areas$top$gro3, _layout$areas$top$siz;
+			const firstTopId = (_layout$areas$top$gro3 = layout.areas.top.groups[0].active) !== null && _layout$areas$top$gro3 !== void 0 ? _layout$areas$top$gro3 : layout.areas.top.groups[0].tabs[0];
+			const firstTopNode = firstTopId ? scene.nodes[firstTopId] : void 0;
+			topH = Math.max(40, Math.round((_layout$areas$top$siz = layout.areas.top.size) !== null && _layout$areas$top$siz !== void 0 ? _layout$areas$top$siz : firstTopNode ? prefHeight(firstTopNode) : 68));
+		}
+		let bottomH = 0;
+		if (((_layout$areas$bottom$2 = (_layout$areas$bottom4 = layout.areas.bottom) === null || _layout$areas$bottom4 === void 0 ? void 0 : _layout$areas$bottom4.groups.length) !== null && _layout$areas$bottom$2 !== void 0 ? _layout$areas$bottom$2 : 0) > 0) {
+			var _layout$areas$bottom$3, _layout$areas$bottom$4;
+			const firstBotId = (_layout$areas$bottom$3 = layout.areas.bottom.groups[0].active) !== null && _layout$areas$bottom$3 !== void 0 ? _layout$areas$bottom$3 : layout.areas.bottom.groups[0].tabs[0];
+			const firstBotNode = firstBotId ? scene.nodes[firstBotId] : void 0;
+			bottomH = Math.max(40, Math.round((_layout$areas$bottom$4 = layout.areas.bottom.size) !== null && _layout$areas$bottom$4 !== void 0 ? _layout$areas$bottom$4 : firstBotNode ? prefHeight(firstBotNode) : 96));
+		}
+		if (area === "top") return topH || 68;
+		if (area === "bottom") return bottomH || 96;
+		return Math.max(80, midH - topH - bottomH);
+	}
+	/** 拖动同一停靠区内并排组之间的分隔条，仅在相邻的第 groupIndex 与第 groupIndex+1 组之间重新分配尺寸，保持其余组不变。 */
 	function dockResizeSplit(layout, scene, winNode, area, groupIndex, size) {
-		var _next$areas$area$grou, _next$areas$area;
+		var _areaSpec$groups, _areaSpec$splitOrient3, _winNode$width11, _winNode$height11;
 		const next = cloneDockLayout(layout);
-		const groups = (_next$areas$area$grou = (_next$areas$area = next.areas[area]) === null || _next$areas$area === void 0 ? void 0 : _next$areas$area.groups) !== null && _next$areas$area$grou !== void 0 ? _next$areas$area$grou : [];
-		if (groupIndex >= 0 && groupIndex < groups.length) groups[groupIndex].size = Math.max(60, Math.round(size));
+		const areaSpec = next.areas[area];
+		const groups = (_areaSpec$groups = areaSpec === null || areaSpec === void 0 ? void 0 : areaSpec.groups) !== null && _areaSpec$groups !== void 0 ? _areaSpec$groups : [];
+		if (groupIndex < 0 || groupIndex >= groups.length) {
+			var _winNode$width9, _winNode$height9;
+			return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
+				type: "Window",
+				width: (_winNode$width9 = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width9 !== void 0 ? _winNode$width9 : 1280,
+				height: (_winNode$height9 = winNode === null || winNode === void 0 ? void 0 : winNode.height) !== null && _winNode$height9 !== void 0 ? _winNode$height9 : 800,
+				dockLayout: next
+			}));
+		}
+		const orient = (_areaSpec$splitOrient3 = areaSpec.splitOrientation) !== null && _areaSpec$splitOrient3 !== void 0 ? _areaSpec$splitOrient3 : defaultSplitOrientation(area);
+		const minEach = orient === "horizontal" ? 60 : 48;
+		if (groups.length === 1 || groupIndex === groups.length - 1) {
+			var _winNode$width10, _winNode$height10;
+			groups[groupIndex].size = Math.max(minEach, Math.round(size));
+			return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
+				type: "Window",
+				width: (_winNode$width10 = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width10 !== void 0 ? _winNode$width10 : 1280,
+				height: (_winNode$height10 = winNode === null || winNode === void 0 ? void 0 : winNode.height) !== null && _winNode$height10 !== void 0 ? _winNode$height10 : 800,
+				dockLayout: next
+			}));
+		}
+		const curSizes = distributeGroupAxisSizes(computeReferenceAreaSplitSpan(next, scene, winNode, area), groups.map((group) => {
+			var _ref6;
+			const activeId = group.active && group.tabs.includes(group.active) ? group.active : group.tabs[0];
+			return {
+				group,
+				activeDock: (_ref6 = activeId ? scene.nodes[activeId] : void 0) !== null && _ref6 !== void 0 ? _ref6 : {
+					type: "Dock",
+					width: 240,
+					height: 280
+				}
+			};
+		}), orient);
+		const pairSum = Math.max(minEach * 2, curSizes[groupIndex] + curSizes[groupIndex + 1]);
+		const newA = Math.max(minEach, Math.min(pairSum - minEach, Math.round(size)));
+		const newB = Math.max(minEach, pairSum - newA);
+		curSizes[groupIndex] = newA;
+		curSizes[groupIndex + 1] = newB;
+		for (let i = 0; i < groups.length; i++) groups[i].size = curSizes[i];
 		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
 			type: "Window",
-			width: 0,
-			height: 0,
+			width: (_winNode$width11 = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width11 !== void 0 ? _winNode$width11 : 1280,
+			height: (_winNode$height11 = winNode === null || winNode === void 0 ? void 0 : winNode.height) !== null && _winNode$height11 !== void 0 ? _winNode$height11 : 800,
 			dockLayout: next
 		}));
 	}
@@ -1427,34 +1535,13 @@ var VF = (function(exports) {
 			if (group.size !== void 0 && group.size > 0) return group.size;
 			return axis === "horizontal" ? prefWidth(activeDock) : prefHeight(activeDock);
 		});
-		const explicitIndices = groups.map((g, i) => g.group.size !== void 0 && g.group.size > 0 ? i : -1).filter((i) => i >= 0);
-		if (explicitIndices.length > 0 && explicitIndices.length < n) {
-			const out = new Array(n).fill(0);
-			let used = 0;
-			for (const idx of explicitIndices) {
-				const s = Math.max(minEach, Math.min(Math.max(minEach, totalSpan - minEach * (n - 1)), Math.round(groups[idx].group.size)));
-				out[idx] = s;
-				used += s;
-			}
-			const remIndices = groups.map((_, i) => i).filter((i) => !explicitIndices.includes(i));
-			const remSpan = Math.max(0, totalSpan - used);
-			let remUsed = 0;
-			remIndices.forEach((idx, k) => {
-				if (k === remIndices.length - 1) out[idx] = Math.max(minEach, remSpan - remUsed);
-				else {
-					const s = Math.max(minEach, Math.round(remSpan / remIndices.length));
-					out[idx] = s;
-					remUsed += s;
-				}
-			});
-			return out;
-		}
 		const sumRaw = rawSizes.reduce((a, b) => a + b, 0) || 1;
 		const out = [];
 		let used = 0;
-		for (let i = 0; i < n; i++) if (i === n - 1) out.push(Math.max(0, totalSpan - used));
+		for (let i = 0; i < n; i++) if (i === n - 1) out.push(Math.max(minEach, totalSpan - used));
 		else {
-			const s = Math.max(minEach, Math.round(totalSpan * rawSizes[i] / sumRaw));
+			const maxAllow = Math.max(minEach, totalSpan - used - minEach * (n - 1 - i));
+			const s = Math.max(minEach, Math.min(maxAllow, Math.round(totalSpan * rawSizes[i] / sumRaw)));
 			out.push(s);
 			used += s;
 		}
@@ -1536,8 +1623,8 @@ var VF = (function(exports) {
 		if (topGroups.length > 0) {
 			var _layout$areas$top$spl;
 			if (((_layout$areas$top$spl = layout.areas.top.splitOrientation) !== null && _layout$areas$top$spl !== void 0 ? _layout$areas$top$spl : "horizontal") === "horizontal") {
-				var _layout$areas$top$siz;
-				topH = Math.max(40, Math.round((_layout$areas$top$siz = layout.areas.top.size) !== null && _layout$areas$top$siz !== void 0 ? _layout$areas$top$siz : prefHeight(topGroups[0].activeDock)));
+				var _layout$areas$top$siz2;
+				topH = Math.max(40, Math.round((_layout$areas$top$siz2 = layout.areas.top.size) !== null && _layout$areas$top$siz2 !== void 0 ? _layout$areas$top$siz2 : prefHeight(topGroups[0].activeDock)));
 				const widths = distributeGroupAxisSizes(W, topGroups, "horizontal");
 				let curX = 0;
 				topGroups.forEach((g, idx) => {
@@ -1559,8 +1646,8 @@ var VF = (function(exports) {
 			} else {
 				let curY = midY;
 				topGroups.forEach((g, idx) => {
-					var _ref5, _g$group$size;
-					const gh = Math.max(40, Math.round((_ref5 = (_g$group$size = g.group.size) !== null && _g$group$size !== void 0 ? _g$group$size : layout.areas.top.size) !== null && _ref5 !== void 0 ? _ref5 : prefHeight(g.activeDock)));
+					var _ref7, _g$group$size;
+					const gh = Math.max(40, Math.round((_ref7 = (_g$group$size = g.group.size) !== null && _g$group$size !== void 0 ? _g$group$size : layout.areas.top.size) !== null && _ref7 !== void 0 ? _ref7 : prefHeight(g.activeDock)));
 					assignGroupBoxes("top", g, 0, curY, W, gh);
 					curY += gh;
 					topH += gh;
@@ -1591,10 +1678,10 @@ var VF = (function(exports) {
 		const bottomGroups = resolveAreaVisibleGroups("bottom");
 		let bottomH = 0;
 		if (bottomGroups.length > 0) {
-			var _layout$areas$bottom$2;
-			if (((_layout$areas$bottom$2 = layout.areas.bottom.splitOrientation) !== null && _layout$areas$bottom$2 !== void 0 ? _layout$areas$bottom$2 : "horizontal") === "horizontal") {
-				var _layout$areas$bottom$3;
-				bottomH = Math.max(40, Math.round((_layout$areas$bottom$3 = layout.areas.bottom.size) !== null && _layout$areas$bottom$3 !== void 0 ? _layout$areas$bottom$3 : prefHeight(bottomGroups[0].activeDock)));
+			var _layout$areas$bottom$5;
+			if (((_layout$areas$bottom$5 = layout.areas.bottom.splitOrientation) !== null && _layout$areas$bottom$5 !== void 0 ? _layout$areas$bottom$5 : "horizontal") === "horizontal") {
+				var _layout$areas$bottom$6;
+				bottomH = Math.max(40, Math.round((_layout$areas$bottom$6 = layout.areas.bottom.size) !== null && _layout$areas$bottom$6 !== void 0 ? _layout$areas$bottom$6 : prefHeight(bottomGroups[0].activeDock)));
 				const bY = midY + midH - bottomH;
 				const widths = distributeGroupAxisSizes(W, bottomGroups, "horizontal");
 				let curX = 0;
@@ -1616,8 +1703,8 @@ var VF = (function(exports) {
 				});
 			} else {
 				const ghList = bottomGroups.map((g) => {
-					var _ref6, _g$group$size2;
-					return Math.max(40, Math.round((_ref6 = (_g$group$size2 = g.group.size) !== null && _g$group$size2 !== void 0 ? _g$group$size2 : layout.areas.bottom.size) !== null && _ref6 !== void 0 ? _ref6 : prefHeight(g.activeDock)));
+					var _ref8, _g$group$size2;
+					return Math.max(40, Math.round((_ref8 = (_g$group$size2 = g.group.size) !== null && _g$group$size2 !== void 0 ? _g$group$size2 : layout.areas.bottom.size) !== null && _ref8 !== void 0 ? _ref8 : prefHeight(g.activeDock)));
 				});
 				bottomH = ghList.reduce((a, b) => a + b, 0);
 				let curY = midY + midH - bottomH;
@@ -1677,8 +1764,8 @@ var VF = (function(exports) {
 					});
 				});
 			} else leftGroups.forEach((g, idx) => {
-				var _ref7, _g$group$size3;
-				const gw = Math.max(60, Math.round((_ref7 = (_g$group$size3 = g.group.size) !== null && _g$group$size3 !== void 0 ? _g$group$size3 : layout.areas.left.size) !== null && _ref7 !== void 0 ? _ref7 : prefWidth(g.activeDock)));
+				var _ref9, _g$group$size3;
+				const gw = Math.max(60, Math.round((_ref9 = (_g$group$size3 = g.group.size) !== null && _g$group$size3 !== void 0 ? _g$group$size3 : layout.areas.left.size) !== null && _ref9 !== void 0 ? _ref9 : prefWidth(g.activeDock)));
 				assignGroupBoxes("left", g, leftW, centerY, gw, centerH);
 				leftW += gw;
 				if (idx < leftGroups.length - 1) splitters.push({
@@ -1732,8 +1819,8 @@ var VF = (function(exports) {
 				});
 			} else {
 				const gwList = rightGroups.map((g) => {
-					var _ref8, _g$group$size4;
-					return Math.max(60, Math.round((_ref8 = (_g$group$size4 = g.group.size) !== null && _g$group$size4 !== void 0 ? _g$group$size4 : layout.areas.right.size) !== null && _ref8 !== void 0 ? _ref8 : prefWidth(g.activeDock)));
+					var _ref10, _g$group$size4;
+					return Math.max(60, Math.round((_ref10 = (_g$group$size4 = g.group.size) !== null && _g$group$size4 !== void 0 ? _g$group$size4 : layout.areas.right.size) !== null && _ref10 !== void 0 ? _ref10 : prefWidth(g.activeDock)));
 				});
 				rightW = gwList.reduce((a, b) => a + b, 0);
 				let rCurX = W - rightW;
@@ -2135,6 +2222,8 @@ var VF = (function(exports) {
 			const fy = Math.round(Number((_ref10 = (_getProp4 = getProp(cid, "floatY")) !== null && _getProp4 !== void 0 ? _getProp4 : (_c$props4 = c.props) === null || _c$props4 === void 0 ? void 0 : _c$props4.floatY) !== null && _ref10 !== void 0 ? _ref10 : 80));
 			const fw = Math.max(80, Math.round(Number((_ref11 = (_getProp5 = getProp(cid, "floatWidth")) !== null && _getProp5 !== void 0 ? _getProp5 : (_c$props5 = c.props) === null || _c$props5 === void 0 ? void 0 : _c$props5.floatWidth) !== null && _ref11 !== void 0 ? _ref11 : prefWidth(c))));
 			const fh = Math.max(hdrH + 20, Math.round(Number((_ref12 = (_getProp6 = getProp(cid, "floatHeight")) !== null && _getProp6 !== void 0 ? _getProp6 : (_c$props6 = c.props) === null || _c$props6 === void 0 ? void 0 : _c$props6.floatHeight) !== null && _ref12 !== void 0 ? _ref12 : prefHeight(c))));
+			const winBox = boxes.get(parentBox.windowId);
+			const winVis = winBox ? winBox.visible : parentBox.visible;
 			const box = {
 				x: fx - parentBox.absX,
 				y: fy - parentBox.absY,
@@ -2142,7 +2231,7 @@ var VF = (function(exports) {
 				height: fh,
 				absX: fx,
 				absY: fy,
-				visible: parentBox.visible && isVisible(cid),
+				visible: winVis && isVisible(cid),
 				windowId: parentBox.windowId
 			};
 			boxes.set(cid, box);
@@ -2955,7 +3044,9 @@ var VF = (function(exports) {
 			_defineProperty(this, "windows", /* @__PURE__ */ new Map());
 			_defineProperty(this, "docks", /* @__PURE__ */ new Map());
 			_defineProperty(this, "dockLayouts", /* @__PURE__ */ new Map());
+			_defineProperty(this, "lastSceneDockLayouts", /* @__PURE__ */ new Map());
 			_defineProperty(this, "floatBoxes", /* @__PURE__ */ new Map());
+			_defineProperty(this, "lastSceneFloatBoxProps", /* @__PURE__ */ new Map());
 			_defineProperty(this, "actionSims", /* @__PURE__ */ new Map());
 			_defineProperty(this, "runningActions", /* @__PURE__ */ new Set());
 			_defineProperty(this, "activePromises", /* @__PURE__ */ new Set());
@@ -2975,6 +3066,7 @@ var VF = (function(exports) {
 			for (const { id, def } of allConditions(this.project.logic)) if ((def === null || def === void 0 ? void 0 : def.type) === "text") this.textConditions.set(id, def.preview === true);
 			this.windows.clear();
 			this.dockLayouts.clear();
+			this.lastSceneDockLayouts.clear();
 			for (const winId of allWindowIds(this.project.scene)) {
 				var _ref, _n$initialOpen, _n$props, _ref2, _n$modal, _n$props2;
 				const n = this.project.scene.nodes[winId];
@@ -2985,16 +3077,22 @@ var VF = (function(exports) {
 					open,
 					modal
 				});
-				if (isPartitionedWindow(n)) this.dockLayouts.set(winId, normalizeDockLayout(this.project.scene, n));
+				if (isPartitionedWindow(n)) {
+					var _n$dockLayout;
+					this.dockLayouts.set(winId, normalizeDockLayout(this.project.scene, n));
+					this.lastSceneDockLayouts.set(winId, JSON.stringify((_n$dockLayout = n === null || n === void 0 ? void 0 : n.dockLayout) !== null && _n$dockLayout !== void 0 ? _n$dockLayout : null));
+				}
 			}
 			this.docks.clear();
 			this.floatBoxes.clear();
+			this.lastSceneFloatBoxProps.clear();
 			for (const [id, n] of Object.entries(this.project.scene.nodes)) {
 				var _n$props3;
 				if (n.type === "Dock") this.docks.set(id, ((_n$props3 = n.props) === null || _n$props3 === void 0 ? void 0 : _n$props3.visible) !== false);
 				if (n.type === "FloatBox") {
-					var _n$props$floating, _n$props4, _n$props5, _n$props6, _n$props7, _n$props8;
+					var _n$props$floating, _n$props4, _n$props5, _n$props6, _n$props7, _n$props8, _n$props9;
 					this.floatBoxes.set(id, _objectSpread2(_objectSpread2(_objectSpread2(_objectSpread2({ floating: Boolean((_n$props$floating = (_n$props4 = n.props) === null || _n$props4 === void 0 ? void 0 : _n$props4.floating) !== null && _n$props$floating !== void 0 ? _n$props$floating : false) }, typeof ((_n$props5 = n.props) === null || _n$props5 === void 0 ? void 0 : _n$props5.floatX) === "number" ? { floatX: n.props.floatX } : {}), typeof ((_n$props6 = n.props) === null || _n$props6 === void 0 ? void 0 : _n$props6.floatY) === "number" ? { floatY: n.props.floatY } : {}), typeof ((_n$props7 = n.props) === null || _n$props7 === void 0 ? void 0 : _n$props7.floatWidth) === "number" ? { floatWidth: n.props.floatWidth } : {}), typeof ((_n$props8 = n.props) === null || _n$props8 === void 0 ? void 0 : _n$props8.floatHeight) === "number" ? { floatHeight: n.props.floatHeight } : {}));
+					this.lastSceneFloatBoxProps.set(id, JSON.stringify((_n$props9 = n.props) !== null && _n$props9 !== void 0 ? _n$props9 : null));
 				}
 			}
 			for (const [name, def] of Object.entries((_this$project$logic$a = this.project.logic.actions) !== null && _this$project$logic$a !== void 0 ? _this$project$logic$a : {})) if (!this.actionSims.has(name)) this.actionSims.set(name, {
@@ -3007,9 +3105,14 @@ var VF = (function(exports) {
 		}
 		/** 换成新加载的项目；状态结构没变的部分保留当前值。 */
 		adopt(project) {
+			const prevSceneDockLayouts = new Map(this.lastSceneDockLayouts);
+			const prevSceneFloatBoxProps = new Map(this.lastSceneFloatBoxProps);
 			const oldState = new Map(this.state);
 			const oldConditions = new Map(this.textConditions);
 			const oldWindows = new Map(this.windows);
+			const oldDocks = new Map(this.docks);
+			const oldDockLayouts = new Map(this.dockLayouts);
+			const oldFloatBoxes = new Map(this.floatBoxes);
 			const oldSims = new Map(this.actionSims);
 			this.project = project;
 			this.exprCache.clear();
@@ -3021,7 +3124,18 @@ var VF = (function(exports) {
 			}
 			for (const [id, value] of oldConditions) if (this.textConditions.has(id)) this.textConditions.set(id, value);
 			for (const [id, win] of oldWindows) if (this.windows.has(id)) this.windows.set(id, win);
+			for (const [id, vis] of oldDocks) if (this.docks.has(id)) this.docks.set(id, vis);
+			for (const [winId, layout] of oldDockLayouts) {
+				var _prevSceneDockLayouts, _this$lastSceneDockLa;
+				if (!this.dockLayouts.has(winId)) continue;
+				if (((_prevSceneDockLayouts = prevSceneDockLayouts.get(winId)) !== null && _prevSceneDockLayouts !== void 0 ? _prevSceneDockLayouts : "null") === ((_this$lastSceneDockLa = this.lastSceneDockLayouts.get(winId)) !== null && _this$lastSceneDockLa !== void 0 ? _this$lastSceneDockLa : "null")) this.dockLayouts.set(winId, normalizeDockLayout(project.scene, _objectSpread2(_objectSpread2({}, project.scene.nodes[winId]), {}, { dockLayout: layout })));
+			}
+			for (const [id, fb] of oldFloatBoxes) if (this.floatBoxes.has(id)) {
+				var _prevSceneFloatBoxPro, _this$lastSceneFloatB;
+				if (((_prevSceneFloatBoxPro = prevSceneFloatBoxProps.get(id)) !== null && _prevSceneFloatBoxPro !== void 0 ? _prevSceneFloatBoxPro : "null") === ((_this$lastSceneFloatB = this.lastSceneFloatBoxProps.get(id)) !== null && _this$lastSceneFloatB !== void 0 ? _this$lastSceneFloatB : "null")) this.floatBoxes.set(id, _objectSpread2({}, fb));
+			}
 			for (const [name, sim] of oldSims) this.actionSims.set(name, sim);
+			this.syncActiveTabsWithVisibility();
 		}
 		/** 触发 app.start，预览开始时调用一次。 */
 		start() {
@@ -3033,6 +3147,7 @@ var VF = (function(exports) {
 			return normalizeDockLayout(this.project.scene, this.project.scene.nodes[winId]);
 		}
 		setDockLayout(layout, winId = this.project.scene.root) {
+			var _winNode$dockLayout;
 			const winNode = this.project.scene.nodes[winId];
 			const normalized = normalizeDockLayout(this.project.scene, _objectSpread2(_objectSpread2({}, winNode !== null && winNode !== void 0 ? winNode : {
 				type: "Window",
@@ -3040,6 +3155,7 @@ var VF = (function(exports) {
 				height: 800
 			}), {}, { dockLayout: layout }));
 			this.dockLayouts.set(winId, normalized);
+			this.lastSceneDockLayouts.set(winId, JSON.stringify((_winNode$dockLayout = winNode === null || winNode === void 0 ? void 0 : winNode.dockLayout) !== null && _winNode$dockLayout !== void 0 ? _winNode$dockLayout : null));
 			this.hooks.onChange();
 		}
 		dockTabify(targetDockId, dockId, winId = this.project.scene.root) {
@@ -3113,6 +3229,38 @@ var VF = (function(exports) {
 				lines: [`调整并排组 #${groupIndex} 尺寸为 ${Math.round(size)}px`]
 			});
 			this.hooks.onChange();
+		}
+		/** 当停靠面板显隐变化后，若某个页签组的当前 active 面板已隐藏，则自动切换到同组内仍可见的页签。 */
+		syncActiveTabsWithVisibility() {
+			let anyChanged = false;
+			for (const [winId, layout] of this.dockLayouts) {
+				let winChanged = false;
+				const next = cloneDockLayout(layout);
+				for (const area of [
+					"top",
+					"bottom",
+					"left",
+					"right"
+				]) {
+					var _next$areas$area$grou, _next$areas$area;
+					for (const group of (_next$areas$area$grou = (_next$areas$area = next.areas[area]) === null || _next$areas$area === void 0 ? void 0 : _next$areas$area.groups) !== null && _next$areas$area$grou !== void 0 ? _next$areas$area$grou : []) {
+						var _group$active;
+						const activeId = (_group$active = group.active) !== null && _group$active !== void 0 ? _group$active : group.tabs[0];
+						if (activeId && !this.view(activeId).visible) {
+							const firstVisible = group.tabs.find((tid) => this.view(tid).visible);
+							if (firstVisible && firstVisible !== group.active) {
+								group.active = firstVisible;
+								winChanged = true;
+							}
+						}
+					}
+				}
+				if (winChanged) {
+					this.dockLayouts.set(winId, next);
+					anyChanged = true;
+				}
+			}
+			return anyChanged;
 		}
 		dockSetVisible(dockId, visible) {
 			if (!this.project.scene.nodes[dockId]) return;
@@ -3600,6 +3748,7 @@ var VF = (function(exports) {
 			this.state = batch.work;
 			this.windows = batch.windows;
 			this.docks = batch.docks;
+			if (this.syncActiveTabsWithVisibility()) changed = true;
 			if (batch.lines.length > 0 || !quietWhenEmpty) {
 				if (batch.lines.length === 0) batch.lines.push("（没有状态变化）");
 				this.hooks.onLog({

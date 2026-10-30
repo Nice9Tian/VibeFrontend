@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { check } from "../src/check.ts";
 import {
+  computeDockWindowLayout,
   dockActivateTab,
   dockFloat,
   dockIdsOfLayout,
@@ -32,13 +33,26 @@ import {
   removeDockLayoutReferences,
   renameDockLayoutReferences,
 } from "../src/dock.ts";
+import {
+  applyAddNodeToScene,
+  applyDockLayoutToScene,
+  createHistory,
+  parseScene,
+  pushHistory,
+  redoHistory,
+  snapshotOf,
+  undoHistory,
+} from "../src/history.ts";
 import { loadProjectFiles } from "../src/loader.ts";
 import {
   childrenOfNode,
+  computeSceneLayout,
   removeNodeReferences,
   renameNodeReferences,
   STANDARD_COMPONENTS,
+  syncResizedNodeDimensions,
 } from "../src/model.ts";
+import { Runtime } from "../src/runtime.ts";
 import { nodeIO } from "./node-io.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -130,7 +144,135 @@ async function testDockModelAndReferences(): Promise<void> {
   assert.ok(fbComp, "STANDARD_COMPONENTS 中应注册 FloatBox");
   assert.equal(fbComp.decl.children, true, "FloatBox 应声明 children: true");
 
-  console.log("PASS 1. 停靠纯模型运算、引用维护与 FloatBox 标准容器声明检查");
+  // 9) [审核问题 5] 3 组分栏拖拽分隔条只调整相邻两组且保持其余组大小不变，且在窗口缩放时按比例伸缩
+  const scene3 = structuredClone(project.scene);
+  scene3.nodes.extraDock = {
+    type: "Dock",
+    title: "附加",
+    dockArea: "left",
+    x: 0,
+    y: 0,
+    width: 240,
+    height: 200,
+    headerHeight: 26,
+    children: [],
+  };
+  const win3 = scene3.nodes[scene3.root];
+  win3.docks = [...(win3.docks ?? []), "extraDock"];
+  let layout3 = normalizeDockLayout(scene3, win3);
+  layout3 = dockSplit(layout3, scene3, win3, "layersDock", "inspectorDock", "after");
+  layout3 = dockSplit(layout3, scene3, win3, "inspectorDock", "extraDock", "after");
+  assert.equal(layout3.areas.left.groups.length, 3);
+  const g2Before = layout3.areas.left.groups[2].size!;
+  layout3 = dockResizeSplit(layout3, scene3, win3, "left", 0, 150);
+  assert.equal(layout3.areas.left.groups[0].size, 150, "第 0 组应调整为 150px");
+  assert.equal(layout3.areas.left.groups[2].size, g2Before, "第 2 组大小在拖动第 0/1 组间分隔条时不应改变");
+  assert.equal(
+    layout3.areas.left.groups[0].size! + layout3.areas.left.groups[1].size! + layout3.areas.left.groups[2].size!,
+    580,
+    "3 组分栏参考跨度之和应等于 580px",
+  );
+  // 窗口高度从 800 放大到 1000（左侧停靠区高度从 580 变 780），分栏各组高度应按比例伸缩
+  const winResized = computeDockWindowLayout(
+    scene3,
+    scene3.root,
+    win3,
+    1280,
+    28,
+    1000 - 28 - 28,
+    true,
+    () => true,
+    layout3,
+  );
+  const b0 = winResized.dockBoxes.get("layersDock")!;
+  const b1 = winResized.dockBoxes.get("inspectorDock")!;
+  const b2 = winResized.dockBoxes.get("extraDock")!;
+  assert.equal(b0.height + b1.height + b2.height, 780, "窗口缩放后分栏组总高度应填满 780px");
+  assert.ok(b0.height > 150, "窗口高度增大后第 0 组高度也应按比例放大");
+
+  // 10) [审核问题 6] 关闭叠页签组中的当前激活页签，自动切换到同组剩余可见页签
+  const rtTab = new Runtime(structuredClone(project));
+  rtTab.start();
+  rtTab.dockTabify("layersDock", "inspectorDock");
+  assert.equal(rtTab.getDockLayout().areas.left.groups[0].active, "inspectorDock");
+  rtTab.dockSetVisible("inspectorDock", false);
+  assert.equal(
+    rtTab.getDockLayout().areas.left.groups[0].active,
+    "layersDock",
+    "关闭当前激活页签 inspectorDock 后应自动激活同组可见的 layersDock",
+  );
+
+  // 11) [审核问题 4.1] 浮出的 FloatBox 在原父停靠面板隐藏/关闭后依然保持可见
+  const rtFb = new Runtime(structuredClone(project));
+  rtFb.start();
+  rtFb.dispatch("onionSkinBox", "toggle");
+  assert.equal(rtFb.view("onionSkinBox").props.floating, true);
+  rtFb.dockSetVisible("inspectorDock", false);
+  const fbBoxes = computeSceneLayout(project.scene, {
+    rootSize: { width: 1280, height: 800 },
+    isVisible: (nid) => rtFb.view(nid).visible,
+    getProp: (nid, prop) => rtFb.view(nid).props[prop] ?? null,
+    getDockLayout: (wid) => rtFb.getDockLayout(wid),
+  });
+  assert.equal(fbBoxes.get("inspectorDock")?.visible, false);
+  assert.equal(
+    fbBoxes.get("onionSkinBox")?.visible,
+    true,
+    "浮出的 FloatBox 挂在窗口层级，原父 Dock 关闭后仍应可见",
+  );
+
+  // 12) [审核问题 3 & 7] applyDockLayoutToScene、syncResizedNodeDimensions、duplicateNodes 与 History 撤销/重做
+  const projHist = structuredClone(project);
+  const rtHist = new Runtime(projHist);
+  rtHist.start();
+  let histStack = createHistory();
+  const snapBefore = snapshotOf(projHist.scene);
+  rtHist.dockTabify("layersDock", "inspectorDock");
+  projHist.scene = applyDockLayoutToScene(projHist.scene, rtHist.getDockLayout(), projHist.scene.root);
+  rtHist.setDockLayout(rtHist.getDockLayout(), projHist.scene.root);
+  const snapAfter = snapshotOf(projHist.scene);
+  histStack = pushHistory(histStack, snapBefore, snapAfter, "叠入页签");
+  assert.deepEqual(projHist.scene.nodes[projHist.scene.root].dockLayout?.areas.left.groups[0].tabs, [
+    "layersDock",
+    "inspectorDock",
+  ]);
+  const undoRes = undoHistory(histStack, snapshotOf(projHist.scene));
+  assert.ok(undoRes.snapshot, "应可撤销停靠编排");
+  histStack = undoRes.stack;
+  projHist.scene = parseScene(undoRes.snapshot.sceneText);
+  rtHist.adopt(projHist);
+  assert.deepEqual(rtHist.getDockLayout().areas.right.groups[0].tabs, ["inspectorDock"], "撤销后 inspectorDock 应回到右侧停靠区");
+  const redoRes = redoHistory(histStack, snapshotOf(projHist.scene));
+  assert.ok(redoRes.snapshot, "应可重做停靠编排");
+  histStack = redoRes.stack;
+  projHist.scene = parseScene(redoRes.snapshot.sceneText);
+  rtHist.adopt(projHist);
+  assert.deepEqual(rtHist.getDockLayout().areas.left.groups[0].tabs, ["layersDock", "inspectorDock"], "重做后应恢复叠页签");
+
+  // syncResizedNodeDimensions 同步更新 dockLayout.areas.left.size
+  syncResizedNodeDimensions(
+    projHist.scene.nodes.layersDock,
+    310,
+    580,
+    8,
+    projHist.scene,
+    "layersDock",
+  );
+  assert.equal(projHist.scene.nodes[projHist.scene.root].dockLayout?.areas.left.size, 310);
+
+  // applyAddNodeToScene 添加 Dock 节点时同步维护 parent.docks 与 parent.dockLayout
+  const newDockId = "clonedLayersDock";
+  projHist.scene = applyAddNodeToScene(projHist.scene, projHist.scene.root, newDockId, {
+    ...projHist.scene.nodes.layersDock,
+    children: [],
+  });
+  assert.ok(projHist.scene.nodes[projHist.scene.root].docks?.includes(newDockId), "新增的 Dock 应加入主窗口 docks 列表");
+  assert.ok(
+    dockIdsOfLayout(normalizeDockLayout(projHist.scene, projHist.scene.nodes[projHist.scene.root])).includes(newDockId),
+    "新增的 Dock 应出现在主窗口 dockLayout 中",
+  );
+
+  console.log("PASS 1. 停靠纯模型运算、3组分栏缩放、关闭激活页签自动切换、持久化撤销重做与 FloatBox 独立显隐检查");
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +324,7 @@ function buildInteractiveHtmlPage(): string {
     } from "/src/dock.ts";
     import {
       allWindowIds,
+      childrenOfNode,
       computeSceneLayout,
       LAYOUT_TYPE_KINDS,
       MOUSE_EVENTS,
@@ -213,19 +356,6 @@ function buildInteractiveHtmlPage(): string {
 
     function node(id) {
       return project.scene.nodes[id];
-    }
-
-    function childrenOf(n) {
-      if (!n) return [];
-      const list = [];
-      const add = (cid) => {
-        if (cid && !list.includes(cid)) list.push(cid);
-      };
-      for (const cid of n.docks ?? []) add(cid);
-      add(n.central);
-      add(n.statusBar);
-      for (const cid of n.children ?? []) add(cid);
-      return list;
     }
 
     function buildNode(id, parentEl) {
@@ -261,7 +391,7 @@ function buildInteractiveHtmlPage(): string {
         wrapper.style.borderRadius = "8px";
         wrapper.style.zIndex = "50";
       } else if (n.type === "Container" || n.type in LAYOUT_TYPE_KINDS) {
-        if (!childrenOf(n).length) body.textContent = id;
+        if (!childrenOfNode(n).length) body.textContent = id;
       } else if (n.type === "External") {
         body.textContent = \`外部容器 \${id}\`;
       } else {
@@ -286,7 +416,7 @@ function buildInteractiveHtmlPage(): string {
         });
       }
 
-      for (const child of childrenOf(n)) buildNode(child, wrapper);
+      for (const child of childrenOfNode(n)) buildNode(child, wrapper);
     }
 
     function renderStage() {
@@ -311,7 +441,7 @@ function buildInteractiveHtmlPage(): string {
         }
         stage.append(bar);
       }
-      for (const child of childrenOf(root)) buildNode(child, stage);
+      for (const child of childrenOfNode(root)) buildNode(child, stage);
       for (const winId of allWindowIds(project.scene)) {
         if (winId !== project.scene.root) buildNode(winId, stage);
       }
@@ -342,6 +472,7 @@ function buildInteractiveHtmlPage(): string {
         getMode: () => "preview",
         getScene: () => project.scene,
         getWindowSize: () => rootSize,
+        getDockLayout: () => runtime.getDockLayout(project.scene.root),
         getDockTitle: (did) => String(runtime.view(did).props.title ?? node(did)?.title ?? did),
         onActivateTab: (did) => runtime.dockActivateTab(did, project.scene.root),
         onTabify: (targetId, did) => runtime.dockTabify(targetId, did, project.scene.root),
@@ -372,7 +503,7 @@ function buildInteractiveHtmlPage(): string {
             });
           } else {
             if (n?.type === "FloatBox") {
-              const parentId = Object.keys(project.scene.nodes).find((pid) => childrenOf(node(pid)).includes(id));
+              const parentId = Object.keys(project.scene.nodes).find((pid) => childrenOfNode(node(pid)).includes(id));
               const parentWrapper = parentId ? mounted.get(parentId)?.wrapper : null;
               if (parentWrapper && entry.wrapper.parentElement !== parentWrapper) {
                 parentWrapper.append(entry.wrapper);
@@ -481,7 +612,7 @@ function buildInteractiveHtmlPage(): string {
       });
     }
 
-    // 步骤 3：切回 inspectorDock 页签并点击标题栏上的“⧉”浮出按钮，再用右下角缩放手柄拖拽改大小
+    // 步骤 3：切回 inspectorDock 页签并点击标题栏上的“⧉”浮出按钮，再用右下角缩放手柄拖拽放大到超过 320x440，并拖动标题栏移位验证尺寸保持
     {
       const tabBtn = stage.querySelector('[data-vf-id="layersDock"] .dock-tab[data-dock-tab="inspectorDock"]');
       tabBtn.click();
@@ -491,7 +622,11 @@ function buildInteractiveHtmlPage(): string {
       await nextFrame();
       const resizer = stage.querySelector('[data-vf-id="inspectorDock"] .dock-float-resizer');
       const rRect = resizer.getBoundingClientRect();
-      simulateDrag(resizer, rRect.left + 4, rRect.top + 4, rRect.left + 24, rRect.top + 24);
+      simulateDrag(resizer, rRect.left + 4, rRect.top + 4, rRect.left + 124, rRect.top + 64);
+      await nextFrame();
+      const floatHdr = stage.querySelector('[data-vf-id="inspectorDock"] > .vf-dock-header');
+      const fhRect = floatHdr.getBoundingClientRect();
+      simulateDrag(floatHdr, fhRect.left + 40, fhRect.top + 12, 360, 160);
       await nextFrame();
       const dl = runtime.getDockLayout();
       log.push({
@@ -542,11 +677,13 @@ function buildInteractiveHtmlPage(): string {
       await nextFrame();
 
       const splitSplitter = stage.querySelector('.dock-splitter[data-splitter-kind="split"][data-splitter-area="left"]');
+      const hasSplitClass = splitSplitter.classList.contains("dock-splitter-horizontal");
       const ssRect = splitSplitter.getBoundingClientRect();
       simulateDrag(splitSplitter, ssRect.left + 20, ssRect.top + 2, ssRect.left + 20, ssRect.top - 50);
       await nextFrame();
 
       const areaSplitter = stage.querySelector('.dock-splitter[data-splitter-kind="area"][data-splitter-area="left"]');
+      const hasAreaClass = areaSplitter.classList.contains("dock-splitter-vertical");
       const asRect = areaSplitter.getBoundingClientRect();
       simulateDrag(areaSplitter, asRect.left + 2, asRect.top + 100, asRect.left + 22, asRect.top + 100);
       await nextFrame();
@@ -557,6 +694,8 @@ function buildInteractiveHtmlPage(): string {
         leftSize: dl.areas.left.size,
         splitCount: dl.areas.left.groups.length,
         split0Size: dl.areas.left.groups[0]?.size,
+        hasSplitClass,
+        hasAreaClass,
       });
     }
 
@@ -608,14 +747,26 @@ function buildInteractiveHtmlPage(): string {
 
     const domBoxesAfterOps = measureDomBoxes();
 
-    // 步骤 8：点击 FloatBox 的“嵌入”按钮嵌回原容器
+    // 步骤 8：验证关闭原父停靠面板 inspectorDock 后，浮出的 onionSkinBox 在 DOM 中仍然可见并切换到 layersDock，再点击“还原”按钮嵌回原容器
     {
+      const inspCloseBtn = stage.querySelector('[data-vf-id="inspectorDock"] .dock-action-btn[data-dock-action="close"]');
+      inspCloseBtn.click();
+      await nextFrame();
+      const boxesAfterParentClosed = measureDomBoxes();
+      const onionVisibleWhenParentClosed = Boolean(boxesAfterParentClosed.onionSkinBox);
+      const activeSwitchedToLayers = runtime.getDockLayout().areas.left.groups[0]?.active === "layersDock";
+      runtime.dockSetVisible("inspectorDock", true);
+      runtime.dockActivateTab("inspectorDock");
+      applyViews();
+      await nextFrame();
       const toggleBtn = stage.querySelector('[data-vf-id="onionSkinBox"] .vf-std-floatbox-toggle');
       toggleBtn.click();
       await nextFrame();
       log.push({
         step: "floatbox-restore",
         floating: runtime.view("onionSkinBox").props.floating,
+        onionVisibleWhenParentClosed,
+        activeSwitchedToLayers,
       });
     }
 
@@ -794,15 +945,23 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
   const s3 = report.log[2] as { floatingCount: number; floatingDock: { dockId: string; width: number; height: number } };
   assert.equal(s3.floatingCount, 1);
   assert.equal(s3.floatingDock.dockId, "inspectorDock");
-  assert.ok(s3.floatingDock.width > 260 && s3.floatingDock.height > 440, "浮窗右下角拖拽缩放生效");
+  assert.ok(s3.floatingDock.width > 320 && s3.floatingDock.height > 440, "浮窗右下角拖拽放大后再次拖动标题栏应保留放大后的宽高");
 
   const s4 = report.log[3] as { floatingCount: number; leftGroupCount: number };
   assert.equal(s4.floatingCount, 0);
   assert.equal(s4.leftGroupCount, 2);
 
-  const s5 = report.log[4] as { leftSize: number; splitCount: number; split0Size: number };
+  const s5 = report.log[4] as {
+    leftSize: number;
+    splitCount: number;
+    split0Size: number;
+    hasSplitClass: boolean;
+    hasAreaClass: boolean;
+  };
   assert.equal(s5.splitCount, 2, "拖拽到下沿应拆成上下两个并排停靠组");
   assert.equal(s5.leftSize, 260, "拖拽左侧停靠区分隔条应将宽度从 240 调整到 260");
+  assert.equal(s5.hasSplitClass, true, "分栏分隔条应包含 .dock-splitter-horizontal 类名");
+  assert.equal(s5.hasAreaClass, true, "区域分隔条应包含 .dock-splitter-vertical 类名");
 
   const s6 = report.log[5] as { hiddenAfterClose: boolean; visibleAfterMenu: boolean };
   assert.equal(s6.hiddenAfterClose, true);
@@ -813,8 +972,14 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
   assert.equal(s7.floatX, 420);
   assert.equal(s7.floatY, 180);
 
-  const s8 = report.log[7] as { floating: boolean };
+  const s8 = report.log[7] as {
+    floating: boolean;
+    onionVisibleWhenParentClosed: boolean;
+    activeSwitchedToLayers: boolean;
+  };
   assert.equal(s8.floating, false);
+  assert.equal(s8.onionVisibleWhenParentClosed, true, "原父 Dock 关闭后浮出的 FloatBox 在 DOM 中仍应可见");
+  assert.equal(s8.activeSwitchedToLayers, true, "关闭激活页签后应自动切换到同组剩余可见页签 layersDock");
 
   console.log("PASS 2. 无头 Chrome 真实 DOM 拖拽与点击交互（叠页签/切页签/浮出/缩放/恢复/分栏/分隔条/关闭重开/FloatBox 浮出拖拽与还原）");
 
@@ -850,8 +1015,48 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
       );
       count++;
     }
+
+    // 验证 Qt 侧在关闭原父停靠面板 inspectorDock 后，浮出的 onionSkinBox 仍在 layoutDump 中可见，且 check 通过（激活页签切回 layersDock）
+    const qtCloseParentSteps =
+      "resize:1280x800;dock:tabify:layersDock:inspectorDock;dock:tab:inspectorDock;toggle:onionSkinBox;floatbox:move:onionSkinBox:420,180;dock:close:inspectorDock;check;layout";
+    const qtCloseOut = execFileSync(ANIMEAN_QT_EXE, ["--steps", qtCloseParentSteps], { encoding: "utf8" });
+    const qtCloseLines = qtCloseOut.split(/\r?\n/).filter(Boolean);
+    assert.ok(qtCloseLines.includes("check ok"), `关闭激活页签后 Qt check 应通过，实际输出：${qtCloseOut}`);
+    const qtCloseLayout = JSON.parse(qtCloseLines.find((l) => l.startsWith("layout "))!.slice("layout ".length));
+    assert.ok(qtCloseLayout.onionSkinBox, "原父 Dock 关闭后 Qt 中浮出的 onionSkinBox 仍应可见");
+    assert.ok(!qtCloseLayout.inspectorDock, "已关闭的 inspectorDock 不应出现在可见 layoutDump 中");
+    assert.ok(qtCloseLayout.layersDock, "同组剩余可见页签 layersDock 应自动激活并出现在可见 layoutDump 中");
+
+    // 验证 Qt 侧通过真实 QTest 鼠标按下/移动/松开事件操作停靠面板（拖拽叠页签、点击页签切换、点击浮出/还原、拖拽分隔条、拖拽下沿分栏）
+    const qtRealMouseSteps = [
+      "resize:1280x800",
+      "dock:tabify:layersDock:inspectorDock",
+      "check",
+      "dock:tab:layersDock",
+      "check",
+      "dock:float:layersDock",
+      "check",
+      "dock:restore:layersDock",
+      "check",
+      "dock:resize:left:276",
+      "check",
+      "dock:split:layersDock:inspectorDock:after",
+      "check",
+      "docks",
+    ].join(";");
+    const qtMouseOut = execFileSync(ANIMEAN_QT_EXE, ["--steps", qtRealMouseSteps], { encoding: "utf8" });
+    const qtMouseLines = qtMouseOut.split(/\r?\n/).filter(Boolean);
+    const checkLines = qtMouseLines.filter((l) => l.startsWith("check "));
+    assert.equal(checkLines.length, 6, `应有 6 处 check 输出，实际：${qtMouseOut}`);
+    for (const cl of checkLines) {
+      assert.equal(cl, "check ok", `真实 QTest 鼠标操作后 Qt check 应全部通过：${qtMouseOut}`);
+    }
+    const finalDocksJson = JSON.parse(qtMouseLines.find((l) => l.startsWith("docks "))!.slice("docks ".length));
+    assert.equal(finalDocksJson.areas.left.groups.length, 2, "真实鼠标拖拽下沿分栏后 Qt 实测 dockDump 应有 2 个并排组");
+    assert.equal(finalDocksJson.areas.left.size, 276, "真实鼠标拖拽分隔条后 Qt 实测左侧宽度应为 276px");
+
     console.log(
-      `PASS 3. 停靠编排 + FloatBox 浮出移位后无头 Chrome DOM 与 Qt 实测几何对比：共 ${count} 个可见控件，最大偏差 ${maxDiff}px（<= 3px）`,
+      `PASS 3. 停靠编排 + FloatBox 浮出移位后无头 Chrome DOM 与 Qt 实测几何对比：共 ${count} 个可见控件，最大偏差 ${maxDiff}px（<= 3px），父 Dock 关闭后 FloatBox 独立显隐与真实 QTest 鼠标拖拽验证通过`,
     );
   }
 }

@@ -297,19 +297,44 @@ export function normalizeDockLayout(scene: Scene, winNode: SceneNode | undefined
     areas[area].groups.push({ tabs: [did], active: did });
   }
 
-  // 补齐每个非空停靠区的默认厚度 size
+  // 补齐每个非空停靠区的默认厚度 size，并清理空区/单组区的多余字段
+  const out: DockLayoutSpec = { areas, floating };
   for (const area of DOCK_AREAS) {
     const areaSpec = areas[area];
-    if (areaSpec.size === undefined && areaSpec.groups.length > 0) {
+    if (areaSpec.groups.length === 0) {
+      delete areaSpec.size;
+      delete areaSpec.splitOrientation;
+      continue;
+    }
+    if (areaSpec.size === undefined) {
       const firstId = areaSpec.groups[0].active ?? areaSpec.groups[0].tabs[0];
       const firstNode = firstId ? scene.nodes[firstId] : undefined;
       if (firstNode) {
         areaSpec.size = area === "left" || area === "right" ? prefWidth(firstNode) : prefHeight(firstNode);
       }
     }
+    if (areaSpec.groups.length === 1) {
+      delete areaSpec.splitOrientation;
+      delete areaSpec.groups[0].size;
+    } else {
+      const orient = areaSpec.splitOrientation ?? defaultSplitOrientation(area);
+      areaSpec.splitOrientation = orient;
+      if (areaSpec.groups.some((g) => g.size === undefined)) {
+        const refSpan = computeReferenceAreaSplitSpan(out, scene, winNode, area);
+        const groupEntries = areaSpec.groups.map((group) => {
+          const activeId = group.active && group.tabs.includes(group.active) ? group.active : group.tabs[0];
+          const activeDock = (activeId ? scene.nodes[activeId] : undefined) ?? ({ type: "Dock", width: 240, height: 280 } as SceneNode);
+          return { group, activeDock };
+        });
+        const distributed = distributeGroupAxisSizes(refSpan, groupEntries, orient);
+        for (let gi = 0; gi < areaSpec.groups.length; gi++) {
+          areaSpec.groups[gi].size = distributed[gi];
+        }
+      }
+    }
   }
 
-  return { areas, floating };
+  return out;
 }
 
 export type DockLocation =
@@ -349,6 +374,13 @@ function detachDockFromLayout(layout: DockLayoutSpec, dockId: string): { lastAre
   group.tabs = group.tabs.filter((id) => id !== dockId);
   if (group.tabs.length === 0) {
     areaSpec.groups.splice(loc.groupIndex, 1);
+    if (areaSpec.groups.length === 0) {
+      delete areaSpec.size;
+      delete areaSpec.splitOrientation;
+    } else if (areaSpec.groups.length === 1) {
+      delete areaSpec.splitOrientation;
+      delete areaSpec.groups[0].size;
+    }
   } else if (group.active === dockId || !group.active || !group.tabs.includes(group.active)) {
     group.active = group.tabs[Math.min(loc.tabIndex, group.tabs.length - 1)];
   }
@@ -363,7 +395,7 @@ export function dockTabify(
   targetDockId: string,
   dockId: string,
 ): DockLayoutSpec {
-  const next = normalizeDockLayout(scene, { ...winNode, type: "Window", width: 0, height: 0, dockLayout: cloneDockLayout(layout) });
+  const next = normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: cloneDockLayout(layout) });
   if (targetDockId === dockId) return next;
   const targetLocBefore = dockFindLocation(next, targetDockId);
   if (!targetLocBefore) return next;
@@ -379,7 +411,7 @@ export function dockTabify(
     targetLoc.group.tabs.push(dockId);
   }
   targetLoc.group.active = dockId;
-  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: 0, height: 0, dockLayout: next });
+  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
 }
 
 /** 切换页签组内的当前激活页签。 */
@@ -394,7 +426,7 @@ export function dockActivateTab(
   if (loc && loc.kind === "area") {
     loc.group.active = dockId;
   }
-  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: 0, height: 0, dockLayout: next });
+  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
 }
 
 /** 将停靠面板拖出/切换为浮窗（或更新浮窗位置和尺寸）。 */
@@ -426,7 +458,7 @@ export function dockFloat(
     height: Math.max(60, Math.round(rect?.height ?? defH)),
   };
   next.floating = [...(next.floating ?? []), item];
-  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: 0, height: 0, dockLayout: next });
+  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
 }
 
 /** 将浮窗恢复回原来的停靠区（或指定停靠区）。 */
@@ -446,7 +478,7 @@ export function dockRestore(
   if (next.areas[area].size === undefined) {
     next.areas[area].size = area === "left" || area === "right" ? prefWidth(dNode) : prefHeight(dNode);
   }
-  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: 0, height: 0, dockLayout: next });
+  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
 }
 
 /** 将面板移动/吸附到指定停靠区。 */
@@ -472,7 +504,7 @@ export function dockMoveToArea(
   if (next.areas[area].size === undefined) {
     next.areas[area].size = area === "left" || area === "right" ? prefWidth(dNode) : prefHeight(dNode);
   }
-  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: 0, height: 0, dockLayout: next });
+  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
 }
 
 /** 将 dockId 与 targetDockId 在同一停靠区内并排放置（split）。 */
@@ -499,7 +531,7 @@ export function dockSplit(
   areaSpec.splitOrientation = orientation ?? areaSpec.splitOrientation ?? defaultSplitOrientation(area);
   const insertIdx = position === "before" ? targetLoc.groupIndex : targetLoc.groupIndex + 1;
   areaSpec.groups.splice(insertIdx, 0, { tabs: [dockId], active: dockId });
-  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: 0, height: 0, dockLayout: next });
+  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
 }
 
 /** 拖动停靠区与中央区之间的分隔条，调整停靠区厚度（宽度或高度）。 */
@@ -514,10 +546,49 @@ export function dockResizeArea(
   const minSize = area === "left" || area === "right" ? 80 : 48;
   const clamped = Math.max(minSize, Math.min(900, Math.round(size)));
   next.areas[area].size = clamped;
-  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: 0, height: 0, dockLayout: next });
+  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
 }
 
-/** 拖动同一停靠区内并排组之间的分隔条，调整第 groupIndex 个并排组的像素尺寸。 */
+function computeReferenceAreaSplitSpan(
+  layout: DockLayoutSpec,
+  scene: Scene,
+  winNode: SceneNode | undefined,
+  area: DockArea,
+): number {
+  const W = winNode?.width && winNode.width > 0 ? winNode.width : 1280;
+  const H = winNode?.height && winNode.height > 0 ? winNode.height : 800;
+  const menuH = winNode?.menuBar ? Math.max(0, Math.round(winNode.menuBar.height ?? 28)) : 0;
+  const statusNode = winNode?.statusBar ? scene.nodes[winNode.statusBar] : undefined;
+  const statusH = statusNode ? Math.round(statusNode.height ?? 28) : 0;
+  const midH = Math.max(0, H - menuH - statusH);
+
+  const areaSpec = layout.areas[area];
+  const orient = areaSpec?.splitOrientation ?? defaultSplitOrientation(area);
+  if (orient === "horizontal") {
+    if (area === "top" || area === "bottom") return W;
+    const firstId = areaSpec?.groups[0]?.active ?? areaSpec?.groups[0]?.tabs[0];
+    const firstNode = firstId ? scene.nodes[firstId] : undefined;
+    return Math.max(80, Math.round(areaSpec?.size ?? (firstNode ? prefWidth(firstNode) : 240)));
+  }
+
+  let topH = 0;
+  if ((layout.areas.top?.groups.length ?? 0) > 0) {
+    const firstTopId = layout.areas.top.groups[0].active ?? layout.areas.top.groups[0].tabs[0];
+    const firstTopNode = firstTopId ? scene.nodes[firstTopId] : undefined;
+    topH = Math.max(40, Math.round(layout.areas.top.size ?? (firstTopNode ? prefHeight(firstTopNode) : 68)));
+  }
+  let bottomH = 0;
+  if ((layout.areas.bottom?.groups.length ?? 0) > 0) {
+    const firstBotId = layout.areas.bottom.groups[0].active ?? layout.areas.bottom.groups[0].tabs[0];
+    const firstBotNode = firstBotId ? scene.nodes[firstBotId] : undefined;
+    bottomH = Math.max(40, Math.round(layout.areas.bottom.size ?? (firstBotNode ? prefHeight(firstBotNode) : 96)));
+  }
+  if (area === "top") return topH || 68;
+  if (area === "bottom") return bottomH || 96;
+  return Math.max(80, midH - topH - bottomH);
+}
+
+/** 拖动同一停靠区内并排组之间的分隔条，仅在相邻的第 groupIndex 与第 groupIndex+1 组之间重新分配尺寸，保持其余组不变。 */
 export function dockResizeSplit(
   layout: DockLayoutSpec,
   scene: Scene,
@@ -527,11 +598,33 @@ export function dockResizeSplit(
   size: number,
 ): DockLayoutSpec {
   const next = cloneDockLayout(layout);
-  const groups = next.areas[area]?.groups ?? [];
-  if (groupIndex >= 0 && groupIndex < groups.length) {
-    groups[groupIndex].size = Math.max(60, Math.round(size));
+  const areaSpec = next.areas[area];
+  const groups = areaSpec?.groups ?? [];
+  if (groupIndex < 0 || groupIndex >= groups.length) {
+    return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
   }
-  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: 0, height: 0, dockLayout: next });
+  const orient = areaSpec.splitOrientation ?? defaultSplitOrientation(area);
+  const minEach = orient === "horizontal" ? 60 : 48;
+  if (groups.length === 1 || groupIndex === groups.length - 1) {
+    groups[groupIndex].size = Math.max(minEach, Math.round(size));
+    return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
+  }
+  const refSpan = computeReferenceAreaSplitSpan(next, scene, winNode, area);
+  const groupEntries = groups.map((group) => {
+    const activeId = group.active && group.tabs.includes(group.active) ? group.active : group.tabs[0];
+    const activeDock = (activeId ? scene.nodes[activeId] : undefined) ?? ({ type: "Dock", width: 240, height: 280 } as SceneNode);
+    return { group, activeDock };
+  });
+  const curSizes = distributeGroupAxisSizes(refSpan, groupEntries, orient);
+  const pairSum = Math.max(minEach * 2, curSizes[groupIndex] + curSizes[groupIndex + 1]);
+  const newA = Math.max(minEach, Math.min(pairSum - minEach, Math.round(size)));
+  const newB = Math.max(minEach, pairSum - newA);
+  curSizes[groupIndex] = newA;
+  curSizes[groupIndex + 1] = newB;
+  for (let i = 0; i < groups.length; i++) {
+    groups[i].size = curSizes[i];
+  }
+  return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
 }
 
 function distributeGroupAxisSizes(
@@ -547,39 +640,16 @@ function distributeGroupAxisSizes(
     if (group.size !== undefined && group.size > 0) return group.size;
     return axis === "horizontal" ? prefWidth(activeDock) : prefHeight(activeDock);
   });
-  // 若前面组显式指定了 group.size 而最后一组的 size 未指定，则把剩余空间分给未指定的组
-  const explicitIndices = groups.map((g, i) => (g.group.size !== undefined && g.group.size > 0 ? i : -1)).filter((i) => i >= 0);
-  if (explicitIndices.length > 0 && explicitIndices.length < n) {
-    const out = new Array<number>(n).fill(0);
-    let used = 0;
-    for (const idx of explicitIndices) {
-      const s = Math.max(minEach, Math.min(Math.max(minEach, totalSpan - minEach * (n - 1)), Math.round(groups[idx].group.size!)));
-      out[idx] = s;
-      used += s;
-    }
-    const remIndices = groups.map((_, i) => i).filter((i) => !explicitIndices.includes(i));
-    const remSpan = Math.max(0, totalSpan - used);
-    let remUsed = 0;
-    remIndices.forEach((idx, k) => {
-      if (k === remIndices.length - 1) {
-        out[idx] = Math.max(minEach, remSpan - remUsed);
-      } else {
-        const s = Math.max(minEach, Math.round(remSpan / remIndices.length));
-        out[idx] = s;
-        remUsed += s;
-      }
-    });
-    return out;
-  }
 
   const sumRaw = rawSizes.reduce((a, b) => a + b, 0) || 1;
   const out: number[] = [];
   let used = 0;
   for (let i = 0; i < n; i++) {
     if (i === n - 1) {
-      out.push(Math.max(0, totalSpan - used));
+      out.push(Math.max(minEach, totalSpan - used));
     } else {
-      const s = Math.max(minEach, Math.round((totalSpan * rawSizes[i]) / sumRaw));
+      const maxAllow = Math.max(minEach, totalSpan - used - minEach * (n - 1 - i));
+      const s = Math.max(minEach, Math.min(maxAllow, Math.round((totalSpan * rawSizes[i]) / sumRaw)));
       out.push(s);
       used += s;
     }
@@ -957,17 +1027,18 @@ export function computeDockWindowLayout(
 export interface DockPreviewCallbacks {
   getMode: () => "edit" | "preview";
   getScene: () => Scene;
+  getDockLayout?: () => DockLayoutSpec;
   getWindowSize: () => { width: number; height: number };
   getDockTitle: (dockId: string) => string;
   onActivateTab: (dockId: string) => void;
   onTabify: (targetDockId: string, dockId: string) => void;
   onSplit: (targetDockId: string, dockId: string, position: "before" | "after", orientation?: DockSplitOrientation) => void;
   onMoveToArea: (dockId: string, area: DockArea) => void;
-  onFloat: (dockId: string, rect?: Partial<DockFloatRect>) => void;
+  onFloat: (dockId: string, rect?: Partial<DockFloatRect>, commit?: boolean) => void;
   onRestore: (dockId: string) => void;
   onClose: (dockId: string) => void;
-  onResizeArea: (area: DockArea, size: number) => void;
-  onResizeSplit: (area: DockArea, groupIndex: number, size: number) => void;
+  onResizeArea: (area: DockArea, size: number, commit?: boolean) => void;
+  onResizeSplit: (area: DockArea, groupIndex: number, size: number, commit?: boolean) => void;
 }
 
 /**
@@ -1100,14 +1171,17 @@ export function syncDockHeaderDom(
         const startLeft = parseFloat(dockEl.style.left) || 0;
         const startTop = parseFloat(dockEl.style.top) || 0;
         const scale = getElementScale(windowFrameEl);
+        let latestRect: Partial<DockFloatRect> | null = null;
         const onMove = (me: PointerEvent) => {
           const nw = Math.max(120, Math.round(startW + (me.clientX - startX) / scale));
           const nh = Math.max(80, Math.round(startH + (me.clientY - startY) / scale));
-          callbacks.onFloat(dockId, { x: startLeft, y: startTop, width: nw, height: nh });
+          latestRect = { x: startLeft, y: startTop, width: nw, height: nh };
+          callbacks.onFloat(dockId, latestRect, false);
         };
         const onUp = () => {
           window.removeEventListener("pointermove", onMove);
           window.removeEventListener("pointerup", onUp);
+          if (latestRect) callbacks.onFloat(dockId, latestRect, true);
         };
         window.addEventListener("pointermove", onMove);
         window.addEventListener("pointerup", onUp);
@@ -1138,7 +1212,7 @@ export function syncDockSplittersDom(
 
   for (const sp of splitters) {
     const bar = document.createElement("div");
-    bar.className = `dock-splitter dock-splitter-${sp.orientation}`;
+    bar.className = `dock-splitter ${sp.orientation} dock-splitter-${sp.orientation}`;
     bar.dataset.splitterKind = sp.kind;
     bar.dataset.splitterArea = sp.area;
     if (sp.groupIndex !== undefined) bar.dataset.splitterIndex = String(sp.groupIndex);
@@ -1158,6 +1232,7 @@ export function syncDockSplittersDom(
       const startSize = sp.currentSize;
       const scale = getElementScale(windowFrameEl);
       bar.classList.add("dragging");
+      let latestSize: number | null = null;
 
       const onMove = (me: PointerEvent) => {
         const dx = Math.round((me.clientX - startX) / scale);
@@ -1168,16 +1243,25 @@ export function syncDockSplittersDom(
           else if (sp.area === "right") nextSize = startSize - dx;
           else if (sp.area === "top") nextSize = startSize + dy;
           else if (sp.area === "bottom") nextSize = startSize - dy;
-          callbacks.onResizeArea(sp.area, nextSize);
+          latestSize = nextSize;
+          callbacks.onResizeArea(sp.area, nextSize, false);
         } else if (sp.kind === "split" && sp.groupIndex !== undefined) {
           const delta = sp.orientation === "vertical" ? dx : dy;
-          callbacks.onResizeSplit(sp.area, sp.groupIndex, startSize + delta);
+          latestSize = startSize + delta;
+          callbacks.onResizeSplit(sp.area, sp.groupIndex, latestSize, false);
         }
       };
       const onUp = () => {
         bar.classList.remove("dragging");
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
+        if (latestSize !== null) {
+          if (sp.kind === "area") {
+            callbacks.onResizeArea(sp.area, latestSize, true);
+          } else if (sp.kind === "split" && sp.groupIndex !== undefined) {
+            callbacks.onResizeSplit(sp.area, sp.groupIndex, latestSize, true);
+          }
+        }
       };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
@@ -1210,8 +1294,13 @@ function startDockDragSession(
   const dockRect = dockEl.getBoundingClientRect();
   const offsetX = (startClientX - dockRect.left) / scale;
   const offsetY = (startClientY - dockRect.top) / scale;
-  const floatW = Math.min(320, Math.max(180, Math.round(dockEl.offsetWidth || 240)));
-  const floatH = Math.min(440, Math.max(120, Math.round(dockEl.offsetHeight || 280)));
+  const isAlreadyFloating = dockEl.classList.contains("dock-floating");
+  const floatW = isAlreadyFloating
+    ? Math.max(80, Math.round(dockEl.offsetWidth || 240))
+    : Math.min(320, Math.max(180, Math.round(dockEl.offsetWidth || 240)));
+  const floatH = isAlreadyFloating
+    ? Math.max(60, Math.round(dockEl.offsetHeight || 280))
+    : Math.min(440, Math.max(120, Math.round(dockEl.offsetHeight || 280)));
 
   let dragging = false;
   let overlayEl: HTMLElement | null = null;
@@ -1223,6 +1312,11 @@ function startDockDragSession(
     const relY = Math.round((clientY - winRect.top) / scale);
     const W = windowFrameEl.offsetWidth;
     const H = windowFrameEl.offsetHeight;
+    const scene = callbacks.getScene();
+    const curLayout = callbacks.getDockLayout
+      ? callbacks.getDockLayout()
+      : normalizeDockLayout(scene, scene.nodes[scene.root]);
+    const dragLoc = dockFindLocation(curLayout, dragDockId);
 
     // 1. 检查是否悬停在窗口四边吸附热区（距离边缘 28px 内）
     const edgeMargin = 28;
@@ -1270,12 +1364,29 @@ function startDockDragSession(
       const ow = otherEl.offsetWidth;
       const oh = otherEl.offsetHeight;
       if (relX >= ox && relX <= ox + ow && relY >= oy && relY <= oy + oh) {
+        const otherLoc = dockFindLocation(curLayout, otherId);
+        const sameTabGroup =
+          dragLoc?.kind === "area" &&
+          otherLoc?.kind === "area" &&
+          dragLoc.area === otherLoc.area &&
+          dragLoc.groupIndex === otherLoc.groupIndex;
+        const dNode = scene.nodes[otherId];
+        const hdrH = dNode?.headerHeight ?? 26;
+        // 在同一个页签组的标题栏内微拖页签按钮时，保持叠页签状态，不误拆成上下分栏
+        if (sameTabGroup && relY <= oy + hdrH + 8) {
+          return {
+            type: "tabify",
+            targetDockId: otherId,
+            previewRect: { x: ox, y: oy, width: ow, height: oh },
+          };
+        }
         const localX = (relX - ox) / Math.max(1, ow);
         const localY = (relY - oy) / Math.max(1, oh);
-        const dNode = callbacks.getScene().nodes[otherId];
-        const area: DockArea = isDockArea(dNode?.dockArea) ? dNode.dockArea : "left";
-        const isVertArea = area === "left" || area === "right";
-        if (isVertArea) {
+        const area: DockArea =
+          otherLoc?.kind === "area" ? otherLoc.area : isDockArea(dNode?.dockArea) ? dNode.dockArea : "left";
+        const splitOrient = curLayout.areas[area]?.splitOrientation ?? defaultSplitOrientation(area);
+        const isVertSplit = splitOrient === "vertical";
+        if (isVertSplit) {
           if (localY < 0.25) {
             return {
               type: "split",
@@ -1340,18 +1451,27 @@ function startDockDragSession(
       overlayEl.className = "dock-drop-overlay";
       ghostEl = document.createElement("div");
       ghostEl.className = "dock-drag-ghost";
-      overlayEl.append(ghostEl);
-      windowFrameEl.append(overlayEl);
+      ghostEl.textContent = callbacks.getDockTitle(dragDockId);
+      windowFrameEl.append(overlayEl, ghostEl);
     }
     currentDrop = computeDropAction(me.clientX, me.clientY);
-    if (ghostEl && currentDrop) {
+    const relX = Math.round((me.clientX - winRect.left) / scale);
+    const relY = Math.round((me.clientY - winRect.top) / scale);
+    if (overlayEl && currentDrop) {
       const r = currentDrop.previewRect;
-      ghostEl.dataset.dropType = currentDrop.type;
-      Object.assign(ghostEl.style, {
+      overlayEl.dataset.dropType = currentDrop.type;
+      Object.assign(overlayEl.style, {
         left: `${r.x}px`,
         top: `${r.y}px`,
         width: `${r.width}px`,
         height: `${r.height}px`,
+      });
+    }
+    if (ghostEl) {
+      if (currentDrop) ghostEl.dataset.dropType = currentDrop.type;
+      Object.assign(ghostEl.style, {
+        left: `${Math.max(0, Math.min(windowFrameEl.offsetWidth - 80, relX + 10))}px`,
+        top: `${Math.max(0, Math.min(windowFrameEl.offsetHeight - 28, relY + 10))}px`,
       });
     }
   };
@@ -1360,6 +1480,7 @@ function startDockDragSession(
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
     overlayEl?.remove();
+    ghostEl?.remove();
     if (!dragging || !currentDrop) return;
     if (currentDrop.type === "area" && currentDrop.area) {
       callbacks.onMoveToArea(dragDockId, currentDrop.area);
@@ -1368,7 +1489,7 @@ function startDockDragSession(
     } else if (currentDrop.type === "split" && currentDrop.targetDockId && currentDrop.splitPos) {
       callbacks.onSplit(currentDrop.targetDockId, dragDockId, currentDrop.splitPos, currentDrop.splitOrient);
     } else if (currentDrop.type === "float") {
-      callbacks.onFloat(dragDockId, currentDrop.previewRect);
+      callbacks.onFloat(dragDockId, currentDrop.previewRect, true);
     }
   };
 
