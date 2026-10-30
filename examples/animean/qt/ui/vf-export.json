@@ -1,0 +1,78 @@
+{
+  "generator": "VibeFrontend",
+  "formatVersion": 1,
+  "project": "AnimeAn",
+  "generated": [
+    "AGENTS.md",
+    "CMakeLists.txt",
+    "INTERFACE.md",
+    "business_interface/BusinessInterface.h",
+    "business_interface/CMakeLists.txt",
+    "cmake/LayerRules.cmake",
+    "preview/CMakeLists.txt",
+    "preview/main.cpp",
+    "ui_binding/CMakeLists.txt",
+    "ui_binding/Ui.cpp",
+    "ui_binding/Ui.h",
+    "ui_binding/UiDriver.cpp",
+    "ui_binding/UiDriver.h",
+    "ui_binding/logic/project.json",
+    "ui_binding/logic/runtime.js",
+    "ui_interface/CMakeLists.txt",
+    "ui_interface/UiEffects.h",
+    "vf-export.json"
+  ],
+  "interface": {
+    "states": [
+      {
+        "path": "layer.visible",
+        "type": "boolean",
+        "setter": "setLayerVisible",
+        "getter": "layerVisible"
+      }
+    ],
+    "events": [
+      {
+        "name": "layerToggleVisible",
+        "text": "用户请求切换当前图层的显示与隐藏",
+        "signal": "layerToggleVisibleRequested"
+      }
+    ],
+    "requests": [
+      {
+        "name": "notifyStatus",
+        "text": "业务通知界面在状态栏显示一条消息",
+        "method": "requestNotifyStatus",
+        "params": [
+          {
+            "name": "message",
+            "type": "string"
+          }
+        ]
+      }
+    ],
+    "actions": [
+      {
+        "name": "exportClip",
+        "text": "",
+        "signal": "actionExportClipRequested",
+        "finishSuccess": "finishExportClipSuccess",
+        "finishError": "finishExportClipError",
+        "inputs": [
+          "title",
+          "layerCount"
+        ]
+      }
+    ],
+    "externals": [
+      {
+        "id": "canvasHost",
+        "setter": "setCanvasHostWidget"
+      }
+    ],
+    "effects": []
+  },
+  "lastChanges": [
+    "新增动作 exportClip"
+  ]
+}

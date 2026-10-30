@@ -1,0 +1,29 @@
+{
+  "type": "List",
+  "label": "列表",
+  "description": "行列表，绑定数组状态 items，支持选中行",
+  "defaultSize": { "width": 220, "height": 180 },
+  "entry": "index.js",
+  "style": "style.css",
+  "props": {
+    "items":     { "type": "array",   "default": [], "logic": true },
+    "value":     { "type": "number",  "default": 0,  "logic": true },
+    "emptyText": { "type": "string",  "default": "暂无内容" },
+    "enabled":   { "type": "boolean", "default": true, "logic": true }
+  },
+  "bind": "number",
+  "events": ["change", "select"],
+  "children": false,
+  "qt": {
+    "widget": "QListWidget",
+    "props": {
+      "items": "vfItems",
+      "value": "currentRow",
+      "emptyText": "vfEmptyText"
+    },
+    "events": {
+      "change": { "signal": "currentRowChanged", "type": "number" },
+      "select": { "signal": "currentRowChanged", "type": "number" }
+    }
+  }
+}

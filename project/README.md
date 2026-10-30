@@ -345,8 +345,7 @@ conditions:
 
 以下内容在设计文档中有，但当前原型没有实现，请不要使用：
 
-- 调用动作（`call` 步骤和 `actions`）
-- 列表、对话框、多窗口
+- 基础图形、线条与节点旋转导出成 Qt（详见第 10.5 节）
 
 ## 9. 导出成 Qt 用到的写法
 
@@ -590,3 +589,241 @@ objects:
 ### 10.5 导出
 
 形状和线条目前还不能导出成 Qt，导出后是占位框，事件和逻辑照常。除线条外的节点可以在 `scene.json` 节点顶层写 `"rotation": 角度`（单位为度，绕节点中心顺时针旋转，0 度时不写）；导出成 Qt 时暂不处理旋转，工具问题栏会给出提示。
+
+## 11. 排版、标准控件、窗口分区与扩展逻辑
+
+本节列出在基础规则之上新增的语言规格：五种排版与尺寸规则、主窗口分区与停靠面板、8 种自带标准控件、数组状态、逻辑 JS 函数、多窗口与模态对话框、带参事件与请求事件、以及动作调用与模拟。这些写法在工具预览和导出成 Qt 时具有一致的行为。
+
+### 11.1 五种排版与控件尺寸规则
+
+容器除了自由摆放子控件外，还可以用 `VBox`、`HBox`、`Grid`、`Form`、`Stack` 五种类型（或在节点上写 `layout` 字段）按规则自动计算子控件的位置和大小，导出成 Qt 时对应 `QVBoxLayout`、`QHBoxLayout`、`QGridLayout` 和层叠容器：
+
+```json
+"inspectorDock": {
+  "type": "Dock",
+  "dockArea": "right",
+  "width": 260, "height": 580,
+  "layout": { "kind": "vbox", "padding": 10, "gap": 8 },
+  "children": ["inspectorTabs", "inspectorStack"]
+}
+```
+
+| 排版类型 / `layout.kind` | 含义 | 常用字段 |
+| --- | --- | --- |
+| `VBox` / `"vbox"` | 竖排：子控件从上到下依次排列 | `padding`（数字或 `[上, 右, 下, 左]`）、`gap` |
+| `HBox` / `"hbox"` | 横排：子控件从左到右依次排列 | `padding`、`gap` |
+| `Grid` / `"grid"` | 网格：按行列排列，子控件可写 `row`、`column`、`rowSpan`、`columnSpan` | `columns`、`gap`、`rowGap`、`columnGap`、`columnStretch`、`rowStretch` |
+| `Form` / `"form"` | 表单：子控件两两成对（左列标签、右列输入控件），左列宽度固定为 `labelWidth`（默认 96），右列自动撑满 | `labelWidth`、`padding`、`gap`、`rowGap`、`columnGap` |
+| `Stack` / `"stack"` | 层叠：同一时间只显示 `props.currentIndex`（或 `props.currentPage`）指向的那一页子容器 | `padding`；在 YAML `props` 中控制 `currentIndex` 或 `currentPage` |
+
+每个控件可以用 `size` 指定尺寸规则：
+
+```json
+"layerList": {
+  "type": "List",
+  "width": 220, "height": 220,
+  "size": {
+    "stretch": 1,
+    "vertical": "expanding",
+    "minHeight": 120,
+    "maxHeight": 800
+  }
+}
+```
+
+| `size` 字段 | 含义 |
+| --- | --- |
+| `preferredWidth`、`preferredHeight` | 建议尺寸（不写时取节点的 `width`、`height`） |
+| `minWidth`、`minHeight` | 最小尺寸 |
+| `maxWidth`、`maxHeight` | 最大尺寸 |
+| `fixedWidth`、`fixedHeight` | 固定尺寸（也可以写 `horizontal: "fixed"` 或 `vertical: "fixed"`） |
+| `stretch` | 在主轴方向分配剩余空间的权重（正整数按比例分配，`0` 或不写表示不伸缩；也可以写 `horizontal: "expanding"` 或 `vertical: "expanding"`） |
+
+### 11.2 主窗口分区与停靠面板
+
+根窗口 `Window` 可以配置菜单栏（`menuBar`）、状态栏（`statusBar`）、中央区（`central`）和四个方向的停靠面板（`docks`，对应 `left`、`right`、`top`、`bottom` 四个停靠区）。导出成 Qt 时对应 `QMainWindow` 的 `QMenuBar`、`QStatusBar`、`centralWidget` 和 `QDockWidget`：
+
+```json
+"window": {
+  "type": "Window",
+  "width": 1280, "height": 800,
+  "title": "AnimeAn 动画工作台",
+  "menuBar": {
+    "height": 28,
+    "menus": [
+      {
+        "id": "fileMenu", "title": "文件",
+        "items": [{ "id": "menuNewProject", "text": "新建项目...", "emit": "openNewProject" }]
+      },
+      {
+        "id": "viewMenu", "title": "视图",
+        "items": [{ "id": "menuToggleLayers", "text": "图层面板", "dock": "layersDock", "checkable": true, "checked": true }]
+      }
+    ]
+  },
+  "statusBar": "statusBar",
+  "central": "centralArea",
+  "docks": ["toolsDock", "layersDock", "inspectorDock", "timelineDock"],
+  "children": ["toolsDock", "layersDock", "centralArea", "inspectorDock", "timelineDock", "statusBar"]
+}
+```
+
+- 停靠面板节点的 `type` 为 `"Dock"`，用 `dockArea` 指定停在 `"left"`、`"right"`、`"top"` 或 `"bottom"`，用 `title` 指定标题栏文字，`headerHeight` 指定标题栏高度（默认 26）。
+- 菜单项如果写了 `"dock": "<停靠面板ID>"`，点击该菜单项会自动切换对应停靠面板的显示和隐藏，并同步菜单项的勾选状态；面板隐藏后，中央区自动扩大填满空出的位置。
+- 菜单项如果写了 `"emit": "<全局事件名>"`（也可以在 YAML `objects.<菜单项ID>.events.click` 中写步骤），点击时触发对应事件。
+
+### 11.3 8 种工具自带标准控件
+
+工具在 `app/standard/` 中内置了 8 种常用控件，不需要在设计项目的 `components/` 下创建文件夹即可直接在 `scene.json` 中使用（如果 `components/` 下有同名控件，以项目自己的为准）：
+
+| 类型名 | 中文名 | 对应 Qt 类 | 主要属性（标 `*` 的支持在 YAML `props` 中由表达式控制） | 双向绑定 `bind` 与事件 |
+| --- | --- | --- | --- | --- |
+| `Label` | 文字 | `QLabel` | `text*`、`tone*`（`normal` / `title` / `muted` / `error` / `accent`）、`align`（`left` / `center` / `right`） | — |
+| `Button` | 按钮 | `QPushButton` | `text*`、`variant*`（`primary` / `secondary` / `danger` / `ghost`）、`checkable`、`checked*`、`enabled*` | 事件 `toggle`（带布尔值） |
+| `TextInput` | 输入框 | `QLineEdit` | `placeholder*`、`value*`、`enabled*` | `bind: string`，事件 `change` |
+| `SpinBox` | 数字框 | `QSpinBox` | `min`、`max`、`step`、`suffix`、`value*`、`enabled*` | `bind: number`，事件 `change` |
+| `ComboBox` | 下拉框 | `QComboBox` | `options*`（逗号分隔的选项字符串，如 `"1080p,720p,Square"`）、`value*`、`enabled*` | `bind: string`，事件 `change` |
+| `CheckBox` | 复选框 | `QCheckBox` | `text*`、`value*`、`enabled*` | `bind: boolean`，事件 `change` |
+| `List` | 列表 | `QListWidget` | `items*`（数组状态）、`value*`（当前选中行下标，从 0 开始）、`checkable`（是否在行首显示圆点指示）、`emptyText`、`enabled*` | `bind: number`，事件 `change` / `select` |
+| `Separator` | 分隔线 | `QFrame` | `orientation`（`horizontal` / `vertical`） | — |
+
+### 11.4 数组状态与增删移动
+
+状态的类型除了 `string`、`number`、`boolean`、`enum` 外，还可以是 `array`（元素为对象或基本值）：
+
+```yaml
+state:
+  layers:
+    items:
+      type: array
+      initial:
+        - { id: 1, name: "背景层", visible: true }
+        - { id: 2, name: "人物线稿", visible: true }
+    selectedIndex: { type: number, initial: 0 }
+    nextId:        { type: number, initial: 3 }
+```
+
+在表达式和步骤中可以对数组状态做以下操作：
+
+- **读取长度与下标访问**：`layers.items.length`、`layers.items[layers.selectedIndex].visible`。
+- **修改某一项或某一项的字段（`set`）**：
+  ```yaml
+  - set: layers.items[layers.selectedIndex].visible = false
+  ```
+- **新增一项（`push`）**：追加到末尾，或用可选的 `index` 插入到指定下标：
+  ```yaml
+  - push:
+      to: layers.items
+      item:
+        id: layers.nextId
+        name: '"图层 " + layers.nextId'
+        visible: true
+  ```
+- **删除一项（`remove`）**：按 `index` 删除指定下标的元素：
+  ```yaml
+  - remove:
+      from: layers.items
+      index: layers.selectedIndex
+  ```
+- **移动一项（`move`）**：把下标 `from` 的元素移到下标 `to`：
+  ```yaml
+  - move:
+      in: layers.items
+      from: layers.selectedIndex
+      to: layers.selectedIndex - 1
+  ```
+
+### 11.5 表达式扩展与调用逻辑 JS 函数
+
+表达式除了 `==`、`!=`、`and`、`or`、`not` 外，还支持：
+
+- 大小比较：`<`、`<=`、`>`、`>=`
+- 算术加减与字符串拼接：`+`、`-`
+- 三目条件表达式：`条件 ? 值1 : 值2`
+
+当一段纯数据计算用单行表达式不方便写时，可以在设计项目的 `functions/<函数名>.js` 中写一个纯 JS 函数，并在事件步骤中用 `- fn: <函数名>` 调用：
+
+```js
+// functions/syncPresetDimensions.js
+export default function syncPresetDimensions(state, param) {
+  const preset = state.newProject?.preset ?? "1080p";
+  if (preset === "720p") return { "newProject.width": 1280, "newProject.height": 720 };
+  return { "newProject.width": 1920, "newProject.height": 1080 };
+}
+```
+
+- 函数接收当前状态的只读快照 `state` 和事件参数 `param`，返回一个 `{ "状态路径": 新值 }` 对象，运行层会把返回的新值批量写入对应的界面状态。
+- **禁止使用网页元素（静态检查 + 运行时隔离）**：因为逻辑函数在导出后会原样放进 Qt 的无 DOM JS 引擎（`QJSEngine`）运行：
+  1. **静态检查**：检查器通过单遍词法扫描检查 `functions/*.js`（包括模板字符串 `${...}` 内的表达式与 `\uXXXX` / `\u{...}` Unicode 转义解码），禁止出现 `document`、`window`、`globalThis`、`self`、`top`、`parent`、`frames`、`Function`、`eval`、`HTMLElement`、`localStorage`、`fetch` 等浏览器专属对象或动态逃逸入口。
+  2. **运行时全局隔离**：在网页端运行层（`Runtime`）编译执行逻辑函数时，函数以 `"use strict"` 严格模式运行，并将 `window`、`document`、`globalThis`、`self`、`top`、`parent`、`frames`、`navigator`、`location`、`localStorage`、`sessionStorage`、`fetch`、`XMLHttpRequest`、`HTMLElement` 等浏览器全局名字全部遮蔽为 `undefined`（未绑定 `this` 也为 `undefined`），即使绕过静态检查也无法在运行时访问宿主 DOM。
+
+### 11.6 多窗口与模态对话框
+
+设计项目可以在 `project.json` 的 `windows` 和 `ui/scene.json` 中包含多个窗口或对话框（类型为 `Dialog` 或 `Window`）：
+
+```json
+"newProjectDialog": {
+  "type": "Dialog",
+  "modal": true,
+  "initialOpen": false,
+  "width": 420, "height": 320,
+  "title": "新建动画项目",
+  "layout": { "kind": "vbox", "padding": 16, "gap": 12 },
+  "children": ["newProjectForm", "dialogSep", "dialogFooter"]
+}
+```
+
+在事件步骤中用 `openWindow` 和 `closeWindow` 打开或关闭窗口：
+
+```yaml
+- openWindow: newProjectDialog
+- closeWindow: newProjectDialog
+```
+
+- `modal: true`（默认）表示模态对话框：它打开期间，背后的主窗口不能点击，直到它被关闭。
+- 导出成 Qt 时，`Dialog` 节点生成对应的 `QDialog`（设好 `setModal`），并且对话框被用户通过 `Esc` 键或标题栏 `×` 按钮关闭（`QDialog::finished` / `QEvent::Close`）时会自动同步回运行层，把该对话框的打开状态置为 `false`，立即解除对主窗口的模态锁定。
+
+### 11.7 带参数的事件与请求事件（业务 → 界面）
+
+- **业务事件带参数（界面 → 业务）**：业务事件可以用 `params` 声明参数类型（`string`、`number`、`boolean`），触发时用 `emit: { event: 事件名, args: { 参数名: 表达式 } }` 传入；导出后在 `BusinessInterface` 的信号上生成对应参数，在 `simulate` 步骤中可通过 `param.<参数名>` 读取。
+- **请求事件（业务 → 界面）**：当业务主动通知界面做一件事（如在状态栏显示提示、跳到指定页）时，在顶层 `events` 下定义 `owner: ui` 的请求事件：
+  ```yaml
+  events:
+    notifyStatus:
+      owner: ui
+      text: 业务通知界面在状态栏显示一条消息
+      params:
+        message: string
+      steps:
+        - set: project.statusMessage = param.message
+  ```
+  导出成 Qt 后，`vf::BusinessInterface` 上会生成纯虚函数 `virtual void requestNotifyStatus(const QString &message) = 0;`，业务调用它即可触发 `steps` 里的界面逻辑。
+
+### 11.8 调用动作与动作模拟
+
+需要执行一段带输入输出的操作（例如导出视频、校验数据）并根据成功或失败分别更新界面时，在顶层 `actions` 下声明动作，并在事件步骤中用 `- call: <动作名>` 调用：
+
+```yaml
+actions:
+  exportClip:
+    handler: actions/exportClip.js
+    input:
+      title: project.title
+      layerCount: layers.items.length
+    mockResult:
+      outputPath: "exports/mock.mp4"
+      summary: "模拟导出完成"
+    mockError: "磁盘空间不足，导出失败"
+    onSuccess:
+      - set: project.exportResult = result.summary
+      - set: project.statusMessage = result.summary
+    onError:
+      - set: project.exportResult = error.message
+      - set: project.statusMessage = error.message
+```
+
+- 在工具的预览栏（以及命令行测试步骤 `mock:<动作名>:real|success|error[:delayMs]`）中，可以把每个动作切换为三种模式之一，并可指定模拟延迟毫秒数 `delayMs`（也可以在动作定义里写 `delayMs`）：
+  1. **真跑（`real`）**：执行 `actions/<动作名>.js` 默认导出的函数（支持同步返回或异步返回 `Promise`），把返回值作为 `result` 传给 `onSuccess`（抛出异常或 `Promise` reject 则把错误消息传给 `onError`）。
+  2. **模拟成功（`success`）**：不执行实现文件，把 `mockResult` 作为 `result` 执行 `onSuccess`。
+  3. **模拟失败（`error`）**：不执行实现文件，把 `mockError` 作为 `error.message` 执行 `onError`。
+- 导出成 Qt 后，每个动作都会在 `vf::BusinessInterface` 上暴露信号 `action<Name>Requested(const QVariantMap &input)` 以及完成回调 `finish<Name>Success(const QVariant &result)` 和 `finish<Name>Error(const QString &message)`：业务连接该信号即可接管动作并在完成后回调成功或失败；若业务未连接该信号，则自动回退到内置的 `actions/<动作名>.js` 或模拟模式。

@@ -822,6 +822,52 @@ function syncSelectionToTextarea(block: DocBlock): void {
   }
 }
 
+/**
+ * 在文档预览模式下，若用户在 #doc-preview 中选中了文字（含只读/锁定块或跨块选区），
+ * 将浏览器 DOM Selection 映射到隐藏的 #doc-text 对应字符偏移区间，供“引用所选”精确计算行号。
+ */
+export function syncPreviewSelectionToTextarea(): boolean {
+  if (currentMode !== "preview" || !previewContainer) return false;
+  const textarea = getDocTextarea();
+  if (!textarea) return false;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  if (!previewContainer.contains(range.commonAncestorContainer)) return false;
+
+  const selectedText = range.toString().replace(/\r\n/g, "\n").trim();
+  const selLines = selectedText
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const firstSelLine = selLines[0] ?? "";
+  const lastSelLine = selLines[selLines.length - 1] ?? "";
+
+  let offset = 0;
+  let startOffset: number | null = null;
+  let endOffset: number | null = null;
+  for (const b of currentBlocks) {
+    const serialized = serializeBlock(b);
+    const body = trimTrailingNewlines(serialized);
+    if (b.el && range.intersectsNode(b.el)) {
+      if (startOffset === null) {
+        const subIdx = firstSelLine ? body.indexOf(firstSelLine) : -1;
+        startOffset = offset + (subIdx >= 0 ? subIdx : 0);
+      }
+      const lastIdx = lastSelLine ? body.lastIndexOf(lastSelLine) : -1;
+      endOffset = offset + (lastIdx >= 0 ? lastIdx + lastSelLine.length : body.length);
+    }
+    offset += serialized.length;
+  }
+
+  if (startOffset !== null && endOffset !== null && endOffset >= startOffset) {
+    textarea.selectionStart = startOffset;
+    textarea.selectionEnd = Math.max(startOffset + 1, endOffset);
+    return true;
+  }
+  return false;
+}
+
 function isDocumentLocked(blocks: DocBlock[], disabled: boolean): boolean {
   if (disabled) return true;
   const editableKinds = blocks.filter(
@@ -1737,6 +1783,7 @@ export function initDocView(host: DocViewHost): void {
   // 3. 创建选中文字时的浮动格式条
   floatingBar = buildFloatingToolbar();
   document.addEventListener("selectionchange", () => {
+    syncPreviewSelectionToTextarea();
     updateFloatingToolbarPosition();
   });
 

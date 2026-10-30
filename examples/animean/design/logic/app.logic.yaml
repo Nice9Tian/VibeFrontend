@@ -1,0 +1,347 @@
+version: 1
+
+state:
+  project:
+    title:
+      type: string
+      initial: "样片镜头"
+    width:
+      type: number
+      initial: 1920
+    height:
+      type: number
+      initial: 1080
+    fps:
+      type: number
+      initial: 24
+    transparent:
+      type: boolean
+      initial: true
+    activeTool:
+      type: enum
+      values: [brush, eraser, fill]
+      initial: brush
+    currentFrame:
+      type: number
+      initial: 1
+    statusMessage:
+      type: string
+      initial: "就绪"
+    exportResult:
+      type: string
+      initial: "尚未导出"
+  layer:
+    visible:
+      type: boolean
+      initial: true
+      owner: business
+    blendMode:
+      type: string
+      initial: "Normal"
+    opacity:
+      type: number
+      initial: 100
+    locked:
+      type: boolean
+      initial: false
+  layers:
+    items:
+      type: array
+      initial:
+        - { id: 1, name: "背景层", visible: true, locked: false }
+        - { id: 2, name: "人物线稿", visible: true, locked: false }
+        - { id: 3, name: "高光层", visible: true, locked: false }
+    selectedIndex:
+      type: number
+      initial: 0
+    nextId:
+      type: number
+      initial: 4
+  inspector:
+    tabIndex:
+      type: number
+      initial: 0
+  newProject:
+    name:
+      type: string
+      initial: "新动画镜头"
+    preset:
+      type: string
+      initial: "1080p"
+    width:
+      type: number
+      initial: 1920
+    height:
+      type: number
+      initial: 1080
+    fps:
+      type: number
+      initial: 24
+    transparent:
+      type: boolean
+      initial: true
+
+conditions:
+  canRemoveLayer:
+    type: symbol
+    expr: layers.items.length > 1 and layers.selectedIndex >= 0
+  canMoveLayerUp:
+    type: symbol
+    expr: layers.selectedIndex > 0
+  canMoveLayerDown:
+    type: symbol
+    expr: layers.selectedIndex >= 0 and layers.selectedIndex < layers.items.length - 1
+  isBrush:
+    type: symbol
+    expr: project.activeTool == "brush"
+  isEraser:
+    type: symbol
+    expr: project.activeTool == "eraser"
+  isFill:
+    type: symbol
+    expr: project.activeTool == "fill"
+  isPropsTab:
+    type: symbol
+    expr: inspector.tabIndex == 0
+  isExportTab:
+    type: symbol
+    expr: inspector.tabIndex == 1
+
+events:
+  openNewProject:
+    - set: 'newProject.name = "新动画镜头"'
+    - set: 'newProject.preset = "1080p"'
+    - fn: syncPresetDimensions
+    - openWindow: newProjectDialog
+  layerToggleVisible:
+    owner: business
+    text: 用户请求切换当前图层的显示与隐藏
+    simulate:
+      - set: layer.visible = not layer.visible
+  notifyStatus:
+    owner: ui
+    text: 业务通知界面在状态栏显示一条消息
+    params:
+      message: string
+    steps:
+      - set: project.statusMessage = param.message
+
+actions:
+  exportClip:
+    handler: actions/exportClip.js
+    input:
+      title: project.title
+      layerCount: layers.items.length
+    mockResult:
+      outputPath: "exports/mock.mp4"
+      summary: "模拟导出完成"
+    mockError: "磁盘空间不足，导出失败"
+    onSuccess:
+      - set: project.exportResult = result.summary
+      - set: project.statusMessage = result.summary
+    onError:
+      - set: project.exportResult = error.message
+      - set: project.statusMessage = error.message
+
+objects:
+  newProjectBtn:
+    doc: docs/window.md#tools-dock
+    events:
+      click:
+        - emit: openNewProject
+  toolBrushBtn:
+    props:
+      variant: 'isBrush ? "primary" : "secondary"'
+    events:
+      click:
+        - set: 'project.activeTool = "brush"'
+        - set: 'project.statusMessage = "切换工具：画笔"'
+  toolEraserBtn:
+    props:
+      variant: 'isEraser ? "primary" : "secondary"'
+    events:
+      click:
+        - set: 'project.activeTool = "eraser"'
+        - set: 'project.statusMessage = "切换工具：橡皮"'
+  toolFillBtn:
+    props:
+      variant: 'isFill ? "primary" : "secondary"'
+    events:
+      click:
+        - set: 'project.activeTool = "fill"'
+        - set: 'project.statusMessage = "切换工具：填充"'
+  projectSummaryLabel:
+    props:
+      text: 'project.title + " (" + project.width + "x" + project.height + ")"'
+
+  layersDock:
+    doc: docs/window.md#layers-dock
+  addLayerBtn:
+    events:
+      click:
+        - push:
+            to: layers.items
+            item:
+              id: layers.nextId
+              name: '"图层 " + layers.nextId'
+              visible: true
+              locked: false
+        - set: layers.selectedIndex = layers.items.length - 1
+        - set: layers.nextId = layers.nextId + 1
+        - set: 'project.statusMessage = "已新建图层"'
+  removeLayerBtn:
+    props:
+      enabled: canRemoveLayer
+    events:
+      click:
+        - if: canRemoveLayer
+          then:
+            - remove:
+                from: layers.items
+                index: layers.selectedIndex
+            - if: layers.selectedIndex >= layers.items.length
+              then:
+                - set: layers.selectedIndex = layers.items.length - 1
+            - set: 'project.statusMessage = "已删除图层"'
+  moveLayerUpBtn:
+    props:
+      enabled: canMoveLayerUp
+    events:
+      click:
+        - if: canMoveLayerUp
+          then:
+            - move:
+                in: layers.items
+                from: layers.selectedIndex
+                to: layers.selectedIndex - 1
+            - set: layers.selectedIndex = layers.selectedIndex - 1
+            - set: 'project.statusMessage = "图层已上移"'
+  moveLayerDownBtn:
+    props:
+      enabled: canMoveLayerDown
+    events:
+      click:
+        - if: canMoveLayerDown
+          then:
+            - move:
+                in: layers.items
+                from: layers.selectedIndex
+                to: layers.selectedIndex + 1
+            - set: layers.selectedIndex = layers.selectedIndex + 1
+            - set: 'project.statusMessage = "图层已下移"'
+  layerList:
+    bind: layers.selectedIndex
+    props:
+      items: layers.items
+      value: layers.selectedIndex
+  layerVisibleLabel:
+    props:
+      text: 'layer.visible ? "当前图层：显示" : "当前图层：隐藏"'
+  toggleVisibleBtn:
+    doc: docs/window.md#toggle-visible-btn
+    props:
+      text: 'layer.visible ? "隐藏图层" : "显示图层"'
+    events:
+      click:
+        - emit: layerToggleVisible
+
+  centralArea:
+    doc: docs/window.md#central-area
+  canvasTitleLabel:
+    props:
+      text: '"画布：" + project.title'
+  activeToolLabel:
+    props:
+      text: 'isBrush ? "当前工具：画笔" : (isEraser ? "当前工具：橡皮" : "当前工具：填充")'
+  canvasHost:
+    doc: docs/window.md#canvas-host
+
+  inspectorDock:
+    doc: docs/window.md#inspector-dock
+  tabPropsBtn:
+    props:
+      variant: 'isPropsTab ? "primary" : "secondary"'
+    events:
+      click:
+        - set: inspector.tabIndex = 0
+  tabExportBtn:
+    props:
+      variant: 'isExportTab ? "primary" : "secondary"'
+    events:
+      click:
+        - set: inspector.tabIndex = 1
+  inspectorStack:
+    props:
+      currentIndex: inspector.tabIndex
+  blendCombo:
+    bind: layer.blendMode
+  opacitySpin:
+    bind: layer.opacity
+  lockLayerCheck:
+    bind: layer.locked
+    events:
+      change:
+        - set: layers.items[layers.selectedIndex].locked = layer.locked
+  exportBtn:
+    events:
+      click:
+        - call: exportClip
+  exportResultLabel:
+    props:
+      text: project.exportResult
+
+  timelineDock:
+    doc: docs/window.md#timeline-dock
+  prevFrameBtn:
+    props:
+      enabled: project.currentFrame > 1
+    events:
+      click:
+        - if: project.currentFrame > 1
+          then:
+            - set: project.currentFrame = project.currentFrame - 1
+  nextFrameBtn:
+    events:
+      click:
+        - set: project.currentFrame = project.currentFrame + 1
+  frameInfoLabel:
+    props:
+      text: '"当前帧：" + project.currentFrame + " / " + project.fps'
+
+  statusTextLabel:
+    props:
+      text: project.statusMessage
+  statusLayerCountLabel:
+    props:
+      text: '"图层数：" + layers.items.length'
+
+  newProjectDialog:
+    doc: docs/window.md#new-project-dialog
+  projectNameInput:
+    bind: newProject.name
+  presetCombo:
+    bind: newProject.preset
+    events:
+      change:
+        - fn: syncPresetDimensions
+  widthSpin:
+    bind: newProject.width
+  heightSpin:
+    bind: newProject.height
+  transparentCheck:
+    bind: newProject.transparent
+  cancelNewProjectBtn:
+    events:
+      click:
+        - closeWindow: newProjectDialog
+        - set: 'project.statusMessage = "已取消新建项目"'
+  confirmNewProjectBtn:
+    events:
+      click:
+        - set: project.title = newProject.name
+        - set: project.width = newProject.width
+        - set: project.height = newProject.height
+        - set: project.fps = newProject.fps
+        - set: project.transparent = newProject.transparent
+        - closeWindow: newProjectDialog
+        - set: 'project.statusMessage = "已创建项目：" + project.title'

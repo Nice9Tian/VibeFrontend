@@ -2,7 +2,16 @@
 // 覆盖移动、缩放、旋转、属性修改、节点增删以及删除控件时同步清理 YAML 条目，并隔离外部文件修改。
 import { isMap, parseDocument } from "yaml";
 import type { Value } from "./expr.ts";
-import type { Scene, SceneNode } from "./model.ts";
+import {
+  childrenOfNode,
+  isLayoutPositionedNode,
+  isPartitionedWindow,
+  layoutOf,
+  removeNodeReferences,
+  syncResizedNodeDimensions,
+  type Scene,
+  type SceneNode,
+} from "./model.ts";
 import {
   MIN_NODE_SIZE,
   absRectInScene,
@@ -377,7 +386,7 @@ export function collectSubtreeIds(scene: Scene, ids: string[]): Set<string> {
     if (target === scene.root || hasLockedInSubtree(scene, target) || removed.has(target)) return;
     if (!scene.nodes[target]) return;
     removed.add(target);
-    for (const child of scene.nodes[target].children ?? []) collect(child);
+    for (const child of childrenOfNode(scene.nodes[target])) collect(child);
   };
   for (const id of ids) collect(id);
   return removed;
@@ -477,7 +486,7 @@ export function cloneScene(scene: Scene): Scene {
   return JSON.parse(JSON.stringify(scene)) as Scene;
 }
 
-/** 移动一组未锁定节点（当子节点位于旋转后的父容器内时，自动将世界位移换算为父容器局部坐标增量）。 */
+/** 移动一组未锁定节点（当子节点位于旋转后的父容器内时，自动将世界位移换算为父容器局部坐标增量；由自动排版或分区定位的节点不写入无意义坐标）。 */
 export function applyMoveToScene(scene: Scene, ids: string[], dx: number, dy: number): Scene {
   const next = cloneScene(scene);
   const chosen = new Set(filterUnlocked(next, ids));
@@ -492,6 +501,11 @@ export function applyMoveToScene(scene: Scene, ids: string[], dx: number, dy: nu
     if (hasChosenAncestor) continue;
     const n = next.nodes[id];
     if (!n) continue;
+    if (isLayoutPositionedNode(next, id)) {
+      delete n.x;
+      delete n.y;
+      continue;
+    }
     const d = worldToParentDeltaInScene(next, id, dx, dy);
     n.x = Math.round((n.x ?? 0) + d.x);
     n.y = Math.round((n.y ?? 0) + d.y);
@@ -499,7 +513,7 @@ export function applyMoveToScene(scene: Scene, ids: string[], dx: number, dy: nu
   return next;
 }
 
-/** 缩放单个未锁定节点（考虑节点及其祖先容器的旋转角度，并将世界外框换算回父容器局部坐标）。 */
+/** 缩放单个未锁定节点（考虑节点及其祖先容器的旋转角度；自由定位节点将世界外框换算回父容器局部坐标，排版/分区节点只更新有效尺寸而不写 x、y）。 */
 export function applyResizeToScene(
   scene: Scene,
   id: string,
@@ -516,11 +530,16 @@ export function applyResizeToScene(
   const rot = isRoot ? 0 : worldRotationInScene(next, id);
   const box = computeResizeBox(orig, handle, dx, dy, keepAspect, MIN_NODE_SIZE, rot);
   if (!isRoot) {
-    const local = worldRectToNodeLocalInScene(next, id, box);
-    n.x = local.x;
-    n.y = local.y;
-    n.width = local.width;
-    n.height = local.height;
+    if (isLayoutPositionedNode(next, id)) {
+      delete n.x;
+      delete n.y;
+      syncResizedNodeDimensions(n, box.width, box.height, MIN_NODE_SIZE);
+    } else {
+      const local = worldRectToNodeLocalInScene(next, id, box);
+      n.x = local.x;
+      n.y = local.y;
+      syncResizedNodeDimensions(n, local.width, local.height, MIN_NODE_SIZE);
+    }
   } else {
     n.width = Math.round(box.width);
     n.height = Math.round(box.height);
@@ -555,15 +574,25 @@ export function applyAddNodeToScene(
   node: SceneNode,
 ): Scene {
   const next = cloneScene(scene);
-  const parent = next.nodes[parentId] ?? next.nodes[next.root];
+  const targetParentId = next.nodes[parentId] ? parentId : next.root;
+  const parent = next.nodes[targetParentId];
   if (!parent) return next;
-  next.nodes[id] = JSON.parse(JSON.stringify(node)) as SceneNode;
+  const created = JSON.parse(JSON.stringify(node)) as SceneNode;
+  if (layoutOf(parent) !== null || (created.type === "Dock" && targetParentId === next.root && isPartitionedWindow(parent))) {
+    delete created.x;
+    delete created.y;
+  }
+  next.nodes[id] = created;
+  if (created.type === "Dock" && targetParentId === next.root && isPartitionedWindow(parent)) {
+    parent.docks ??= [];
+    if (!parent.docks.includes(id)) parent.docks.push(id);
+  }
   parent.children ??= [];
   if (!parent.children.includes(id)) parent.children.push(id);
   return next;
 }
 
-/** 从画布中删除节点（跳过已锁定节点及含已锁定后代的容器），并可选同步删除 YAML 中的 objects 条目。 */
+/** 从画布中删除节点（跳过已锁定节点及含已锁定后代的容器，统一清理 children / docks / central / statusBar / menuBar.dock / windows），并可选同步删除 YAML 中的 objects 条目。 */
 export function applyDeleteFromScene(
   scene: Scene,
   ids: string[],
@@ -577,8 +606,8 @@ export function applyDeleteFromScene(
   if (removed.length === 0) {
     return { scene: next, logicText, removed, yamlCandidates };
   }
+  removeNodeReferences(next, removedSet);
   for (const n of Object.values(next.nodes)) {
-    if (n.children) n.children = n.children.filter((child) => !removedSet.has(child));
     if (n.type === "Line" && n.props) {
       if (typeof n.props.startNode === "string" && removedSet.has(n.props.startNode)) {
         n.props = { ...n.props };

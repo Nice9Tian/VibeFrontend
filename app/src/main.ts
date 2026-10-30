@@ -1,24 +1,36 @@
 // 编辑器界面：素材栏、图层、设计窗口（编辑模式 / 预览模式）、文档与 YAML 页签、问题栏。
 import { isMap, parseDocument, type Document } from "yaml";
 import { listDir, readText, removeFile, watchProject, writeText } from "./fs";
-import { initDocView, syncDocView } from "./docview";
+import { initDocView, syncDocView, syncPreviewSelectionToTextarea } from "./docview";
 import { initLibrary, renderLibraryPalette } from "./library";
 import { initPreviewLauncher, initStandalonePreviewWindow, syncStandalonePreviewTitle } from "./previewwindow";
 import {
+  allWindowIds,
   appendSection,
   BUILTIN_TYPES,
+  childrenOfNode,
+  computeSceneLayout,
   CONTAINER_DECL,
   declFor,
   EXTERNAL_DECL,
   getSection,
+  isLayoutPositionedNode,
+  isPartitionedWindow,
+  layoutOf,
+  LAYOUT_TYPE_KINDS,
   loadProject,
   LOGIC_PATH,
   MOUSE_EVENTS,
+  parentOfNode,
   parseDocRef,
+  remapNodeChildren,
+  renameNodeReferences,
   replaceSection,
   SCENE_PATH,
   sectionNameFor,
   sectionOffsets,
+  STANDARD_COMPONENTS,
+  syncResizedNodeDimensions,
   type ComponentInstance,
   type Project,
   type SceneNode,
@@ -164,21 +176,49 @@ function node(id: string): SceneNode | undefined {
   return project.scene.nodes[id];
 }
 
-function parentOf(id: string): string | null {
-  for (const [parentId, parent] of Object.entries(project.scene.nodes)) {
-    if (parent.children?.includes(id)) return parentId;
-  }
-  return null;
+function childrenOf(n: SceneNode | undefined): string[] {
+  return childrenOfNode(n);
 }
 
-/** 节点相对于设计窗口左上角的位置（含旋转父容器对子节点中心位置的变换）。根窗口在 (0, 0)。 */
+function parentOf(id: string): string | null {
+  return parentOfNode(project.scene, id);
+}
+
+function windowRootOf(id: string): string {
+  let cursor: string | null = id;
+  while (cursor) {
+    const p = parentOf(cursor);
+    if (!p) return cursor;
+    cursor = p;
+  }
+  return project.scene.root;
+}
+
+function isDialogShownInStage(winId: string): boolean {
+  const runtime = activeRuntime();
+  const effectiveVis = runtime.view(winId).visible;
+  if (mode === "preview") return effectiveVis;
+  if (effectiveVis) return true;
+  if (selectedId && windowRootOf(selectedId) === winId) return true;
+  return selectedIds.some((id) => windowRootOf(id) === winId);
+}
+
+function currentLayoutBoxes() {
+  const runtime = activeRuntime();
+  return computeSceneLayout(project.scene, {
+    isVisible: (nid) => runtime.view(nid).visible,
+    getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
+  });
+}
+
+/** 节点相对于设计窗口左上角的位置（含排版计算与旋转父容器对子节点中心位置的变换）。根窗口在 (0, 0)。 */
 function absRect(id: string): { x: number; y: number; width: number; height: number } {
-  return absRectInScene(project.scene, id);
+  return absRectInScene(project.scene, id, currentLayoutBoxes());
 }
 
 /** 节点在设计窗口里的视觉外包围盒（含自身与祖先容器旋转后的轴对齐外框）。 */
 function visualRect(id: string): { x: number; y: number; width: number; height: number } {
-  return visualBoundsInScene(project.scene, id);
+  return visualBoundsInScene(project.scene, id, currentLayoutBoxes());
 }
 
 /** 节点在设计窗口世界坐标系下的总旋转角（度）。 */
@@ -186,10 +226,13 @@ function worldRotation(id: string): number {
   return worldRotationInScene(project.scene, id);
 }
 
-/** 找出某个点下面最上层、最深的节点；只点到窗口空白处时返回 null。 */
 function hitTest(px: number, py: number): string | null {
+  const runtime = activeRuntime();
   const visit = (id: string): string | null => {
-    const children = node(id)?.children ?? [];
+    const n = node(id);
+    if (!n) return null;
+    if (mode === "preview" && !runtime.view(id).visible) return null;
+    const children = childrenOf(n);
     for (let i = children.length - 1; i >= 0; i--) {
       const hit = visit(children[i]);
       if (hit) return hit;
@@ -197,7 +240,14 @@ function hitTest(px: number, py: number): string | null {
     if (id === project.scene.root) return null;
     return containsPoint(id, px, py) ? id : null;
   };
-  return visit(project.scene.root);
+  const winIds = allWindowIds(project.scene);
+  for (let i = winIds.length - 1; i >= 0; i--) {
+    const winId = winIds[i];
+    if (winId !== project.scene.root && !isDialogShownInStage(winId)) continue;
+    const hit = visit(winId);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 function canHoldChildren(id: string): boolean {
@@ -400,16 +450,30 @@ function buildNode(id: string, parentEl: HTMLElement): void {
   const entry: Mounted = { wrapper, body, generation: 0 };
   mounted.set(id, entry);
 
-  if (n.type === "Container") {
-    // 未转换的容器：没有子节点时显示自己的 ID，作为占位
-    if (!n.children?.length) body.textContent = id;
+  if (n.type === "Dock") {
+    const header = document.createElement("div");
+    header.className = "vf-dock-header";
+    header.style.cssText = `height:${n.headerHeight ?? 26}px;display:flex;align-items:center;padding:0 10px;font-size:12px;font-weight:600;background:#182030;color:#cbd5e1;border-bottom:1px solid #2b3548;box-sizing:border-box;user-select:none;`;
+    header.textContent = String(activeRuntime().view(id).props.title ?? n.title ?? id);
+    wrapper.prepend(header);
+    wrapper.style.background = "#111726";
+    wrapper.style.boxShadow = "inset 0 0 0 1px #263042";
+    wrapper.style.boxSizing = "border-box";
+  } else if (n.type === "Dialog") {
+    wrapper.style.background = "#151c2c";
+    wrapper.style.borderRadius = "8px";
+    wrapper.style.boxShadow = "inset 0 0 0 1px #334155, 0 20px 50px rgba(0,0,0,0.6)";
+    wrapper.style.zIndex = "50";
+  } else if (n.type === "Container" || n.type in LAYOUT_TYPE_KINDS) {
+    // 未转换的容器或布局容器：没有子节点时显示自己的 ID，作为占位
+    if (!childrenOf(n).length) body.textContent = id;
   } else if (n.type === "External") {
     // 外部容器：工具里只是占位，导出后由业务把自己的控件放进来
     body.textContent = `外部容器 ${id}\n导出后由业务放入控件`;
   } else if (n.type === "Shape" || n.type === "Line") {
     paintGraphic(id, entry, activeRuntime().view(id).props);
   } else {
-    const component = project.components.get(n.type);
+    const component = project.components.get(n.type) ?? STANDARD_COMPONENTS.get(n.type);
     if (!component?.create) {
       showNodeError(body, component?.error ?? `找不到控件 ${n.type}`);
     } else {
@@ -446,7 +510,7 @@ function buildNode(id: string, parentEl: HTMLElement): void {
     });
   }
 
-  for (const child of n.children ?? []) buildNode(child, wrapper);
+  for (const child of childrenOf(n)) buildNode(child, wrapper);
 }
 
 /**
@@ -479,17 +543,52 @@ function setShown(id: string, entry: Mounted, shown: boolean): void {
 /** 按当前运行层的计算结果更新每个节点的可见性和属性。 */
 function applyViews(): void {
   const runtime = activeRuntime();
+  const boxes = computeSceneLayout(project.scene, {
+    isVisible: (nid) => runtime.view(nid).visible,
+    getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
+  });
+  const rootNode = node(project.scene.root);
   for (const [id, entry] of mounted) {
     const view = runtime.view(id);
+    const n = node(id);
+    const box = boxes.get(id);
+    if (box && n?.type !== "Line") {
+      if (n?.type === "Dialog" && id !== project.scene.root && rootNode) {
+        const dx = Math.round((rootNode.width - box.width) / 2);
+        const dy = Math.round((rootNode.height - box.height) / 2);
+        Object.assign(entry.wrapper.style, {
+          left: `${dx}px`,
+          top: `${dy}px`,
+          width: `${box.width}px`,
+          height: `${box.height}px`,
+          transform: n?.rotation ? `rotate(${n.rotation}deg)` : "",
+          transformOrigin: "center center",
+        });
+      } else {
+        Object.assign(entry.wrapper.style, {
+          left: `${box.x}px`,
+          top: `${box.y}px`,
+          width: `${box.width}px`,
+          height: `${box.height}px`,
+          transform: n?.rotation ? `rotate(${n.rotation}deg)` : "",
+          transformOrigin: "center center",
+        });
+      }
+    }
+    const effectiveVis = box ? box.visible : view.visible;
     if (mode === "preview") {
-      setShown(id, entry, view.visible);
+      setShown(id, entry, effectiveVis);
       entry.wrapper.classList.remove("vf-ghost");
     } else {
-      entry.wrapper.style.display = "";
-      entry.wrapper.classList.toggle("vf-ghost", !view.visible);
+      entry.wrapper.style.display = n?.type === "Dialog" && !isDialogShownInStage(id) ? "none" : "";
+      entry.wrapper.classList.toggle("vf-ghost", !effectiveVis);
     }
     entry.wrapper.toggleAttribute("data-vf-disabled", !view.enabled);
-    const type = node(id)?.type;
+    const type = n?.type;
+    if (type === "Dock") {
+      const header = entry.wrapper.querySelector(".vf-dock-header");
+      if (header) header.textContent = String(view.props.title ?? n?.title ?? id);
+    }
     if (type === "Shape" || type === "Line") {
       paintGraphic(id, entry, view.props);
       continue;
@@ -522,7 +621,42 @@ function renderStage(): void {
   $("stage-title").textContent = (root.title ?? project.scene.root) + (mode === "preview" ? "　·　预览中" : "");
   $("window-size").textContent = `窗口 ${root.width}×${root.height}`;
 
-  for (const child of root.children ?? []) buildNode(child, stage);
+  if (root.menuBar) {
+    const bar = document.createElement("div");
+    const mh = root.menuBar.height ?? 28;
+    bar.style.cssText = `position:absolute;left:0;top:0;width:100%;height:${mh}px;display:flex;align-items:center;gap:4px;padding:0 8px;background:#111827;border-bottom:1px solid #263042;box-sizing:border-box;z-index:20;font-size:12px;color:#e2e8f0;`;
+    for (const menu of root.menuBar.menus ?? []) {
+      const group = document.createElement("div");
+      group.style.cssText = "display:flex;align-items:center;gap:2px;margin-right:8px;";
+      const titleSpan = document.createElement("span");
+      titleSpan.style.cssText = "font-weight:600;color:#94a3b8;padding:0 4px;";
+      titleSpan.textContent = menu.title;
+      group.append(titleSpan);
+      for (const item of menu.items ?? []) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.dataset.vfMenuItem = item.id;
+        btn.style.cssText = "background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;";
+        btn.textContent = item.text;
+        btn.addEventListener("click", () => {
+          if (mode === "preview" && previewRuntime) {
+            previewRuntime.dispatch(item.id, "mousedown");
+            previewRuntime.dispatch(item.id, "mouseup");
+            previewRuntime.dispatch(item.id, "click");
+            previewRuntime.dispatch(null, "window.click");
+          }
+        });
+        group.append(btn);
+      }
+      bar.append(group);
+    }
+    stage.append(bar);
+  }
+
+  for (const child of childrenOf(root)) buildNode(child, stage);
+  for (const winId of allWindowIds(project.scene)) {
+    if (winId !== project.scene.root) buildNode(winId, stage);
+  }
   applyViews();
   if (mode === "edit") {
     stage.append(overlay);
@@ -847,7 +981,7 @@ function snapTargets(exclude: string | string[] | null): Rect[] {
   const excluded = new Set<string>();
   const collect = (id: string) => {
     excluded.add(id);
-    for (const child of node(id)?.children ?? []) collect(child);
+    for (const child of childrenOf(node(id))) collect(child);
   };
   for (const id of exclude === null ? [] : typeof exclude === "string" ? [exclude] : exclude) collect(id);
   const rects: Rect[] = [];
@@ -1177,7 +1311,7 @@ function interiorAttachable(id: string): boolean {
 /** 鼠标下面能从内部挂线的节点：最上面、最里面的那个。avoid 是线另一头挂着的节点，不让线两头挂在同一个东西上。 */
 function attachableAt(px: number, py: number, excludeId: string | null, avoid: string | null): string | null {
   const visit = (id: string): string | null => {
-    const children = node(id)?.children ?? [];
+    const children = childrenOf(node(id));
     for (let i = children.length - 1; i >= 0; i--) {
       const hit = visit(children[i]);
       if (hit) return hit;
@@ -1482,7 +1616,7 @@ overlay.addEventListener("pointerdown", (e) => {
   } else if (!selectedIds.includes(id)) {
     select(id);
   }
-  const ids = filterUnlocked(project.scene, topSelection());
+  const ids = filterUnlocked(project.scene, topSelection()).filter((each) => !isLayoutPositionedNode(project.scene, each));
   if (ids.length === 0) {
     if (toggleOnClick) gesture = { kind: "move", ids: [], origins: [], start: { x: e.clientX, y: e.clientY }, abs: absRect(id), moved: false, targets: [], toggleOnClick };
     return;
@@ -1506,19 +1640,22 @@ overlay.addEventListener("pointerdown", (e) => {
   capturePointer(e);
 });
 
-/** 节点的位置或大小在拖动中变了：只挪动它自己的元素，形状重画，挂着的线跟着走。 */
+/** 节点的位置或大小在拖动中变了：只挪动它自己的元素（排版或分区节点重算排版），形状重画，挂着的线跟着走。 */
 function applyLiveGeometry(id: string): void {
   const n = node(id);
   if (!n) return;
   if (id === project.scene.root) {
     $("stage").style.width = `${n.width}px`;
     $("stage").style.height = `${n.height}px`;
+  }
+  if (id === project.scene.root || isLayoutPositionedNode(project.scene, id) || layoutOf(n) !== null || isPartitionedWindow(n)) {
+    applyViews();
   } else {
     const entry = mounted.get(id);
     if (entry) {
       Object.assign(entry.wrapper.style, {
-        left: `${n.x}px`,
-        top: `${n.y}px`,
+        left: `${n.x ?? 0}px`,
+        top: `${n.y ?? 0}px`,
         width: `${n.width}px`,
         height: `${n.height}px`,
         transform: n.rotation ? `rotate(${n.rotation}deg)` : "",
@@ -1598,17 +1735,21 @@ overlay.addEventListener("pointermove", (e) => {
       box = snapped.rect;
       drawGuides(snapped.guides);
     }
-    n.width = Math.max(MIN_SIZE, Math.round(box.width));
-    n.height = Math.max(MIN_SIZE, Math.round(box.height));
-    if (!isRoot) {
+    const nextW = Math.max(MIN_SIZE, Math.round(box.width));
+    const nextH = Math.max(MIN_SIZE, Math.round(box.height));
+    syncResizedNodeDimensions(n, nextW, nextH, MIN_SIZE);
+    if (!isRoot && !isLayoutPositionedNode(project.scene, gesture.id)) {
       const local = worldRectToNodeLocalInScene(project.scene, gesture.id, {
         x: box.x,
         y: box.y,
         width: n.width,
         height: n.height,
-      });
+      }, currentLayoutBoxes());
       n.x = local.x;
       n.y = local.y;
+    } else if (isLayoutPositionedNode(project.scene, gesture.id)) {
+      delete n.x;
+      delete n.y;
     }
     showSize(n.width, n.height);
     applyLiveGeometry(gesture.id);
@@ -1636,28 +1777,38 @@ overlay.addEventListener("pointermove", (e) => {
       height: Math.max(MIN_SIZE, Math.round(box.height)),
     };
     const scaledList = scaleGroupItems(gesture.items, origBox, box, MIN_SIZE, project.scene);
+    let needReflow = false;
     for (const [id, scaled] of scaledList) {
       const eachNode = node(id);
       if (!eachNode) continue;
       if (eachNode.type === "Line" && scaled.props) {
         eachNode.props = scaled.props;
       } else {
-        eachNode.x = scaled.x;
-        eachNode.y = scaled.y;
-        eachNode.width = scaled.width;
-        eachNode.height = scaled.height;
-        const entry = mounted.get(id);
-        if (entry) {
-          Object.assign(entry.wrapper.style, {
-            left: `${eachNode.x}px`,
-            top: `${eachNode.y}px`,
-            width: `${eachNode.width}px`,
-            height: `${eachNode.height}px`,
-          });
-          if (eachNode.type === "Shape") paintGraphic(id, entry, activeRuntime().view(id).props);
+        syncResizedNodeDimensions(eachNode, scaled.width, scaled.height, MIN_SIZE);
+        if (isLayoutPositionedNode(project.scene, id)) {
+          delete eachNode.x;
+          delete eachNode.y;
+          needReflow = true;
+        } else {
+          eachNode.x = scaled.x;
+          eachNode.y = scaled.y;
+          if (layoutOf(eachNode) !== null || isPartitionedWindow(eachNode)) {
+            needReflow = true;
+          }
+          const entry = mounted.get(id);
+          if (entry) {
+            Object.assign(entry.wrapper.style, {
+              left: `${eachNode.x}px`,
+              top: `${eachNode.y}px`,
+              width: `${eachNode.width}px`,
+              height: `${eachNode.height}px`,
+            });
+            if (eachNode.type === "Shape") paintGraphic(id, entry, activeRuntime().view(id).props);
+          }
         }
       }
     }
+    if (needReflow) applyViews();
     showSize(box.width, box.height);
     refreshLines();
     updateSelectionBox();
@@ -1688,7 +1839,7 @@ overlay.addEventListener("pointermove", (e) => {
     gesture.moved = true;
     Object.assign(marqueeBox.style, { display: "block", left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
     // 框住的是起点所在的那一层里、未锁定且和方框（含旋转后精确有向矩形）有交叠的东西
-    const hits = (node(gesture.scope)?.children ?? []).filter((child) => {
+    const hits = childrenOf(node(gesture.scope)).filter((child) => {
       if (isNodeLocked(project.scene, child)) return false;
       const r = absRect(child);
       return rectIntersectsRotatedRect(rect, r, worldRotation(child));
@@ -2022,7 +2173,7 @@ document.addEventListener("keydown", (e) => {
   if (ctrl && key === "a") {
     e.preventDefault();
     // 全选：窗口里最外面一层未锁定的全部东西
-    setSelection((node(project.scene.root)?.children ?? []).filter((id) => !isNodeLocked(project.scene, id)));
+    setSelection(childrenOf(node(project.scene.root)).filter((id) => !isNodeLocked(project.scene, id)));
     return;
   }
   if (ctrl && e.key === "Enter") {
@@ -2061,7 +2212,8 @@ document.addEventListener("keydown", (e) => {
     if (unlocked.length === 0) return toast("选中的控件已锁定");
     const [dx, dy] = moves[e.key];
     const lineIds = unlocked.filter((id) => node(id)?.type === "Line");
-    const boxIds = unlocked.filter((id) => node(id)?.type !== "Line");
+    const boxIds = unlocked.filter((id) => node(id)?.type !== "Line" && !isLayoutPositionedNode(project.scene, id));
+    if (boxIds.length === 0 && lineIds.length === 0) return;
     if (boxIds.length > 0) {
       project.scene = applyMoveToScene(project.scene, boxIds, dx, dy);
     }
@@ -2105,13 +2257,19 @@ async function createNode(type: string, parentId: string, rect: Rect, props?: Re
   const decl = declFor(project, type) ?? CONTAINER_DECL;
   const parentRect = absRect(parentId);
   const id = newId(type, idBase);
+  const parentNode = node(parentId);
+  const omitCoords =
+    (parentNode ? layoutOf(parentNode) !== null : false) ||
+    (type === "Dock" && parentId === project.scene.root && !!parentNode && isPartitionedWindow(parentNode));
   const created: SceneNode = {
     type,
-    x: Math.round(rect.x - (parentId === project.scene.root ? 0 : parentRect.x)),
-    y: Math.round(rect.y - (parentId === project.scene.root ? 0 : parentRect.y)),
     width: Math.max(1, Math.round(rect.width)),
     height: Math.max(1, Math.round(rect.height)),
   };
+  if (!omitCoords) {
+    created.x = Math.round(rect.x - (parentId === project.scene.root ? 0 : parentRect.x));
+    created.y = Math.round(rect.y - (parentId === project.scene.root ? 0 : parentRect.y));
+  }
   if (props && Object.keys(props).length > 0) created.props = props;
   if (decl.children) created.children = [];
   project.scene = applyAddNodeToScene(project.scene, parentId, id, created);
@@ -2227,7 +2385,7 @@ function copyNodes(ids: string[]): Clip {
     const n = node(id);
     if (!n || nodes[id]) return;
     nodes[id] = JSON.parse(JSON.stringify(n)) as SceneNode;
-    for (const child of n.children ?? []) collect(child);
+    for (const child of childrenOf(n)) collect(child);
   };
   for (const id of ids) collect(id);
   const roots = ids.filter((id) => nodes[id]);
@@ -2273,7 +2431,7 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
     // 先占住这个 ID，后面的 newId 才不会重复
     project.scene.nodes[fresh] = { type: n.type, width: 1, height: 1 };
     order.push(id);
-    for (const child of n.children ?? []) walk(child);
+    for (const child of childrenOf(n)) walk(child);
   };
   for (const root of clip.roots) walk(root);
 
@@ -2281,7 +2439,7 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
     const source = clip.nodes[oldId];
     const copy = JSON.parse(JSON.stringify(source)) as SceneNode;
     delete copy.locked;
-    if (copy.children) copy.children = copy.children.map((child) => idMap.get(child)).filter((child): child is string => !!child);
+    remapNodeChildren(copy, (child) => idMap.get(child));
     if (copy.type === "Line" && copy.props) {
       for (const key of ["startNode", "endNode"]) {
         const target = copy.props[key];
@@ -2306,14 +2464,24 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
     const parent = node(parentId) ?? node(project.scene.root)!;
     const origin = parentId === project.scene.root ? { x: 0, y: 0 } : absRect(parentId);
     const copy = node(fresh)!;
+    const isDockInPartition = copy.type === "Dock" && parentId === project.scene.root && isPartitionedWindow(parent);
     if (copy.type === "Line") copy.props = shiftLineAll(copy.props ?? {}, offset - origin.x, offset - origin.y);
-    else {
+    else if (layoutOf(parent) !== null || isDockInPartition) {
+      delete copy.x;
+      delete copy.y;
+    } else {
       copy.x = (copy.x ?? 0) + offset - origin.x;
       copy.y = (copy.y ?? 0) + offset - origin.y;
     }
-    parent.children ??= [];
-    if (index === undefined || index < 0) parent.children.push(fresh);
-    else parent.children.splice(index, 0, fresh);
+    if (isDockInPartition) {
+      parent.docks ??= [];
+      if (index === undefined || index < 0) parent.docks.push(fresh);
+      else parent.docks.splice(index, 0, fresh);
+    } else {
+      parent.children ??= [];
+      if (index === undefined || index < 0) parent.children.push(fresh);
+      else parent.children.splice(index, 0, fresh);
+    }
     placed.push(fresh);
   }
   return placed;
@@ -2327,7 +2495,7 @@ async function duplicateNodes(ids: string[]): Promise<void> {
   const clip = copyNodes(unlocked);
   const placed = pasteClip(clip, (rootId) => {
     const parentId = parentOf(rootId) ?? project.scene.root;
-    const siblings = node(parentId)?.children ?? [];
+    const siblings = childrenOf(node(parentId));
     return { parentId, index: siblings.indexOf(rootId) + 1 };
   }, PASTE_OFFSET);
   selectedIds = placed;
@@ -2513,7 +2681,7 @@ async function toggleLock(targetIds?: string[]): Promise<void> {
 function alignableSelection(): string[] {
   return filterUnlocked(project.scene, topSelection()).filter((id) => {
     const n = node(id);
-    return !!n && n.type !== "Line";
+    return !!n && n.type !== "Line" && !isLayoutPositionedNode(project.scene, id);
   });
 }
 
@@ -2582,8 +2750,13 @@ async function reorder(id: string, toFront: boolean): Promise<void> {
   const parentId = parentOf(id);
   if (!parentId) return;
   const parent = node(parentId)!;
-  const rest = parent.children!.filter((child) => child !== id);
-  parent.children = toFront ? [...rest, id] : [id, ...rest];
+  if (parent.docks?.includes(id)) {
+    const rest = parent.docks.filter((child) => child !== id);
+    parent.docks = toFront ? [...rest, id] : [id, ...rest];
+  } else if (parent.children?.includes(id)) {
+    const rest = parent.children.filter((child) => child !== id);
+    parent.children = toFront ? [...rest, id] : [id, ...rest];
+  }
   await saveScene();
 }
 
@@ -2621,15 +2794,7 @@ async function renameId(oldId: string, nextId: string): Promise<void> {
   const scene = project.scene;
   scene.nodes[nextId] = scene.nodes[oldId];
   delete scene.nodes[oldId];
-  for (const n of Object.values(scene.nodes)) {
-    if (n.children) n.children = n.children.map((child) => (child === oldId ? nextId : child));
-    // 挂在它上面的线跟着改名
-    if (n.type === "Line" && n.props) {
-      if (n.props.startNode === oldId) n.props.startNode = nextId;
-      if (n.props.endNode === oldId) n.props.endNode = nextId;
-    }
-  }
-  if (scene.root === oldId) scene.root = nextId;
+  renameNodeReferences(scene, oldId, nextId);
   selectedId = nextId;
   await saveScene({ nextLogicText: logicText, label: `重命名 ${oldId} → ${nextId}` });
 }
@@ -3396,10 +3561,21 @@ function renderPalette(): void {
   $("palette-basic").replaceChildren(
     make("Container", "□ 容器", "拖进设计窗口，再交给 Agent 做成具体控件"),
     make("External", "⧉ 外部容器", EXTERNAL_DECL.description ?? ""),
+    make("VBox", "▤ 竖排布局", "子控件从上往下排列"),
+    make("HBox", "▥ 横排布局", "子控件从左往右排列"),
+    make("Grid", "⊞ 网格布局", "子控件按行列网格排列"),
+    make("Form", "☰ 表单布局", "左列标签、右列控件的表单排列"),
+    make("Stack", "❐ 层叠布局", "多个页面叠放，按 currentIndex 切换"),
+    make("Dock", "◧ 停靠面板", "停靠在主窗口四侧的面板"),
+    make("Dialog", "🗔 对话框", "弹出窗口或模态对话框"),
   );
-  const items = [...project.components.values()]
+  const stdItems = [...STANDARD_COMPONENTS.values()].map((component) =>
+    make(component.decl.type, `${component.decl.label ?? component.decl.type}（标准）`, component.decl.description ?? ""),
+  );
+  const projectItems = [...project.components.values()]
     .filter((component) => !component.error)
     .map((component) => make(component.decl.type, component.decl.label ?? component.decl.type, component.decl.description ?? ""));
+  const items = [...stdItems, ...projectItems];
   if (items.length === 0) {
     const empty = document.createElement("div");
     empty.className = "palette-empty";
@@ -3488,9 +3664,9 @@ function renderLayers(): void {
     });
     rows.push(row);
     // 列表里越靠上的在画面里越靠前
-    for (const child of [...(n.children ?? [])].reverse()) visit(child, depth + 1);
+    for (const child of [...childrenOf(n)].reverse()) visit(child, depth + 1);
   };
-  visit(project.scene.root, 0);
+  for (const winId of allWindowIds(project.scene)) visit(winId, 0);
   $("layers").replaceChildren(...rows);
 }
 
@@ -3517,6 +3693,7 @@ function topSelection(): string[] {
 }
 
 function afterSelectionChange(): void {
+  applyViews();
   renderLayers();
   renderToolbar();
   renderRight();
@@ -3710,14 +3887,18 @@ $("selection-quote").addEventListener("click", () => {
 // 文档页签的“引用所选”：选中了文字就引用那几行，否则引用当前显示的整个小节或整份文档
 $("doc-quote").addEventListener("click", async () => {
   if (!docTarget) return toast("这个控件还没有说明，先点“创建说明”");
+  syncPreviewSelectionToTextarea();
+  const selStart = docText.selectionStart;
+  const selEnd = docText.selectionEnd;
+  const textSnapshot = docText.value;
   await saveDoc();
   const { path, section } = docTarget;
   const file = project.docs.get(path) ?? "";
   const offsets = section ? sectionOffsets(file, section) : null;
   const context: [string, string] | undefined = section ? ["section", section] : undefined;
-  if (docText.selectionStart !== docText.selectionEnd) {
+  if (selStart !== selEnd) {
     const firstLine = offsets ? lineAt(file, offsets.contentStart) : 1;
-    const range = selectionRange(docText.value, docText.selectionStart, docText.selectionEnd, firstLine);
+    const range = selectionRange(textSnapshot, selStart, selEnd, firstLine);
     void copyReference(linesReference(project, path, range, context));
   } else if (section) {
     const range = docSectionRange(file, section);
@@ -3826,7 +4007,7 @@ function renderLog(): void {
 // ---------- 预览 ----------
 
 function renderConditions(): void {
-  const chips = (previewRuntime?.conditions() ?? []).map((condition) => {
+  const chips: HTMLElement[] = (previewRuntime?.conditions() ?? []).map((condition) => {
     const isText = condition.kind === "text";
     const chip = document.createElement(isText ? "button" : "span");
     chip.className = "condition" + (condition.value ? " on" : "");
@@ -3835,6 +4016,30 @@ function renderConditions(): void {
     if (isText) chip.addEventListener("click", () => previewRuntime?.toggleTextCondition(condition.id));
     return chip;
   });
+  for (const action of previewRuntime?.actions() ?? []) {
+    const wrap = document.createElement("label");
+    wrap.className = "condition";
+    wrap.title = `动作 ${action.name} 的模拟方式`;
+    wrap.textContent = `动作 ${action.name}：`;
+    const sel = document.createElement("select");
+    sel.style.cssText = "margin-left:4px;font-size:11px;";
+    for (const [val, label] of [
+      ["real", "真实实现"],
+      ["success", "模拟成功"],
+      ["error", "模拟失败"],
+    ] as const) {
+      const opt = document.createElement("option");
+      opt.value = val;
+      opt.textContent = label;
+      opt.selected = action.sim.mode === val;
+      sel.append(opt);
+    }
+    sel.addEventListener("change", () => {
+      previewRuntime?.setActionSimulation(action.name, { mode: sel.value as "real" | "success" | "error" });
+    });
+    wrap.append(sel);
+    chips.push(wrap);
+  }
   $("conditions").replaceChildren(...chips);
 }
 

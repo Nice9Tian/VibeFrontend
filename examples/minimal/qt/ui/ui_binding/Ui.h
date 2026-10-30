@@ -32,6 +32,12 @@ public:
     QString stateDump() const;
     // 每个控件实际的可见、可用和属性。和 stateDump 里的 views 对照，就知道界面有没有照着逻辑摆好。
     QString widgetDump() const;
+    // 每个可见控件此刻相对于所属窗口的位置和大小。一行 JSON，供排版比较脚本核对。
+    QString layoutDump() const;
+
+    // 供自动化测试驱动触发请求事件或切换动作模拟方式
+    void triggerRequest(const QString &name, const QString &jsonArgs = QString());
+    void setActionSimulation(const QString &name, const QString &mode, int delayMs = 0);
 
     // ---- BusinessInterface ----
     void setLayerVisible(bool value) override;

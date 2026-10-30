@@ -847,4 +847,258 @@ test("跨通道外部修改历史记录与删除首条目保留 objects 顶层�
   assert.equal(afterDel.includes("btn2:"), true);
 });
 
+// 16. 分区节点字段（docks、central、statusBar）走统一子节点函数：锁定、删除、撤销、旋转全部覆盖
+test("分区节点字段（docks、central、statusBar）统一覆盖锁定、删除、撤销与旋转", () => {
+  const partitionedScene: Scene = {
+    version: 1,
+    root: "window",
+    nodes: {
+      window: {
+        type: "Window",
+        width: 1000,
+        height: 700,
+        menuBar: {
+          height: 28,
+          menus: [
+            {
+              id: "viewMenu",
+              title: "视图",
+              items: [{ id: "toggleLeft", text: "左侧面板", dock: "leftDock", checkable: true, checked: true }],
+            },
+          ],
+        },
+        docks: ["leftDock"],
+        central: "centralBox",
+        statusBar: "statusText",
+        children: ["leftDock", "centralBox", "statusText"],
+      },
+      leftDock: {
+        type: "Dock",
+        dockArea: "left",
+        width: 220,
+        height: 600,
+        layout: { kind: "vbox", padding: 10, gap: 8 },
+        children: ["dockBtn"],
+      },
+      dockBtn: {
+        type: "Button",
+        width: 200,
+        height: 36,
+        props: { text: "面板按钮" },
+      },
+      centralBox: {
+        type: "VBox",
+        width: 780,
+        height: 600,
+        layout: { kind: "vbox", padding: 16, gap: 12 },
+        children: ["centralLabel"],
+      },
+      centralLabel: {
+        type: "Label",
+        width: 240,
+        height: 28,
+        props: { text: "中央区标题" },
+      },
+      statusText: {
+        type: "Label",
+        width: 1000,
+        height: 24,
+        props: { text: "就绪" },
+      },
+    },
+  };
+
+  // (a) 锁定传递与子树锁定检查：仅在 window.docks / window.central / window.statusBar 挂接（无冗余 window.children）时依然生效
+  const partitionOnlyScene = cloneScene(partitionedScene);
+  delete partitionOnlyScene.nodes.window.children;
+  setNodesLocked(partitionOnlyScene, ["leftDock"], true);
+  assert.equal(isNodeLocked(partitionOnlyScene, "leftDock"), true);
+  assert.equal(isNodeLocked(partitionOnlyScene, "dockBtn"), true, "锁定 Dock 面板后，其内部子节点 dockBtn 应继承锁定");
+  assert.equal(lockedAncestorInScene(partitionOnlyScene, "dockBtn"), "leftDock");
+  assert.equal(hasLockedInSubtree(partitionOnlyScene, "window"), true, "window 通过 docks 引用了锁定的 leftDock，子树应视为含锁定节点");
+
+  // 锁定 centralBox 的子节点 centralLabel，删除 centralBox 应被 hasLockedInSubtree 拦截
+  setNodesLocked(partitionOnlyScene, ["leftDock"], false);
+  setNodesLocked(partitionOnlyScene, ["centralLabel"], true);
+  assert.equal(hasLockedInSubtree(partitionOnlyScene, "centralBox"), true);
+  setNodesLocked(partitionOnlyScene, ["centralLabel"], false);
+
+  // (b) 旋转传递：旋转 centralBox 30° 后，centralLabel 继承世界旋转角，且 absRectInScene 与 visualBoundsInScene 结合排版盒正确计算
+  setNodeRotation(partitionOnlyScene.nodes.centralBox, 30);
+  assert.equal(worldRotationInScene(partitionOnlyScene, "centralBox"), 30);
+  assert.equal(worldRotationInScene(partitionOnlyScene, "centralLabel"), 30);
+  const centralRect = absRectInScene(partitionOnlyScene, "centralBox");
+  assert.equal(centralRect.x, 220, "中央区应在左侧 Dock (220px) 右侧");
+  assert.equal(centralRect.y, 28, "中央区应在菜单栏 (28px) 下方");
+  const statusRect = absRectInScene(partitionOnlyScene, "statusText");
+  assert.equal(statusRect.y, 700 - 24, "状态栏应在窗口底部");
+  const labelVisual = visualBoundsInScene(partitionOnlyScene, "centralLabel");
+  assert.ok(labelVisual.width > 240 && labelVisual.height > 28, "旋转 30° 后的视觉外包围盒应大于原始宽高");
+
+  // (c) 删除与撤销/重做：删除 leftDock、centralBox、statusText 会同时清理 window.docks、menuBar.dock、window.central、window.statusBar，撤销可完整恢复
+  const logic0 = [
+    "version: 1",
+    "objects:",
+    "  leftDock:",
+    "    props:",
+    "      title: '\"图层\"'",
+    "  statusText:",
+    "    props:",
+    "      text: '\"就绪\"'",
+    "",
+  ].join("\n");
+  const delRes = applyDeleteFromScene(
+    partitionOnlyScene,
+    ["leftDock", "centralBox", "statusText"],
+    logic0,
+    true,
+  );
+  assert.equal(delRes.removed.includes("leftDock"), true);
+  assert.equal(delRes.removed.includes("dockBtn"), true, "leftDock 的子节点 dockBtn 应一并收集删除");
+  assert.equal(delRes.removed.includes("centralBox"), true);
+  assert.equal(delRes.removed.includes("centralLabel"), true, "centralBox 的子节点 centralLabel 应一并收集删除");
+  assert.equal(delRes.removed.includes("statusText"), true);
+  assert.deepEqual(delRes.scene.nodes.window.docks, []);
+  assert.equal(delRes.scene.nodes.window.central, undefined);
+  assert.equal(delRes.scene.nodes.window.statusBar, undefined);
+  assert.equal(
+    delRes.scene.nodes.window.menuBar?.menus[0].items[0].dock,
+    undefined,
+    "删除 Dock 后应清理 menuBar 菜单项上的 dock 引用",
+  );
+
+  let stack = createHistory(10);
+  stack = pushHistory(
+    stack,
+    snapshotOf(partitionOnlyScene, logic0),
+    snapshotOf(delRes.scene, delRes.logicText),
+    "删除分区节点",
+  );
+  const undone = undoHistory(stack, snapshotOf(delRes.scene, delRes.logicText));
+  assert.ok(undone.snapshot);
+  const restoredScene = parseScene(undone.snapshot.sceneText);
+  assert.deepEqual(restoredScene.nodes.window.docks, ["leftDock"]);
+  assert.equal(restoredScene.nodes.window.central, "centralBox");
+  assert.equal(restoredScene.nodes.window.statusBar, "statusText");
+  assert.ok(restoredScene.nodes.dockBtn);
+  assert.ok(restoredScene.nodes.centralLabel);
+});
+
+// 17. 计算排版的节点（VBox 等子节点及分区节点）拖动、缩放、旋转、对齐与新增均不写出无意义坐标
+test("计算排版的节点（VBox 子节点及窗口分区节点）拖动缩放旋转对齐不写出无意义 x/y 坐标", () => {
+  const layoutScene: Scene = {
+    version: 1,
+    root: "window",
+    nodes: {
+      window: {
+        type: "Window",
+        width: 800,
+        height: 600,
+        docks: ["leftDock"],
+        central: "vbox",
+        statusBar: "status",
+      },
+      leftDock: {
+        type: "Dock",
+        dockArea: "left",
+        width: 200,
+        height: 576,
+        children: [],
+      },
+      vbox: {
+        type: "VBox",
+        width: 600,
+        height: 576,
+        layout: { kind: "vbox", padding: 12, gap: 10 },
+        children: ["item1", "item2", "item3"],
+      },
+      item1: {
+        type: "Button",
+        width: 120,
+        height: 36,
+        size: { preferredWidth: 120, preferredHeight: 36 },
+      },
+      item2: {
+        type: "Button",
+        width: 140,
+        height: 40,
+        size: { fixedWidth: 140, fixedHeight: 40 },
+      },
+      item3: {
+        type: "Button",
+        width: 160,
+        height: 44,
+      },
+      status: {
+        type: "Label",
+        width: 800,
+        height: 24,
+      },
+    },
+  };
+
+  // (a) 拖动（applyMoveToScene）：对 VBox 子节点与窗口分区节点移动不应写出 x、y
+  const afterMove = applyMoveToScene(layoutScene, ["item1", "leftDock", "vbox", "status"], 50, 40);
+  for (const id of ["item1", "leftDock", "vbox", "status"]) {
+    assert.equal("x" in afterMove.nodes[id], false, `${id} 为排版/分区节点，移动后不应写出 x`);
+    assert.equal("y" in afterMove.nodes[id], false, `${id} 为排版/分区节点，移动后不应写出 y`);
+  }
+
+  // (b) 单选缩放（applyResizeToScene）：调整宽高并同步 size（preferred / fixed），但不写出 x、y（即使拖 nw 把手）
+  // item1 在 VBox 交叉轴方向默认撑满内容宽 (600 - 12*2 = 576)，拖 nw 把手 (-30, -10) 后宽为 576+30=606、高为 36+10=46
+  const afterResize1 = applyResizeToScene(layoutScene, "item1", "nw", -30, -10);
+  assert.equal(afterResize1.nodes.item1.width, 606);
+  assert.equal(afterResize1.nodes.item1.height, 46);
+  assert.equal(afterResize1.nodes.item1.size?.preferredWidth, 606);
+  assert.equal(afterResize1.nodes.item1.size?.preferredHeight, 46);
+  assert.equal("x" in afterResize1.nodes.item1, false, "VBox 子节点拖 nw 把手缩放后不应写出 x");
+  assert.equal("y" in afterResize1.nodes.item1, false, "VBox 子节点拖 nw 把手缩放后不应写出 y");
+
+  const afterResize2 = applyResizeToScene(afterResize1, "item2", "se", 20, 15);
+  assert.equal(afterResize2.nodes.item2.width, 160);
+  assert.equal(afterResize2.nodes.item2.height, 55);
+  assert.equal(afterResize2.nodes.item2.size?.fixedWidth, 160);
+  assert.equal(afterResize2.nodes.item2.size?.fixedHeight, 55);
+  assert.equal("x" in afterResize2.nodes.item2, false);
+  assert.equal("y" in afterResize2.nodes.item2, false);
+
+  // (c) 多选整体缩放（applyGroupResize）：更新宽高，不写出 x、y
+  const groupScene = cloneScene(layoutScene);
+  applyGroupResize(groupScene, ["item1", "item3"], "se", 100, 80, false, 8);
+  assert.equal("x" in groupScene.nodes.item1, false, "多选缩放后 VBox 子节点 item1 不应写出 x");
+  assert.equal("y" in groupScene.nodes.item1, false, "多选缩放后 VBox 子节点 item1 不应写出 y");
+  assert.equal("x" in groupScene.nodes.item3, false, "多选缩放后 VBox 子节点 item3 不应写出 x");
+  assert.equal("y" in groupScene.nodes.item3, false, "多选缩放后 VBox 子节点 item3 不应写出 y");
+  assert.ok(groupScene.nodes.item3.width > 160);
+
+  // (d) 对齐与等距分布（alignSceneNodes / distributeSceneNodes）：忽略排版子节点，不写出无意义 x、y
+  const alignCopy = cloneScene(layoutScene);
+  assert.equal(alignSceneNodes(alignCopy, ["item1", "item2"], "left"), false);
+  assert.equal(distributeSceneNodes(alignCopy, ["item1", "item2", "item3"], "vertical"), false);
+  for (const id of ["item1", "item2", "item3"]) {
+    assert.equal("x" in alignCopy.nodes[id], false);
+    assert.equal("y" in alignCopy.nodes[id], false);
+  }
+
+  // (e) 旋转与新增：旋转 VBox 子节点只写 rotation、不写 x/y，且 absRectInScene 正确反映排版坐标；向 VBox 新增子节点不写 x/y
+  const rotCopy = cloneScene(layoutScene);
+  setNodeRotation(rotCopy.nodes.item2, 45);
+  assert.equal(rotCopy.nodes.item2.rotation, 45);
+  assert.equal("x" in rotCopy.nodes.item2, false);
+  assert.equal("y" in rotCopy.nodes.item2, false);
+  const item2Rect = absRectInScene(rotCopy, "item2");
+  assert.equal(item2Rect.x, 200 + 12, "item2 的世界横坐标应由 leftDock(200) + vbox.padding(12) 决定");
+  assert.equal(item2Rect.y, 12 + 36 + 10, "item2 的世界纵坐标应由 padding(12) + item1(36) + gap(10) 决定");
+
+  const addedScene = applyAddNodeToScene(rotCopy, "vbox", "item4", {
+    type: "Button",
+    x: 99,
+    y: 88,
+    width: 100,
+    height: 32,
+  });
+  assert.equal("x" in addedScene.nodes.item4, false, "向排版容器 vbox 新增子节点应自动剥离无意义的 x");
+  assert.equal("y" in addedScene.nodes.item4, false, "向排版容器 vbox 新增子节点应自动剥离无意义的 y");
+});
+
 console.log(`\n全部 ${passed} 项编辑器单元测试通过。`);
