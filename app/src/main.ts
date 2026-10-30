@@ -722,14 +722,14 @@ function renderStage(): void {
   if (root.menuBar) {
     const bar = document.createElement("div");
     const mh = root.menuBar.height ?? 28;
-    bar.style.cssText = `position:absolute;left:0;top:0;width:100%;height:${mh}px;display:flex;align-items:center;gap:4px;padding:0 8px;background:#111827;border-bottom:1px solid #263042;box-sizing:border-box;z-index:20;font-size:12px;color:#e2e8f0;overflow:hidden;`;
+    bar.style.cssText = `position:absolute;left:0;top:0;width:100%;height:${mh}px;display:flex;align-items:center;gap:6px;padding:0 10px;background:#111827;border-bottom:1px solid #263042;box-sizing:border-box;z-index:20;font-size:12px;color:#e2e8f0;overflow:hidden;`;
     for (const menu of root.menuBar.menus ?? []) {
       const group = document.createElement("div");
-      group.style.cssText = "display:flex;align-items:center;gap:2px;margin-right:6px;flex-shrink:0;";
+      group.style.cssText = "display:flex;align-items:center;gap:2px;flex-shrink:0;";
       const titleSpan = document.createElement("button");
       titleSpan.type = "button";
       titleSpan.dataset.vfMenuTitle = menu.id;
-      titleSpan.style.cssText = "font-weight:600;color:#cbd5e1;background:transparent;border:none;padding:2px 6px;border-radius:4px;font-size:12px;cursor:pointer;";
+      titleSpan.style.cssText = "font-weight:600;color:#cbd5e1;background:#1e293b;border:1px solid #334155;padding:2px 8px;border-radius:4px;font-size:12px;cursor:pointer;";
       titleSpan.textContent = menu.title;
       titleSpan.addEventListener("click", () => {
         if (mode === "preview" && menu.items?.length) {
@@ -737,7 +737,8 @@ function renderStage(): void {
           showPreviewPopupMenu(rect.left, rect.bottom + 2, menu.items);
         }
       });
-      group.append(titleSpan);
+      const hiddenItems = document.createElement("div");
+      hiddenItems.style.display = "none";
       walkMenuItems(menu.items, (item) => {
         if (item.kind === "separator" || item.items?.length) return;
         const btn = document.createElement("button");
@@ -749,11 +750,11 @@ function renderStage(): void {
         if (isCheck) btn.dataset.vfMenuCheckable = "1";
         if (isRadio) btn.dataset.vfMenuRadio = "1";
         if (item.shortcut) btn.title = `${item.text} (${item.shortcut})`;
-        btn.style.cssText = "background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:1px 6px;font-size:11px;cursor:pointer;white-space:nowrap;";
         btn.textContent = item.text;
         btn.addEventListener("click", () => triggerPreviewMenuItem(item.id));
-        group.append(btn);
+        hiddenItems.append(btn);
       });
+      group.append(titleSpan, hiddenItems);
       bar.append(group);
     }
     stage.append(bar);
@@ -4114,13 +4115,67 @@ function renderLog(): void {
 // ---------- 预览 ----------
 
 let previewClockTimer: number | null = null;
+let previewClockManual = false;
 
 function stopPreviewClockTimer(): void {
   if (previewClockTimer !== null) {
     window.clearInterval(previewClockTimer);
     previewClockTimer = null;
   }
+  previewClockManual = false;
 }
+
+function startPreviewClockInterval(manual: boolean): void {
+  if (previewClockTimer !== null) return;
+  previewClockManual = manual;
+  previewClockTimer = window.setInterval(() => {
+    if (mode === "preview" && previewRuntime) {
+      previewRuntime.setClock(previewRuntime.getClock() + 100);
+    } else {
+      stopPreviewClockTimer();
+    }
+  }, 100);
+}
+
+function matchesMenuShortcut(e: KeyboardEvent, shortcut: string): boolean {
+  const parts = shortcut
+    .split("+")
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean);
+  if (parts.length === 0) return false;
+  const needCtrl = parts.includes("ctrl") || parts.includes("control") || parts.includes("cmd");
+  const needShift = parts.includes("shift");
+  const needAlt = parts.includes("alt");
+  if ((e.ctrlKey || e.metaKey) !== needCtrl) return false;
+  if (e.shiftKey !== needShift) return false;
+  if (e.altKey !== needAlt) return false;
+  const keyPart = parts[parts.length - 1];
+  return e.key.toLowerCase() === keyPart;
+}
+
+document.addEventListener("keydown", (e) => {
+  if (mode !== "preview" || !previewRuntime) return;
+  const target = e.target;
+  const inInput =
+    target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable);
+  if (inInput && !e.ctrlKey && !e.metaKey && !e.altKey) return;
+  const root = node(project.scene.root);
+  let matchedId: string | null = null;
+  for (const menu of root?.menuBar?.menus ?? []) {
+    walkMenuItems(menu.items, (item) => {
+      if (matchedId || item.kind === "separator" || !item.shortcut) return;
+      if (matchesMenuShortcut(e, item.shortcut)) {
+        const view = previewRuntime!.view(item.id);
+        if (view.visible && view.enabled) matchedId = item.id;
+      }
+    });
+  }
+  if (matchedId) {
+    e.preventDefault();
+    e.stopPropagation();
+    triggerPreviewMenuItem(matchedId);
+  }
+});
 
 function renderConditions(): void {
   const chips: HTMLElement[] = [];
@@ -4159,13 +4214,7 @@ function renderConditions(): void {
       if (previewClockTimer !== null) {
         stopPreviewClockTimer();
       } else {
-        previewClockTimer = window.setInterval(() => {
-          if (mode === "preview" && previewRuntime) {
-            previewRuntime.setClock(previewRuntime.getClock() + 100);
-          } else {
-            stopPreviewClockTimer();
-          }
-        }, 100);
+        startPreviewClockInterval(true);
       }
       renderConditions();
     });
@@ -4212,6 +4261,14 @@ function startPreviewRuntime(): void {
   stopPreviewClockTimer();
   previewRuntime = new Runtime(project, {
     onChange: () => {
+      if (previewRuntime) {
+        const playing = Boolean(previewRuntime.getState("timeline.playing") || previewRuntime.getState("project.playing"));
+        if (playing && previewClockTimer === null) {
+          startPreviewClockInterval(false);
+        } else if (!playing && previewClockTimer !== null && !previewClockManual) {
+          stopPreviewClockTimer();
+        }
+      }
       applyViews();
       renderConditions();
     },

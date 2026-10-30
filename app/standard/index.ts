@@ -26,9 +26,16 @@ export interface StandardComponent extends LoadedComponent {
 const ICONS: Record<string, string> = {
   arrow: '<path d="M5 3l12 7-5 1.5L9.5 16 5 3z" fill="currentColor"/>',
   pen: '<path d="M14.5 2.5l3 3-9.5 9.5-3.5.5.5-3.5 9.5-9.5zm-8.5 11l-1 1" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  brush: '<path d="M14.5 2.5l3 3-8.5 8.5c-1.5 1.5-3.5 2-5 1.5.5-1.5 0-3.5 1.5-5l8.5-8.5z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
   eraser: '<path d="M11 4l6 6-7 7H5l-2-2 8-11zm-4 13h10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
   fill: '<path d="M9 3l6 6-6 6-6-6 6-6zm7 9c1.2 1.5 2 2.7 2 3.8a2 2 0 1 1-4 0c0-1.1.8-2.3 2-3.8z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  bucket: '<path d="M9 3l6 6-6 6-6-6 6-6zm7 9c1.2 1.5 2 2.7 2 3.8a2 2 0 1 1-4 0c0-1.1.8-2.3 2-3.8z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  shape: '<rect x="3.5" y="3.5" width="8.5" height="8.5" rx="1" stroke="currentColor" stroke-width="1.5" fill="none"/><circle cx="13" cy="13" r="4" stroke="currentColor" stroke-width="1.5" fill="none"/>',
+  move: '<path d="M10 3v14M3 10h14M10 3l-2.5 2.5M10 3l2.5 2.5M10 17l-2.5-2.5M10 17l2.5-2.5M3 10l2.5-2.5M3 10l2.5 2.5M17 10l-2.5-2.5M17 10l-2.5 2.5" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  lasso: '<path d="M10 4c4 0 6.5 2.2 6.5 5s-2.5 5-6.5 5c-1.8 0-3.3-.4-4.5-1.2M6 13a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>',
+  eyedropper: '<path d="M13.5 3.5l3 3-2 2-3-3 2-2zm-3 3l3 3-6.5 6.5H4v-3l6.5-6.5z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/>',
   transfer: '<path d="M4 7h11m-3-3l3 3-3 3M16 13H5m3-3l-3 3 3 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  remap: '<path d="M4 7h11m-3-3l3 3-3 3M16 13H5m3-3l-3 3 3 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
   connect: '<path d="M5 15c2-6 8-6 10-10M5 15a1.5 1.5 0 1 0 0 .1zm10-10a1.5 1.5 0 1 0 0 .1z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>',
   hline: '<path d="M3 10h14M6 6v8m8-8v8" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>',
   vline: '<path d="M10 3v14M6 6h8m-8 8h8" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>',
@@ -36,8 +43,16 @@ const ICONS: Record<string, string> = {
   addline: '<path d="M4 14L14 4m-3 11h5m-2.5-2.5v5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>',
   automap: '<path d="M10 3l2 4.5L16.5 9 12 11l-2 4.5L8 11 3.5 9 8 7.5 10 3z" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/>',
   plus: '<path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round"/>',
+  add: '<path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round"/>',
   minus: '<path d="M4 10h12" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round"/>',
+  remove: '<path d="M4 10h12" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round"/>',
   duplicate: '<rect x="6.5" y="6.5" width="9" height="9" rx="1.2" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M4.5 12.5V5a1 1 0 0 1 1-1h7.5" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/>',
+  folder: '<path d="M3 6a1.5 1.5 0 0 1 1.5-1.5h3.5l1.5 2h6A1.5 1.5 0 0 1 17 8v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 14.5V6z" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/>',
+  eye: '<path d="M2.5 10s3-5 7.5-5 7.5 5 7.5 5-3 5-7.5 5-7.5-5-7.5-5z" stroke="currentColor" stroke-width="1.4" fill="none"/><circle cx="10" cy="10" r="2.2" stroke="currentColor" stroke-width="1.4" fill="none"/>',
+  lock: '<rect x="4.5" y="9" width="11" height="7.5" rx="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9" stroke="currentColor" stroke-width="1.4" fill="none"/>',
+  unselect: '<rect x="4" y="4" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2.5 2" fill="none"/><path d="M7 7l6 6M13 7l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
+  to_layer: '<path d="M4 13l6 3 6-3M4 9l6 3 6-3M10 3v6m-2.5-2L10 9.5 12.5 7" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  float: '<rect x="3.5" y="4.5" width="13" height="11" rx="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M11 4.5v4.5h5.5" stroke="currentColor" stroke-width="1.4" fill="none"/>',
   play: '<path d="M6 4.5l10 5.5-10 5.5V4.5z" fill="currentColor"/>',
   pause: '<path d="M6.5 4.5h2.5v11H6.5zm4.5 0h2.5v11H11z" fill="currentColor"/>',
   prev: '<path d="M5.5 5v10M14.5 5l-7 5 7 5V5z" stroke="currentColor" stroke-width="1.4" fill="currentColor" stroke-linecap="round" stroke-linejoin="round"/>',
@@ -635,12 +650,24 @@ interface DataFormControlSpec {
   min?: number;
   max?: number;
   options?: Value[];
+  swatches?: Value[];
   row?: number;
   column?: number;
   start_column?: number;
   end_column?: number;
-  state?: string;
-  visible_when?: string | { control?: string; field?: string; equals?: Value; not_equals?: Value; in?: Value[] };
+  state?: string | { color?: string };
+  visible_when?:
+    | string
+    | {
+        name?: string;
+        control?: string;
+        field?: string;
+        value?: Value;
+        values?: Value[];
+        equals?: Value;
+        not_equals?: Value;
+        in?: Value[];
+      };
 }
 
 function parseDataFormSchema(raw: Value): { row_spacing: number; column_spacing: number; controls: DataFormControlSpec[] } {
@@ -679,26 +706,65 @@ function parseDataFormValues(raw: Value): Record<string, Value> {
   return {};
 }
 
+function isCheckValueOn(val: Value): boolean {
+  if (typeof val === "boolean") return val;
+  if (typeof val === "number") return val !== 0;
+  if (typeof val === "string") {
+    const s = val.trim().toLowerCase();
+    return s === "on" || s === "true" || s === "1" || s === "yes";
+  }
+  return false;
+}
+
+function evalStringVisibleWhen(expr: string, valMap: Record<string, Value>): boolean {
+  const s = String(expr ?? "").trim();
+  if (!s) return true;
+  if (s.includes("||")) return s.split("||").some((p) => evalStringVisibleWhen(p, valMap));
+  if (s.includes("&&")) return s.split("&&").every((p) => evalStringVisibleWhen(p, valMap));
+  const neIdx = s.indexOf("!=");
+  if (neIdx > 0) {
+    const key = s.slice(0, neIdx).trim();
+    const rhs = s.slice(neIdx + 2).trim().replace(/^['"]|['"]$/g, "");
+    return String(valMap[key] ?? "") !== rhs;
+  }
+  const eqIdx = s.indexOf("==");
+  if (eqIdx > 0) {
+    const key = s.slice(0, eqIdx).trim();
+    const rhs = s.slice(eqIdx + 2).trim().replace(/^['"]|['"]$/g, "");
+    return String(valMap[key] ?? "") === rhs;
+  }
+  if (s.startsWith("!")) return !isCheckValueOn(valMap[s.slice(1).trim()]);
+  return isCheckValueOn(valMap[s]);
+}
+
 function isDataFormControlVisible(ctrl: DataFormControlSpec, valMap: Record<string, Value>): boolean {
   const cond = ctrl.visible_when;
   if (!cond) return true;
-  if (typeof cond === "string") {
-    const eqIdx = cond.indexOf("==");
-    if (eqIdx > 0) {
-      const key = cond.slice(0, eqIdx).trim();
-      const rhs = cond.slice(eqIdx + 2).trim().replace(/^['"]|['"]$/g, "");
-      return String(valMap[key] ?? "") === rhs;
-    }
-    return Boolean(valMap[cond.trim()]);
-  }
+  if (typeof cond === "string") return evalStringVisibleWhen(cond, valMap);
   if (typeof cond !== "object") return true;
-  const target = String(cond.control ?? cond.field ?? "");
+  const target = String(cond.name ?? cond.control ?? cond.field ?? "");
   if (!target) return true;
   const actual = valMap[target];
-  if (cond.equals !== undefined) return actual === cond.equals;
-  if (cond.not_equals !== undefined) return actual !== cond.not_equals;
-  if (Array.isArray(cond.in)) return cond.in.includes(actual);
+  if (Array.isArray(cond.values)) return cond.values.some((v) => String(v) === String(actual));
+  if (cond.value !== undefined) return String(actual) === String(cond.value);
+  if (cond.equals !== undefined) return String(actual) === String(cond.equals);
+  if (cond.not_equals !== undefined) return String(actual) !== String(cond.not_equals);
+  if (Array.isArray(cond.in)) return cond.in.some((v) => String(v) === String(actual));
   return true;
+}
+
+function resolveColorHex(raw: Value): string {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (s.startsWith("#") && (s.length === 4 || s.length === 7)) return s;
+  const map: Record<string, string> = {
+    black: "#1e1e1e",
+    blue: "#2563eb",
+    green: "#16a34a",
+    red: "#dc2626",
+    white: "#f8fafc",
+    yellow: "#eab308",
+  };
+  return map[s] ?? "#4a90d9";
 }
 
 const createDataForm: ComponentCreate = (el, { props, emit }) => {
@@ -707,14 +773,19 @@ const createDataForm: ComponentCreate = (el, { props, emit }) => {
   el.append(root);
   let localOverrides: Record<string, Value> = {};
   let lastSchemaKey = "";
+  let entries: Array<{
+    spec: DataFormControlSpec;
+    name: string;
+    stateStr: string;
+    cell: HTMLElement;
+    sync: (valMap: Record<string, Value>, formEnabled: boolean) => void;
+  }> = [];
+  let currentProps = props;
 
-  const update = (next: Record<string, Value>) => {
-    const schema = parseDataFormSchema(next.schema ?? []);
-    const schemaKey = JSON.stringify(schema.controls.map((c) => `${c?.name}:${c?.type}`));
-    if (schemaKey !== lastSchemaKey) {
-      localOverrides = {};
-      lastSchemaKey = schemaKey;
-    }
+  const computeValMap = (
+    schema: { controls: DataFormControlSpec[] },
+    next: Record<string, Value>,
+  ): Record<string, Value> => {
     const extValues = parseDataFormValues(next.values ?? "{}");
     const valMap: Record<string, Value> = {};
     for (const c of schema.controls) {
@@ -723,10 +794,41 @@ const createDataForm: ComponentCreate = (el, { props, emit }) => {
       if (!name) continue;
       if (extValues[name] !== undefined) valMap[name] = extValues[name];
       else if (localOverrides[name] !== undefined) valMap[name] = localOverrides[name];
-      else valMap[name] = c.value ?? null;
+      else if (valMap[name] === undefined) valMap[name] = c.value ?? null;
     }
+    for (const [k, v] of Object.entries(extValues)) {
+      if (valMap[k] === undefined) valMap[k] = v;
+    }
+    return valMap;
+  };
 
+  const syncAll = (schema: { controls: DataFormControlSpec[] }, next: Record<string, Value>) => {
+    const valMap = computeValMap(schema, next);
+    const formEnabled = next.enabled !== false;
+    for (const entry of entries) {
+      entry.sync(valMap, formEnabled);
+    }
+  };
+
+  const emitField = (c: DataFormControlSpec, val: Value) => {
+    const name = String(c.name ?? "");
+    localOverrides[name] = val;
+    emit("change", {
+      name,
+      value: val,
+      hook: String(c.hook ?? ""),
+      type: String(c.type ?? ""),
+    });
+    const schema = parseDataFormSchema(currentProps.schema ?? []);
+    syncAll(schema, currentProps);
+  };
+
+  const buildDom = (
+    schema: { row_spacing: number; column_spacing: number; controls: DataFormControlSpec[] },
+    next: Record<string, Value>,
+  ) => {
     root.replaceChildren();
+    entries = [];
     if (schema.controls.length === 0) {
       const empty = document.createElement("div");
       empty.className = "vf-std-dataform-empty";
@@ -735,41 +837,51 @@ const createDataForm: ComponentCreate = (el, { props, emit }) => {
       return;
     }
 
+    let maxCol = 1;
+    const rowCounts = new Map<number, number>();
+    for (const c of schema.controls) {
+      if (!c || typeof c !== "object") continue;
+      const r = Number(c.row ?? 0);
+      rowCounts.set(r, (rowCounts.get(r) ?? 0) + 1);
+      const ec = Number(c.end_column ?? c.start_column ?? c.column ?? 1);
+      if (ec > maxCol) maxCol = ec;
+    }
+    const colCount = Math.max(2, maxCol + 1);
+
     const grid = document.createElement("div");
     grid.className = "vf-std-dataform-grid";
+    grid.style.gridTemplateColumns = `repeat(${colCount}, minmax(0, 1fr))`;
     grid.style.rowGap = `${Math.max(4, schema.row_spacing)}px`;
     grid.style.columnGap = `${Math.max(4, schema.column_spacing)}px`;
 
-    const emitField = (c: DataFormControlSpec, val: Value) => {
-      const name = String(c.name ?? "");
-      localOverrides[name] = val;
-      emit("change", {
-        name,
-        value: val,
-        hook: String(c.hook ?? ""),
-        type: String(c.type ?? ""),
-      });
-      update(next);
-    };
-
     for (const c of schema.controls) {
       if (!c || typeof c !== "object") continue;
-      const stateStr = String(c.state ?? "normal");
-      if (stateStr === "hidden" || !isDataFormControlVisible(c, valMap)) continue;
-      const disabled = next.enabled === false || stateStr === "disabled";
+      const stateStr = typeof c.state === "string" ? c.state : "normal";
+      const stateColor =
+        typeof c.state === "object" && c.state !== null && !Array.isArray(c.state)
+          ? String(c.state.color ?? "")
+          : "";
       const name = String(c.name ?? "");
       const title = String(c.title ?? name);
       const type = String(c.type ?? "button");
-      const val = valMap[name];
-      const row = Number(c.row ?? 0) + 1;
+      const rawRow = Number(c.row ?? 0);
+      const row = rawRow + 1;
       const startCol = Number(c.start_column ?? c.column ?? 0) + 1;
-      const endCol = Number(c.end_column ?? c.start_column ?? c.column ?? 1) + 2;
+      let endCol = Number(c.end_column ?? c.start_column ?? c.column ?? 1) + 2;
+      if ((rowCounts.get(rawRow) ?? 0) === 1 && startCol === 1 && endCol >= 3) {
+        endCol = colCount + 1;
+      }
 
       const cell = document.createElement("div");
       cell.className = "vf-std-dataform-cell";
       cell.dataset.vfField = name;
+      if (c.value !== undefined && c.type === "button") {
+        cell.dataset.vfFieldValueOption = String(c.value);
+      }
       cell.style.gridRow = String(row);
       cell.style.gridColumn = `${startCol} / ${Math.max(startCol + 1, endCol)}`;
+
+      let syncControl: (val: Value, disabled: boolean) => void = () => {};
 
       if (type === "slider") {
         const head = document.createElement("div");
@@ -779,7 +891,6 @@ const createDataForm: ComponentCreate = (el, { props, emit }) => {
         const num = document.createElement("span");
         num.className = "vf-std-dataform-val";
         num.dataset.vfFieldValue = name;
-        num.textContent = String(val ?? c.min ?? 0);
         head.append(lbl, num);
 
         const input = document.createElement("input");
@@ -787,15 +898,24 @@ const createDataForm: ComponentCreate = (el, { props, emit }) => {
         input.className = "vf-std-dataform-slider";
         input.min = String(c.min ?? 0);
         input.max = String(c.max ?? 100);
-        input.value = String(val ?? c.min ?? 0);
-        input.disabled = disabled;
         input.addEventListener("input", () => {
           num.textContent = input.value;
+          emitField(c, Number(input.value));
         });
         input.addEventListener("change", () => {
+          num.textContent = input.value;
           emitField(c, Number(input.value));
         });
         cell.append(head, input);
+
+        syncControl = (val, disabled) => {
+          const v = String(val ?? c.min ?? 0);
+          num.textContent = v;
+          if (document.activeElement !== input && input.value !== v) {
+            input.value = v;
+          }
+          input.disabled = disabled;
+        };
       } else if (type === "list" || type === "select") {
         const rowBox = document.createElement("div");
         rowBox.className = "vf-std-dataform-row";
@@ -803,54 +923,175 @@ const createDataForm: ComponentCreate = (el, { props, emit }) => {
         lbl.textContent = title;
         const sel = document.createElement("select");
         sel.className = "vf-std-dataform-select";
-        sel.disabled = disabled;
         const opts = Array.isArray(c.options) ? c.options : [];
         for (const opt of opts) {
+          const isObj = typeof opt === "object" && opt !== null && !Array.isArray(opt);
+          const optMap = isObj ? (opt as Record<string, Value>) : null;
+          const optVal = optMap ? String(optMap.value ?? optMap.title ?? optMap.label ?? "") : String(opt);
+          const optTitle = optMap ? String(optMap.title ?? optMap.label ?? optMap.value ?? "") : String(opt);
           const o = document.createElement("option");
-          o.value = String(opt);
-          o.textContent = String(opt);
-          if (String(opt) === String(val)) o.selected = true;
+          o.value = optVal;
+          o.textContent = optTitle;
           sel.append(o);
         }
         sel.addEventListener("change", () => emitField(c, sel.value));
         rowBox.append(lbl, sel);
         cell.append(rowBox);
+
+        syncControl = (val, disabled) => {
+          sel.disabled = disabled;
+          const v = String(val ?? "");
+          if (v && sel.value !== v) sel.value = v;
+        };
       } else if (type === "check" || type === "checkbox") {
         const lbl = document.createElement("label");
         lbl.className = "vf-std-dataform-check";
         const chk = document.createElement("input");
         chk.type = "checkbox";
-        chk.checked = Boolean(val);
-        chk.disabled = disabled;
-        chk.addEventListener("change", () => emitField(c, chk.checked));
+        const usesOnOff =
+          typeof c.value === "string" &&
+          (c.value.toLowerCase() === "on" || c.value.toLowerCase() === "off");
+        chk.addEventListener("change", () => {
+          emitField(c, usesOnOff ? (chk.checked ? "on" : "off") : chk.checked);
+        });
         const span = document.createElement("span");
         span.textContent = title;
         lbl.append(chk, span);
         cell.append(lbl);
+
+        syncControl = (val, disabled) => {
+          chk.checked = isCheckValueOn(val);
+          chk.disabled = disabled;
+        };
       } else if (type === "color" || type === "palette") {
+        const palBox = document.createElement("div");
+        palBox.className = "vf-std-dataform-palette";
         const rowBox = document.createElement("div");
         rowBox.className = "vf-std-dataform-row";
         const lbl = document.createElement("span");
         lbl.textContent = title;
         const sw = document.createElement("input");
         sw.type = "color";
-        sw.value = typeof val === "string" && val.startsWith("#") ? val : "#4a90d9";
-        sw.disabled = disabled;
         sw.addEventListener("change", () => emitField(c, sw.value));
         rowBox.append(lbl, sw);
-        cell.append(rowBox);
+        palBox.append(rowBox);
+
+        const swatches = Array.isArray(c.swatches)
+          ? [...c.swatches.map(String)]
+          : type === "palette"
+            ? ["black", "blue", "green", "#dc2626"]
+            : [];
+        const swatchRow = document.createElement("div");
+        swatchRow.className = "vf-std-dataform-swatches";
+        const renderSwatches = (activeVal: Value, disabled: boolean) => {
+          swatchRow.replaceChildren();
+          for (const sc of swatches) {
+            const sb = document.createElement("button");
+            sb.type = "button";
+            sb.className = "vf-std-dataform-swatch-btn";
+            sb.dataset.vfSwatch = sc;
+            sb.dataset.active = String(String(activeVal) === sc);
+            sb.style.background = resolveColorHex(sc);
+            sb.title = sc;
+            sb.disabled = disabled;
+            sb.addEventListener("click", () => emitField(c, sc));
+            swatchRow.append(sb);
+          }
+        };
+        if (swatches.length > 0) palBox.append(swatchRow);
+        cell.append(palBox);
+
+        syncControl = (val, disabled) => {
+          sw.disabled = disabled;
+          sw.value = resolveColorHex(val);
+          if (swatches.length > 0) renderSwatches(val, disabled);
+        };
+      } else if (type === "subwindow") {
+        const sub = document.createElement("div");
+        sub.className = "vf-std-dataform-subwindow";
+        sub.dataset.vfSubwindow = name;
+        const head = document.createElement("div");
+        head.className = "vf-std-dataform-subwindow-head";
+        const lbl = document.createElement("span");
+        lbl.textContent = `${title} (SubControlFrame)`;
+        const status = document.createElement("span");
+        status.textContent = "Embedded";
+        head.append(lbl, status);
+        sub.append(head);
+        sub.addEventListener("click", () => {
+          emitField(c, c.value !== undefined && c.value !== "" ? c.value : "embedded");
+        });
+        cell.append(sub);
+
+        syncControl = (val) => {
+          if (val !== undefined && val !== null && val !== "") {
+            status.textContent = String(val);
+          }
+        };
       } else {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "vf-std-dataform-btn";
-        btn.disabled = disabled;
-        btn.textContent = title;
-        btn.addEventListener("click", () => emitField(c, true));
+        if (c.value !== undefined && c.value !== "") {
+          btn.dataset.vfBtnValue = String(c.value);
+        }
+        if (stateColor) {
+          const dot = document.createElement("span");
+          dot.className = "vf-std-dataform-swatch-dot";
+          dot.style.background = resolveColorHex(stateColor);
+          btn.append(dot);
+        }
+        const textSpan = document.createElement("span");
+        textSpan.textContent = title;
+        btn.append(textSpan);
+        btn.addEventListener("click", () => {
+          const emitVal =
+            c.value !== undefined && c.value !== "" && c.value !== null ? c.value : true;
+          emitField(c, emitVal);
+        });
         cell.append(btn);
+
+        syncControl = (val, disabled) => {
+          btn.disabled = disabled;
+          const isActive =
+            c.value !== undefined && c.value !== "" && String(val) === String(c.value);
+          btn.dataset.active = String(isActive);
+        };
       }
+
       grid.append(cell);
+      entries.push({
+        spec: c,
+        name,
+        stateStr,
+        cell,
+        sync: (valMap, formEnabled) => {
+          const visible = stateStr !== "hidden" && isDataFormControlVisible(c, valMap);
+          cell.style.display = visible ? "" : "none";
+          cell.hidden = !visible;
+          const disabled = !formEnabled || stateStr === "disabled";
+          syncControl(valMap[name], disabled);
+        },
+      });
     }
     root.append(grid);
+  };
+
+  const update = (next: Record<string, Value>) => {
+    currentProps = next;
+    const schema = parseDataFormSchema(next.schema ?? []);
+    const schemaKey = JSON.stringify({
+      row_spacing: schema.row_spacing,
+      column_spacing: schema.column_spacing,
+      controls: schema.controls,
+      emptyText: next.emptyText ?? "",
+    });
+    if (schemaKey !== lastSchemaKey) {
+      localOverrides = {};
+      lastSchemaKey = schemaKey;
+      buildDom(schema, next);
+    }
+    syncAll(schema, next);
   };
   update(props);
   return { update, destroy: () => root.remove() };
@@ -873,8 +1114,8 @@ export const STANDARD_COMPONENT_LIST: StandardComponent[] = [
     decl: buttonDecl as ComponentDecl,
     folder: "Button",
     create: createButton,
-    styleText: `.vf-std-button { width: 100%; height: 100%; padding: 0 10px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 5px; transition: background 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.06s; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vf-std-button[data-has-icon="true"] { padding: 0 6px; }
+    styleText: `.vf-std-button { width: 100%; height: 100%; padding: 0 6px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 4px; transition: background 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.06s; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vf-std-button[data-has-icon="true"] { padding: 0 4px; gap: 3px; }
 .vf-std-button[data-variant="primary"], .vf-std-button[data-checked="true"] { border-color: var(--color-primary, #2563eb); background: var(--color-primary, #2563eb); color: #ffffff; }
 .vf-std-button[data-variant="danger"] { border-color: #ef4444; background: #fef2f2; color: #dc2626; }
 .vf-std-button:hover:not(:disabled) { border-color: var(--color-primary, #2563eb); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18); }
@@ -942,25 +1183,25 @@ export const STANDARD_COMPONENT_LIST: StandardComponent[] = [
     decl: tabBarDecl as ComponentDecl,
     folder: "TabBar",
     create: createTabBar,
-    styleText: `.vf-std-tabbar { box-sizing: border-box; display: flex; align-items: stretch; gap: 2px; width: 100%; height: 100%; padding: 2px 4px 0 4px; border-bottom: 1px solid var(--color-border, #cbd5e1); overflow: hidden; }
-.vf-std-tabbar-tab { flex: 1 1 0; min-width: 0; height: 100%; padding: 0 8px; border: 1px solid var(--color-border, #cbd5e1); border-bottom: none; border-radius: 5px 5px 0 0; background: transparent; color: var(--color-muted, #64748b); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.vf-std-tabbar-tab.active { background: var(--color-surface, #ffffff); border-color: var(--color-primary, #2563eb); border-bottom: 2px solid var(--color-primary, #2563eb); color: var(--color-text, #1e293b); font-weight: 600; }`,
+    styleText: `.vf-std-tabbar { box-sizing: border-box; display: flex; align-items: stretch; gap: 2px; width: 100%; height: 100%; padding: 2px 2px 0 2px; border-bottom: 1px solid var(--color-border, #cbd5e1); overflow: hidden; }
+.vf-std-tabbar-tab { flex: 1 1 0; min-width: 0; height: 100%; padding: 0 4px; border: 1px solid var(--color-border, #cbd5e1); border-bottom: none; border-radius: 5px 5px 0 0; background: transparent; color: var(--color-muted, #64748b); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vf-std-tabbar-tab.active { background: var(--color-primary, #2563eb); border-color: var(--color-primary, #60a5fa); color: #ffffff; font-weight: 600; }`,
   },
   {
     decl: listDecl as ComponentDecl,
     folder: "List",
     create: createList,
-    styleText: `.vf-std-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; width: 100%; height: 100%; padding: 4px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; }
+    styleText: `.vf-std-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 1px; width: 100%; height: 100%; padding: 3px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; }
 .vf-std-list[data-disabled="true"] { opacity: 0.5; pointer-events: none; }
 .vf-std-list-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-muted, #64748b); font-size: 12px; }
-.vf-std-list-row { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 8px; border-radius: 4px; color: var(--color-text, #1e293b); font-size: 13px; cursor: pointer; user-select: none; }
-.vf-std-list-row:hover { background: #f1f5f9; }
-.vf-std-list-row.selected { background: #eff6ff; color: var(--color-primary, #2563eb); font-weight: 500; }
+.vf-std-list-row { display: flex; align-items: center; gap: 6px; min-height: 20px; padding: 0 6px; border-radius: 4px; color: var(--color-text, #1e293b); font-size: 12px; cursor: pointer; user-select: none; }
+.vf-std-list-row:hover { background: rgba(148, 163, 184, 0.15); }
+.vf-std-list-row.selected { background: var(--color-primary, #2563eb); color: #ffffff; font-weight: 600; }
 .vf-std-list-row.muted { opacity: 0.45; }
 .vf-std-list-check { font-size: 12px; color: #94a3b8; cursor: pointer; }
 .vf-std-list-check.on { color: var(--color-primary, #2563eb); }
 .vf-std-list-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vf-std-list-badge { padding: 1px 5px; border-radius: 4px; background: #f1f5f9; color: #64748b; font-size: 11px; }`,
+.vf-std-list-badge { padding: 1px 4px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); color: inherit; font-size: 10px; }`,
   },
   {
     decl: treeDecl as ComponentDecl,
@@ -1004,17 +1245,25 @@ export const STANDARD_COMPONENT_LIST: StandardComponent[] = [
     decl: dataFormDecl as ComponentDecl,
     folder: "DataForm",
     create: createDataForm,
-    styleText: `.vf-std-dataform { box-sizing: border-box; width: 100%; height: 100%; padding: 6px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 12px; overflow: auto; }
+    styleText: `.vf-std-dataform { box-sizing: border-box; width: 100%; height: 100%; padding: 4px 6px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; overflow: auto; }
 .vf-std-dataform-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-muted, #64748b); font-size: 12px; }
 .vf-std-dataform-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; }
-.vf-std-dataform-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.vf-std-dataform-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; }
+.vf-std-dataform-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vf-std-dataform-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; line-height: 1.1; }
 .vf-std-dataform-val { color: var(--color-primary, #2563eb); font-variant-numeric: tabular-nums; font-weight: 500; }
-.vf-std-dataform-slider { width: 100%; margin: 0; accent-color: var(--color-primary, #2563eb); }
+.vf-std-dataform-slider { width: 100%; height: 12px; margin: 0; accent-color: var(--color-primary, #2563eb); }
 .vf-std-dataform-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.vf-std-dataform-select { flex: 1; min-width: 0; height: 24px; padding: 0 4px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; }
-.vf-std-dataform-check { display: flex; align-items: center; gap: 6px; height: 22px; cursor: pointer; }
-.vf-std-dataform-btn { height: 26px; padding: 0 8px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; cursor: pointer; }`,
+.vf-std-dataform-select { flex: 1; min-width: 0; height: 22px; padding: 0 4px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; }
+.vf-std-dataform-check { display: flex; align-items: center; gap: 6px; height: 20px; cursor: pointer; }
+.vf-std-dataform-btn { height: 22px; padding: 0 6px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.vf-std-dataform-btn[data-active="true"] { border-color: var(--color-primary, #2563eb); box-shadow: 0 0 0 1px var(--color-primary, #2563eb); font-weight: 600; }
+.vf-std-dataform-swatch-dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(148, 163, 184, 0.6); flex-shrink: 0; }
+.vf-std-dataform-palette { display: flex; flex-direction: column; gap: 3px; }
+.vf-std-dataform-swatches { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.vf-std-dataform-swatch-btn { width: 18px; height: 18px; padding: 0; border-radius: 3px; border: 1px solid var(--color-border, #cbd5e1); cursor: pointer; }
+.vf-std-dataform-swatch-btn[data-active="true"] { border: 2px solid var(--color-primary, #2563eb); }
+.vf-std-dataform-subwindow { display: flex; flex-direction: column; gap: 1px; padding: 3px 6px; border: 1px dashed var(--color-primary, #2563eb); border-radius: 4px; background: rgba(37, 99, 235, 0.08); font-size: 11px; line-height: 1.15; cursor: pointer; }
+.vf-std-dataform-subwindow-head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; color: var(--color-primary, #2563eb); }`,
   },
 ];
 

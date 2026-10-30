@@ -1,74 +1,287 @@
 // 根据当前激活的工具类型，返回工具选项面板（DataForm）的表单结构 schema 与默认参数值 values。
-// 对照 animean/childrenpanel/tool_controls/*.json 与 business::optionsForToolJson。
+// 严格对齐 animean/childrenpanel/tool_controls/*.json 与 animean/pyfile/toolcontrol.py 的 options_for_tool_json / options_for_extra_tool_json。
+
+function automappingControls(withStrokeSliders) {
+  const controls = [
+    {
+      name: "fold_split",
+      type: "check",
+      title: "Front/Back Split",
+      hook: "fold_split",
+      value: "on",
+      row: 0,
+      start_column: 0,
+      end_column: 2,
+    },
+    {
+      name: "fold_seal",
+      type: "check",
+      title: "Crease Line",
+      hook: "fold_seal",
+      value: "on",
+      row: 1,
+      start_column: 0,
+      end_column: 2,
+      visible_when: { name: "fold_split", values: ["on"] },
+    },
+    {
+      name: "bridge_topology",
+      type: "check",
+      title: "补全拓扑",
+      hook: "bridge_topology",
+      value: "off",
+      row: 2,
+      start_column: 0,
+      end_column: 2,
+    },
+    {
+      name: "bridge_tension",
+      type: "slider",
+      title: "Bridge k (% |AB|)",
+      hook: "bridge_tension",
+      min: 5,
+      max: 100,
+      value: 33,
+      row: 3,
+      start_column: 0,
+      end_column: 2,
+      visible_when: { name: "bridge_topology", values: ["on"] },
+    },
+  ];
+  let row = 4;
+  if (withStrokeSliders) {
+    controls.push(
+      { name: "smooth", type: "slider", title: "Stabilizer", hook: "smooth", min: 0, max: 100, value: 50, row: row, start_column: 0, end_column: 2 },
+      { name: "pen_width", type: "slider", title: "Width", hook: "pen_width", min: 1, max: 50, value: 5, row: row + 1, start_column: 0, end_column: 2 },
+    );
+    row += 2;
+  }
+  controls.push({
+    name: "texture_view",
+    type: "subwindow",
+    title: "Texture",
+    hook: "toggleTextureHost",
+    row: row,
+    start_column: 0,
+    end_column: 2,
+  });
+  return {
+    row_spacing: 6,
+    column_spacing: 6,
+    controls,
+  };
+}
 
 const SCHEMAS = {
-  brush: {
-    row_spacing: 6,
-    column_spacing: 8,
+  arrow: {
+    row_spacing: 8,
+    column_spacing: 6,
     controls: [
-      { name: "brushSize", type: "slider", title: "笔刷半径", hook: "setBrushSize", min: 1, max: 200, value: 18, row: 0, start_column: 0, end_column: 1 },
-      { name: "brushHardness", type: "slider", title: "笔尖硬度", hook: "setBrushHardness", min: 0, max: 100, value: 85, row: 1, start_column: 0, end_column: 1 },
-      { name: "strokeMode", type: "list", title: "笔触模式", hook: "setStrokeMode", options: ["Freehand", "Bezier", "Calligraphy"], value: "Freehand", row: 2, start_column: 0, end_column: 1 },
-      { name: "smoothLevel", type: "slider", title: "曲线平滑", hook: "setSmoothLevel", min: 0, max: 20, value: 8, row: 3, start_column: 0, end_column: 1, visible_when: "strokeMode != 'Freehand'" },
-      { name: "pressureSize", type: "check", title: "压感半径", hook: "setPressureSize", value: true, row: 4, column: 0 },
-      { name: "openAdvBrush", type: "subwindow", title: "压感曲线...", hook: "openDrawSettings", row: 4, column: 1 },
+      {
+        name: "edit_mode",
+        type: "list",
+        title: "Edit Mode",
+        hook: "edit_mode",
+        value: "default",
+        row: 0,
+        start_column: 0,
+        end_column: 2,
+        options: [
+          { title: "Default", value: "default" },
+          { title: "Artist", value: "artist" },
+          { title: "Debug", value: "debug" },
+        ],
+      },
+    ],
+  },
+  brush: {
+    row_spacing: 8,
+    column_spacing: 6,
+    controls: [
+      { name: "color", type: "button", title: "Black", hook: "color", value: "black", row: 0, column: 0, state: { color: "black" } },
+      { name: "color", type: "button", title: "Blue", hook: "color", value: "blue", row: 0, column: 1, state: { color: "blue" } },
+      { name: "color", type: "button", title: "Green", hook: "color", value: "green", row: 0, column: 2, state: { color: "green" } },
+      { name: "smooth", type: "slider", title: "Smooth", hook: "smooth", min: 0, max: 100, value: 50, row: 1, start_column: 0, end_column: 2 },
+      { name: "pen_width", type: "slider", title: "Width", hook: "pen_width", min: 1, max: 50, value: 5, row: 2, start_column: 0, end_column: 2 },
+      { name: "openAdvBrush", type: "subwindow", title: "压感曲线...", hook: "openDrawSettings", row: 3, start_column: 0, end_column: 2 },
     ],
   },
   eraser: {
-    row_spacing: 6,
-    column_spacing: 8,
+    row_spacing: 8,
+    column_spacing: 6,
     controls: [
-      { name: "eraserSize", type: "slider", title: "橡皮半径", hook: "setEraserSize", min: 1, max: 200, value: 32, row: 0, start_column: 0, end_column: 1 },
-      { name: "eraserMode", type: "list", title: "擦除方式", hook: "setEraserMode", options: ["Pixel", "VectorStroke", "SoftEdge"], value: "Pixel", row: 1, start_column: 0, end_column: 1 },
-      { name: "keepAlpha", type: "check", title: "保护透明锁定", hook: "setKeepAlpha", value: false, row: 2, start_column: 0, end_column: 1 },
+      {
+        name: "eraser_mode",
+        type: "list",
+        title: "Eraser Mode",
+        hook: "eraser_mode",
+        value: "area",
+        row: 0,
+        start_column: 0,
+        end_column: 2,
+        options: [
+          { title: "LineMode", value: "line" },
+          { title: "AreaMode", value: "area" },
+          { title: "CutMode", value: "cut" },
+        ],
+      },
     ],
   },
   fill: {
-    row_spacing: 6,
-    column_spacing: 8,
+    row_spacing: 8,
+    column_spacing: 6,
     controls: [
-      { name: "tolerance", type: "slider", title: "容差阈值", hook: "setFillTolerance", min: 0, max: 255, value: 24, row: 0, start_column: 0, end_column: 1 },
-      { name: "expandPx", type: "slider", title: "扩边像素", hook: "setFillExpand", min: -10, max: 20, value: 2, row: 1, start_column: 0, end_column: 1 },
-      { name: "closeGap", type: "check", title: "自动闭合缺口", hook: "setCloseGap", value: true, row: 2, column: 0 },
-      { name: "gapSize", type: "slider", title: "缺口上限", hook: "setGapSize", min: 1, max: 30, value: 6, row: 3, start_column: 0, end_column: 1, visible_when: "closeGap == true" },
+      { name: "color", type: "button", title: "Black", hook: "color", value: "black", row: 0, column: 0, state: { color: "black" } },
+      { name: "color", type: "button", title: "Blue", hook: "color", value: "blue", row: 0, column: 1, state: { color: "blue" } },
+      { name: "color", type: "button", title: "Green", hook: "color", value: "green", row: 0, column: 2, state: { color: "green" } },
+      {
+        name: "fill_scope",
+        type: "list",
+        title: "Fill Scope",
+        hook: "fill_scope",
+        value: "current",
+        row: 1,
+        start_column: 0,
+        end_column: 2,
+        options: [
+          { title: "ALL", value: "all" },
+          { title: "Current", value: "current" },
+        ],
+      },
     ],
   },
   shape: {
-    row_spacing: 6,
-    column_spacing: 8,
+    row_spacing: 8,
+    column_spacing: 6,
     controls: [
-      { name: "shapeKind", type: "list", title: "几何图元", hook: "setShapeKind", options: ["Rectangle", "Ellipse", "Polygon", "Line"], value: "Rectangle", row: 0, start_column: 0, end_column: 1 },
-      { name: "strokeWidth", type: "slider", title: "线宽像素", hook: "setShapeStroke", min: 1, max: 64, value: 4, row: 1, start_column: 0, end_column: 1 },
-      { name: "filledShape", type: "check", title: "填充内部", hook: "setFilledShape", value: false, row: 2, start_column: 0, end_column: 1 },
+      {
+        name: "connect_auto_snap",
+        type: "check",
+        title: "Auto Snap",
+        hook: "connect_auto_snap",
+        value: "on",
+        row: 0,
+        start_column: 0,
+        end_column: 2,
+      },
+      {
+        name: "connect_mode",
+        type: "list",
+        title: "Connect Mode",
+        hook: "connect_mode",
+        value: "poly",
+        row: 1,
+        start_column: 0,
+        end_column: 2,
+        options: [
+          { title: "PolyMode", value: "poly" },
+          { title: "CurveMode", value: "curve" },
+          { title: "SmoothMode", value: "smooth" },
+        ],
+      },
+      {
+        name: "connect_smooth",
+        type: "slider",
+        title: "Smooth",
+        hook: "connect_smooth",
+        min: 0,
+        max: 100,
+        value: 50,
+        row: 2,
+        start_column: 0,
+        end_column: 2,
+        visible_when: { name: "connect_mode", values: ["smooth"] },
+      },
+      {
+        name: "connect_auto_accept",
+        type: "check",
+        title: "Auto Accept",
+        hook: "connect_auto_accept",
+        value: "off",
+        row: 3,
+        start_column: 0,
+        end_column: 2,
+      },
     ],
   },
   select: {
-    row_spacing: 6,
-    column_spacing: 8,
+    row_spacing: 8,
+    column_spacing: 6,
     controls: [
-      { name: "selectMode", type: "list", title: "选区模式", hook: "setSelectMode", options: ["FreeLasso", "PolyLasso", "RectSelect"], value: "FreeLasso", row: 0, start_column: 0, end_column: 1 },
-      { name: "featherPx", type: "slider", title: "羽化半径", hook: "setFeatherPx", min: 0, max: 50, value: 0, row: 1, start_column: 0, end_column: 1 },
-      { name: "antiAliasSel", type: "check", title: "消除锯齿", hook: "setAntiAliasSel", value: true, row: 2, start_column: 0, end_column: 1 },
+      {
+        name: "select_mode",
+        type: "list",
+        title: "Lasso Mode",
+        hook: "select_mode",
+        value: "free",
+        row: 0,
+        start_column: 0,
+        end_column: 2,
+        options: [
+          { title: "FreeLasso", value: "free" },
+          { title: "PolyLasso", value: "poly" },
+          { title: "RectSelect", value: "rect" },
+        ],
+      },
+      { name: "feather_px", type: "slider", title: "Feather", hook: "feather_px", min: 0, max: 50, value: 0, row: 1, start_column: 0, end_column: 2 },
     ],
   },
   move: {
-    row_spacing: 6,
-    column_spacing: 8,
+    row_spacing: 8,
+    column_spacing: 6,
     controls: [
-      { name: "transformMode", type: "list", title: "变换方式", hook: "setTransformMode", options: ["Translate", "ScaleRotate", "MeshDeform"], value: "Translate", row: 0, start_column: 0, end_column: 1 },
-      { name: "bilinearFilter", type: "check", title: "双线性插值", hook: "setBilinear", value: true, row: 1, column: 0 },
-      { name: "resetTransformBtn", type: "button", title: "重置变换", hook: "resetTransform", row: 1, column: 1 },
+      {
+        name: "transfer_constrain",
+        type: "list",
+        title: "Alt / Ctrl / Shift",
+        hook: "transfer_constrain",
+        value: "on",
+        row: 0,
+        start_column: 0,
+        end_column: 2,
+        options: [
+          { title: "Keep ratio / lock axis", value: "on" },
+          { title: "No constraint", value: "off" },
+        ],
+      },
     ],
   },
   eyedropper: {
-    row_spacing: 6,
-    column_spacing: 8,
+    row_spacing: 8,
+    column_spacing: 6,
     controls: [
-      { name: "sampleRadius", type: "slider", title: "取样范围", hook: "setSampleRadius", min: 1, max: 15, value: 3, row: 0, start_column: 0, end_column: 1 },
-      { name: "sampleSource", type: "list", title: "取样来源", hook: "setSampleSource", options: ["AllLayers", "CurrentLayer"], value: "AllLayers", row: 1, start_column: 0, end_column: 1 },
-      { name: "pickAlpha", type: "check", title: "包含透明度", hook: "setPickAlpha", value: true, row: 2, start_column: 0, end_column: 1 },
+      {
+        name: "palette_color",
+        type: "palette",
+        title: "Palette",
+        hook: "palette_color",
+        value: "#111827",
+        swatches: ["#111827", "#2563eb", "#16a34a", "#dc2626", "#f59e0b"],
+        row: 0,
+        start_column: 0,
+        end_column: 2,
+      },
+      {
+        name: "sample_source",
+        type: "list",
+        title: "Sample Source",
+        hook: "sample_source",
+        value: "all",
+        row: 1,
+        start_column: 0,
+        end_column: 2,
+        options: [
+          { title: "AllLayers", value: "all" },
+          { title: "CurrentLayer", value: "current" },
+        ],
+      },
     ],
   },
+  h_center_line: automappingControls(true),
+  v_center_line: automappingControls(true),
+  additional_line: automappingControls(true),
+  mapping_area: automappingControls(false),
+  auto_mapping_2: automappingControls(false),
 };
 
 export default function syncToolOptions(state) {
@@ -76,7 +289,7 @@ export default function syncToolOptions(state) {
   const schema = SCHEMAS[tool] ?? SCHEMAS.brush;
   const values = {};
   for (const ctrl of schema.controls) {
-    if (ctrl.value !== undefined) {
+    if (ctrl.value !== undefined && values[ctrl.name] === undefined) {
       values[ctrl.name] = ctrl.value;
     }
   }

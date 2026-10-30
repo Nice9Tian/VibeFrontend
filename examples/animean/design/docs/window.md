@@ -1,22 +1,22 @@
 # AnimeAn 动画工作台界面说明（完整第一版）
 
-本设计项目完整表达 AnimeAn 动画软件第一版的主窗口骨架、多级菜单栏（含快捷键、可勾选项、单选组、右键菜单、按钮弹出菜单）、顶部 7 种绘图工具栏、动态生成的工具选项面板（`DataForm`）、左侧图层树（`Tree`）与图层列表（`List`）及素材面板（含备注多行文本框 `TextArea`）、中央双页签绘图/纹理区（`TabBar` + `External` 画布）、右侧属性/历史/导出检查器（`Stack` + 支持回退置灰的历史 `List`）、底部支持窄窗口自动换行的流式时间轴面板（`Flow` + `Slider` + `ScrollBar`），以及“新建项目”与“画笔与压感设置”两个模态对话框（含 `DialogButtonBox`）。
+本设计项目完整表达 AnimeAn 动画软件第一版的主窗口骨架、多级菜单栏（含快捷键、可勾选项、单选组、右键菜单、按钮弹出菜单）、顶部流式自动换行工具栏（8 种基础工具 + 5 种 Mapping 扩展工具 + 工具锁定策略 + 压感板 `forcePadBox`）、动态生成的工具选项面板（`DataForm`，严格对齐 `animean/childrenpanel/tool_controls/*.json` 与 `toolcontrol.py`）、左侧统一的图层树（`layerList`，`Tree`）与主/子视图图层页签及素材面板（含素材转图层与多行备注 `TextArea`）、中央双页签绘图/纹理区（`TabBar` + 纹理子视图 `FloatBox` 归属栏 + `External` 画布）、右侧属性/历史/导出检查器（`Stack` + 支持回退置灰的历史 `List`）、底部支持窄窗口自动换行的流式时间轴面板（`Flow` + 关键帧/延长帧/复制帧/前移帧 + 洋葱皮 4 项过滤 + `Slider` + `ScrollBar`），以及“新建项目”“画笔与压感设置”和“纹理浮动子视图”三个对话框。
 
 <!-- ui-section: tools-dock -->
 ## 顶部工具栏（toolsDock）
 
-位于主窗口顶部停靠区，采用横排（HBox）布局：
-- 包含“新建项目”按钮与 7 个带矢量图标的可勾选工具按钮（画笔 `pen`、橡皮 `eraser`、填充 `bucket`、几何 `shape`、套索 `lasso`、移动 `move`、吸管 `eyedropper`）；
-- 包含带弹出菜单（`popupMenu`）的“工具预设 ▾”按钮 `toolMoreMenuBtn`、弹性占位区 `toolbarSpacer`（`Spacer`）以及右侧项目摘要标签。
-- 切换工具时调用 `functions/syncToolOptions.js`，动态更新右侧工具选项面板 `toolOptionsForm` 的表单结构与默认参数。
+位于主窗口顶部停靠区，采用自动换行流式布局（`Flow`），在宽窗口（1280/1440）下单行排布，在窄窗口（1024/800）下自动换为两行并撑高顶栏：
+- 包含“新建项目”按钮、8 个基础工具可勾选按钮（选择 `arrow`、画笔 `brush`、橡皮 `eraser`、填充 `fill`、连接 `shape`、套索 `select`、变换 `move`、吸管 `eyedropper`）；
+- 包含 5 个 Mapping 扩展工具按钮（`H中线`、`V中线`、`映射区`、`辅助线`、`自动映射`）及“工具锁定”策略开关 `toolLockPolicyBtn`（启用锁定时若当前处于扩展工具则自动回退至 `arrow`）；
+- 包含带弹出菜单（`popupMenu`）的“预设 ▾”按钮 `toolMoreMenuBtn` 以及二维向量压感板 `forcePadBox`。
 <!-- /ui-section -->
 
 <!-- ui-section: layers-dock -->
 ## 图层与素材面板（layersDock）
 
 位于主窗口左侧停靠区，采用竖排（VBox）布局：
-- **图层树 `layerTree`（`Tree`）**：展示角色图层组与子图层，支持层级展开/折叠（`toggleCollapse`）、可见性勾选（`toggleCheck`）、拖动重排（`reorder`）以及右键上下文菜单（`contextMenu`）；
-- **图层列表 `layerList`（`List`）**：支持新建、删除、上下移动和直接拖拽重排（`reorder`），底部提供由业务接管的切换按钮 `toggleVisibleBtn`。
+- 顶部 `layerViewTabBar`（`TabBar`）在主视图图层（`Main Layers`）与子视图图层（`Child Layers`）之间切换；
+- **统一的图层树 `layerList`（`Tree`）**：对照原版 `layerpanel.ui` 的单一 `QTreeWidget`，统一承载图层与分组，支持新建图层、新建分组、删除、上移/下移、取消选中（`unselectLayerBtn`）、层级展开/折叠（`toggleCollapse`）、可见性勾选（`toggleCheck`）、拖拽重排（`reorder`）以及右键菜单（复制图层、切换锁定、删除图层、解组保留图层 `ctxDissolveGroup`、删组及成员图层 `ctxDeleteGroup`）。
 <!-- /ui-section -->
 
 <!-- ui-section: toggle-visible-btn -->
@@ -28,13 +28,16 @@
 <!-- ui-section: assets-panel -->
 ## 素材库面板（assetList / assetNoteInput）
 
-位于左侧停靠面板下半区，包含导入/移除按钮、支持拖动重排的素材列表 `assetList`（`List`），以及绑定 `assets.note` 的多行文本编辑框 `assetNoteInput`（`TextArea`）。
+位于左侧停靠面板下半区，包含导入（`addAssetBtn`）、将选中素材转为图层（`assetToLayerBtn`）、移除（`removeAssetBtn`）、取消选中（`unselectAssetBtn`）、支持拖动重排的素材列表 `assetList`（`List`），以及绑定 `assets.note` 的多行文本编辑框 `assetNoteInput`（`TextArea`）。
 <!-- /ui-section -->
 
 <!-- ui-section: central-area -->
 ## 中央绘图与纹理工作区（centralArea）
 
-主窗口中央区，顶部栏包含 `workspaceTabBar`（`TabBar`，在 `Drawing` 绘图区与 `Texture` 纹理贴图区之间切换）、画布标题、缩放滑条 `zoomSlider`（`Slider`）和当前工具指示，下方为外部容器 `canvasHost`。
+主窗口中央区：
+- 第一行 `canvasHeader` 包含 `workspaceTabBar`（`TabBar`，在 `Drawing` 绘图区与 `Texture` 纹理贴图区之间切换）、画布标题、缩放滑条 `zoomSlider`（`Slider`）和当前工具指示；
+- 第二行 `textureSubBar` 管理纹理子视图（`FloatBox` / `SubControlFrame`）的宿主位置（中央页签、嵌入工具面板槽位、独立浮动窗口 `textureFloatDialog`）以及时间轴跟随（`followTimelineCheck`）与 UV 同步（`followTextureCheck`）开关；
+- 下方为外部容器 `canvasHost`。
 <!-- /ui-section -->
 
 <!-- ui-section: canvas-host -->
@@ -52,7 +55,7 @@
 <!-- ui-section: tool-options-form -->
 ## 动态工具选项表单（toolOptionsForm）
 
-类型为 `DataForm`，对照 `animean/childrenpanel/tool_controls/*.json` 的结构化定义动态生成滑条（`slider`）、下拉列表（`list`）、复选框（`check`）、按钮（`button`）和子窗口触发按钮（`subwindow`），支持 `visible_when` 条件显隐。修改任意字段时通过 `functions/applyToolOption.js` 写回 `toolOptions.values` 并记录操作历史。
+类型为 `DataForm`，严格对齐 `animean/childrenpanel/tool_controls/*.json` 与 `animean/pyfile/toolcontrol.py` 的 `options_for_tool_json` / `options_for_extra_tool_json` 数据格式，动态生成滑条（`slider`）、对象数组下拉列表（`list`：`[{"title": ..., "value": ...}]`）、字符串 `"on"`/`"off"` 复选框（`check`）、带 `value` 与 `state.color` 的同名颜色按钮（`button`）、调色板（`palette`）和子窗口槽位（`subwindow`），支持 `visible_when: {"name": ..., "values": [...]}` 条件显隐。
 <!-- /ui-section -->
 
 <!-- ui-section: history-panel -->
@@ -65,9 +68,9 @@
 ## 底部时间轴面板（timelineDock）
 
 位于主窗口底部停靠区：
-- 第一行 `timelineTransportFlow` 采用自动换行流式布局（`Flow`），包含播放/暂停、上一帧/下一帧、增删关键帧、循环开关、洋葱皮开关、帧率选择、帧定位滑条 `frameSlider`（`Slider`）与帧信息标签。在宽窗口（1280/1440）下单行排布，在窄窗口（1024）下自动换为两行；
+- 第一行 `timelineTransportFlow` 采用自动换行流式布局（`Flow`），包含播放/暂停、上一帧/下一帧、新增关键帧（`addFrameBtn`）、插入延长帧（`addHoldFrameBtn`）、复制帧（`duplicateFrameBtn`）、帧前移重排（`moveFrameBackBtn`）、删除帧、循环开关、洋葱皮总开关及 4 项分层过滤复选框（`线稿`/`填充`/`映射`/`辅助`）、帧率选择、帧定位滑条 `frameSlider`（`Slider`）与帧信息标签。在宽窗口（1280/1440）下单行排布，在窄窗口（1024/800）下自动换为两行；
 - 第二行包含时间轴视口滚动条 `timelineScrollBar`（`ScrollBar`）；
-- 当处于播放状态且预览时钟（`clock`）推进触发 `clock.tick` 时，自动向前推进 `project.currentFrame`。
+- 当处于播放状态时，预览时钟（`clock`）自动以 100ms 步进触发 `clock.tick`，实时向前推进 `project.currentFrame`。
 <!-- /ui-section -->
 
 <!-- ui-section: new-project-dialog -->

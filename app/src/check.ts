@@ -16,6 +16,7 @@ import {
   parseDocRef,
   requestEvent,
   STANDARD_COMPONENTS,
+  walkMenuItems,
   type ConditionDef,
   type Problem,
   type Project,
@@ -24,6 +25,24 @@ import {
 
 /** 步骤出现在哪里：普通事件里，还是业务事件的模拟步骤里。两处的规则不同。 */
 type StepPlace = "normal" | "simulate";
+
+/** 系统保留名称（内置只读状态、事件临时变量、表达式关键字、内置节点类型）：不能用作控件 ID、状态根名、全局条件名或菜单项 ID。 */
+export const RESERVED_IDENTIFIER_NAMES = new Set<string>([
+  "clock",
+  "value",
+  "param",
+  "result",
+  "error",
+  "self",
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "and",
+  "or",
+  "not",
+  ...BUILTIN_TYPES,
+]);
 
 const FORBIDDEN_DOM_IDENTIFIERS = [
   "document",
@@ -570,18 +589,48 @@ export function check(project: Project): Problem[] {
     hint(`效果 ${name} 需要翻译：导出成 Qt 后，要在界面效果层为它提供实现（当前哈希 ${effect.hash}）；没有提供时直接切到结束状态`);
   }
 
-  // 状态
+  // 状态、条件、控件与菜单项的保留名与重名检查
   const stateRoots = Object.keys(logic.state ?? {});
+  for (const id of Object.keys(scene.nodes)) {
+    if (RESERVED_IDENTIFIER_NAMES.has(id)) {
+      error(`控件 ID“${id}”是系统保留名称，请改名`, id);
+    }
+  }
   for (const { path, leaf } of allStateLeaves(logic)) {
     if (leaf.owner !== undefined && leaf.owner !== "ui" && leaf.owner !== "business") {
       error(`状态 ${path}：owner 应为 ui（界面自己管）或 business（业务管），现在是“${leaf.owner}”`);
     }
   }
   for (const id of Object.keys(logic.conditions ?? {})) {
+    if (RESERVED_IDENTIFIER_NAMES.has(id)) error(`全局条件“${id}”是系统保留名称，请改名`);
     if (stateRoots.includes(id) || scene.nodes[id]) error(`全局条件“${id}”与状态根名或控件 ID 重名`);
   }
   for (const root of stateRoots) {
+    if (RESERVED_IDENTIFIER_NAMES.has(root)) error(`状态根名“${root}”是系统保留名称，请改名`);
     if (scene.nodes[root]) error(`状态根名“${root}”与控件 ID 重名`);
+  }
+  const seenMenuItemIds = new Set<string>();
+  const checkMenuItemList = (items: import("./model.ts").MenuItemSpec[] | undefined, ownerNodeId?: string) => {
+    walkMenuItems(items, (item) => {
+      if (item.kind === "separator" || !item.id) return;
+      if (RESERVED_IDENTIFIER_NAMES.has(item.id)) {
+        error(`菜单项 ID“${item.id}”是系统保留名称，请改名`, ownerNodeId);
+      }
+      if (seenMenuItemIds.has(item.id)) {
+        error(`菜单项 ID“${item.id}”重复定义`, ownerNodeId);
+      }
+      seenMenuItemIds.add(item.id);
+      if (scene.nodes[item.id] || stateRoots.includes(item.id) || logic.conditions?.[item.id]) {
+        error(`菜单项 ID“${item.id}”与控件 ID、状态根名或全局条件重名`, ownerNodeId);
+      }
+    });
+  };
+  for (const [nid, n] of Object.entries(scene.nodes)) {
+    for (const menu of n.menuBar?.menus ?? []) {
+      checkMenuItemList(menu.items, nid);
+    }
+    checkMenuItemList(n.contextMenu, nid);
+    checkMenuItemList(n.popupMenu, nid);
   }
   checkConditions(logic.conditions, "");
 

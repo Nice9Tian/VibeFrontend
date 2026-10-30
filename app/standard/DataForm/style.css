@@ -88,4 +88,68 @@
   color: var(--color-text, #1e293b);
   font-size: 11px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.vf-std-dataform-btn[data-active="true"] {
+  border-color: var(--color-primary, #2563eb);
+  box-shadow: 0 0 0 1px var(--color-primary, #2563eb);
+  font-weight: 600;
+}
+
+.vf-std-dataform-swatch-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  flex-shrink: 0;
+}
+
+.vf-std-dataform-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vf-std-dataform-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.vf-std-dataform-swatch-btn {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 3px;
+  border: 1px solid var(--color-border, #cbd5e1);
+  cursor: pointer;
+}
+
+.vf-std-dataform-swatch-btn[data-active="true"] {
+  border: 2px solid var(--color-primary, #2563eb);
+}
+
+.vf-std-dataform-subwindow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px dashed var(--color-primary, #2563eb);
+  border-radius: 5px;
+  background: rgba(37, 99, 235, 0.08);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.vf-std-dataform-subwindow-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  color: var(--color-primary, #2563eb);
 }

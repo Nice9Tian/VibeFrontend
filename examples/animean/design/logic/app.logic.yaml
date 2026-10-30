@@ -22,8 +22,11 @@ state:
       initial: true
     activeTool:
       type: enum
-      values: [brush, eraser, fill, shape, select, move, eyedropper]
+      values: [arrow, brush, eraser, fill, shape, select, move, eyedropper, h_center_line, v_center_line, mapping_area, additional_line, auto_mapping_2]
       initial: brush
+    toolsLocked:
+      type: boolean
+      initial: false
     workspaceTab:
       type: number
       initial: 0
@@ -62,27 +65,65 @@ state:
     exportResult:
       type: string
       initial: "尚未导出"
+  forcePad:
+    fx:
+      type: number
+      initial: 0
+    fy:
+      type: number
+      initial: 0
+    pressure:
+      type: number
+      initial: 50
+  textureView:
+    hostMode:
+      type: enum
+      values: [tab, embedded, floating]
+      initial: tab
+    fileName:
+      type: string
+      initial: "default.textureview"
+    followTimeline:
+      type: boolean
+      initial: true
+    followTexture:
+      type: boolean
+      initial: true
+  timeline:
+    holdFrames:
+      type: number
+      initial: 0
+    onionLines:
+      type: boolean
+      initial: true
+    onionFills:
+      type: boolean
+      initial: true
+    onionAm:
+      type: boolean
+      initial: false
+    onionGuide:
+      type: boolean
+      initial: false
   toolOptions:
     schema:
       type: object
       initial:
-        row_spacing: 6
-        column_spacing: 8
+        row_spacing: 8
+        column_spacing: 6
         controls:
-          - { name: "brushSize", type: "slider", title: "笔刷半径", hook: "setBrushSize", min: 1, max: 200, value: 18, row: 0, start_column: 0, end_column: 1 }
-          - { name: "brushHardness", type: "slider", title: "笔尖硬度", hook: "setBrushHardness", min: 0, max: 100, value: 85, row: 1, start_column: 0, end_column: 1 }
-          - { name: "strokeMode", type: "list", title: "笔触模式", hook: "setStrokeMode", options: ["Freehand", "Bezier", "Calligraphy"], value: "Freehand", row: 2, start_column: 0, end_column: 1 }
-          - { name: "smoothLevel", type: "slider", title: "曲线平滑", hook: "setSmoothLevel", min: 0, max: 20, value: 8, row: 3, start_column: 0, end_column: 1, visible_when: "strokeMode != 'Freehand'" }
-          - { name: "pressureSize", type: "check", title: "压感半径", hook: "setPressureSize", value: true, row: 4, column: 0 }
-          - { name: "openAdvBrush", type: "subwindow", title: "压感曲线...", hook: "openDrawSettings", row: 4, column: 1 }
+          - { name: "color", type: "button", title: "Black", hook: "color", value: "black", row: 0, column: 0, state: { color: "black" } }
+          - { name: "color", type: "button", title: "Blue", hook: "color", value: "blue", row: 0, column: 1, state: { color: "blue" } }
+          - { name: "color", type: "button", title: "Green", hook: "color", value: "green", row: 0, column: 2, state: { color: "green" } }
+          - { name: "smooth", type: "slider", title: "Smooth", hook: "smooth", min: 0, max: 100, value: 50, row: 1, start_column: 0, end_column: 2 }
+          - { name: "pen_width", type: "slider", title: "Width", hook: "pen_width", min: 1, max: 50, value: 5, row: 2, start_column: 0, end_column: 2 }
+          - { name: "openAdvBrush", type: "subwindow", title: "压感曲线...", hook: "openDrawSettings", row: 3, start_column: 0, end_column: 2 }
     values:
       type: object
       initial:
-        brushSize: 18
-        brushHardness: 85
-        strokeMode: "Freehand"
-        smoothLevel: 8
-        pressureSize: true
+        color: "black"
+        smooth: 50
+        pen_width: 5
     lastHook:
       type: string
       initial: "switch:brush"
@@ -101,28 +142,21 @@ state:
       type: boolean
       initial: false
   layers:
+    viewTab:
+      type: number
+      initial: 0
     items:
       type: array
       initial:
-        - { id: 1, name: "背景层", visible: true, locked: false }
-        - { id: 2, name: "人物线稿", visible: true, locked: false }
-        - { id: 3, name: "高光层", visible: true, locked: false }
+        - { id: "grp_char", name: "角色图层组", kind: "group", isGroup: true, depth: 0, collapsed: false, checked: true, visible: true, locked: false }
+        - { id: "lyr_line", name: "人物线稿", kind: "Vector", isGroup: false, depth: 1, collapsed: false, checked: true, visible: true, locked: false }
+        - { id: "lyr_bg", name: "远景背景层", kind: "Raster", isGroup: false, depth: 0, collapsed: false, checked: true, visible: true, locked: false }
     selectedIndex:
       type: number
       initial: 0
     nextId:
       type: number
       initial: 4
-    treeItems:
-      type: array
-      initial:
-        - { id: "grp_char", name: "角色图层组", kind: "group", isGroup: true, depth: 0, collapsed: false, checked: true }
-        - { id: "lyr_line", name: "人物线稿", kind: "Vector", isGroup: false, depth: 1, collapsed: false, checked: true }
-        - { id: "lyr_color", name: "人物铺色", kind: "Raster", isGroup: false, depth: 1, collapsed: false, checked: true }
-        - { id: "lyr_bg", name: "远景背景层", kind: "Raster", isGroup: false, depth: 0, collapsed: false, checked: true }
-    treeSelectedIndex:
-      type: number
-      initial: 0
   assets:
     items:
       type: array
@@ -208,6 +242,9 @@ conditions:
   canRemoveFrame:
     type: symbol
     expr: project.totalFrames > 1
+  isArrow:
+    type: symbol
+    expr: project.activeTool == "arrow"
   isBrush:
     type: symbol
     expr: project.activeTool == "brush"
@@ -229,6 +266,24 @@ conditions:
   isEyedropper:
     type: symbol
     expr: project.activeTool == "eyedropper"
+  isHLine:
+    type: symbol
+    expr: project.activeTool == "h_center_line"
+  isVLine:
+    type: symbol
+    expr: project.activeTool == "v_center_line"
+  isMapArea:
+    type: symbol
+    expr: project.activeTool == "mapping_area"
+  isAddLine:
+    type: symbol
+    expr: project.activeTool == "additional_line"
+  isAutoMap:
+    type: symbol
+    expr: project.activeTool == "auto_mapping_2"
+  isExtraToolActive:
+    type: symbol
+    expr: isHLine or isVLine or isMapArea or isAddLine or isAutoMap
   isPropsTab:
     type: symbol
     expr: inspector.tabIndex == 0
@@ -276,6 +331,27 @@ events:
   saveAsProjectFile:
     - set: 'project.title = project.title + "_副本"'
     - set: 'project.statusMessage = "已另存为：" + project.title'
+  openTextureFile:
+    - set: 'textureView.fileName = "character_uv.textureview"'
+    - set: 'project.statusMessage = "已加载纹理视图文件：" + textureView.fileName'
+    - fn:
+        name: recordHistory
+        args:
+          label: '"加载纹理视图：character_uv.textureview"'
+  saveTextureFile:
+    - set: 'project.statusMessage = "已保存纹理视图文件：" + textureView.fileName'
+    - fn:
+        name: recordHistory
+        args:
+          label: '"保存纹理视图：" + textureView.fileName'
+  toggleTextureFloatWindow:
+    - set: 'textureView.hostMode = "floating"'
+    - openWindow: textureFloatDialog
+    - set: 'project.statusMessage = "已弹出独立纹理浮动子视图 (FloatBox)"'
+  embedTextureInToolOptions:
+    - set: 'textureView.hostMode = "embedded"'
+    - closeWindow: textureFloatDialog
+    - set: 'project.statusMessage = "已将纹理子视图嵌入工具选项面板槽位"'
   importImageAsset:
     - push:
         to: assets.items
@@ -300,6 +376,8 @@ events:
     - set: project.workspaceTab = 0
     - set: project.zoom = 100
     - set: inspector.tabIndex = 0
+    - set: 'textureView.hostMode = "tab"'
+    - closeWindow: textureFloatDialog
     - set: 'project.statusMessage = "工作区视图与缩放已重置"'
   undoHistory:
     - fn:
@@ -332,6 +410,7 @@ events:
           label: '"生成中间帧补间 (+2)"'
   syncTextureMapping:
     - set: project.workspaceTab = 1
+    - set: 'textureView.hostMode = "tab"'
     - set: 'project.statusMessage = "已切换至纹理贴图区并同步 UV 映射"'
   openDrawSettings:
     - openWindow: drawSettingsDialog
@@ -360,8 +439,13 @@ events:
     - push:
         to: layers.items
         item:
-          id: layers.nextId
+          id: '"lyr_copy_" + layers.nextId'
           name: '"复制图层 " + layers.nextId'
+          kind: '"Vector"'
+          isGroup: false
+          depth: 0
+          collapsed: false
+          checked: true
           visible: true
           locked: false
     - set: layers.selectedIndex = layers.items.length - 1
@@ -369,7 +453,9 @@ events:
     - set: 'project.statusMessage = "已复制选中图层"'
   toggleSelectedLayerLock:
     - set: layer.locked = not layer.locked
-    - set: layers.items[layers.selectedIndex].locked = layer.locked
+    - if: layers.selectedIndex >= 0
+      then:
+        - set: layers.items[layers.selectedIndex].locked = layer.locked
     - set: 'project.statusMessage = layer.locked ? "已锁定当前图层" : "已解锁当前图层"'
   deleteSelectedLayer:
     - if: canRemoveLayer
@@ -381,6 +467,16 @@ events:
           then:
             - set: layers.selectedIndex = layers.items.length - 1
         - set: 'project.statusMessage = "已通过右键菜单删除图层"'
+  dissolveLayerGroup:
+    - fn:
+        name: manageLayerGroup
+        args:
+          mode: '"dissolve"'
+  deleteLayerGroup:
+    - fn:
+        name: manageLayerGroup
+        args:
+          mode: '"deleteGroup"'
   resetCanvasZoom:
     - set: project.zoom = 100
     - set: 'project.statusMessage = "画布缩放已重置为 100%"'
@@ -422,6 +518,19 @@ objects:
     events:
       click:
         - emit: openNewProject
+  toolArrowBtn:
+    props:
+      variant: 'isArrow ? "primary" : "secondary"'
+      checked: isArrow
+    events:
+      click:
+        - set: 'project.activeTool = "arrow"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：选择 (Arrow)"'
+      toggle:
+        - set: 'project.activeTool = "arrow"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：选择 (Arrow)"'
   toolBrushBtn:
     props:
       variant: 'isBrush ? "primary" : "secondary"'
@@ -469,11 +578,11 @@ objects:
       click:
         - set: 'project.activeTool = "shape"'
         - fn: syncToolOptions
-        - set: 'project.statusMessage = "切换工具：几何"'
+        - set: 'project.statusMessage = "切换工具：连接 (Connect)"'
       toggle:
         - set: 'project.activeTool = "shape"'
         - fn: syncToolOptions
-        - set: 'project.statusMessage = "切换工具：几何"'
+        - set: 'project.statusMessage = "切换工具：连接 (Connect)"'
   toolSelectBtn:
     props:
       variant: 'isSelect ? "primary" : "secondary"'
@@ -495,11 +604,11 @@ objects:
       click:
         - set: 'project.activeTool = "move"'
         - fn: syncToolOptions
-        - set: 'project.statusMessage = "切换工具：移动"'
+        - set: 'project.statusMessage = "切换工具：变换 (Transfer)"'
       toggle:
         - set: 'project.activeTool = "move"'
         - fn: syncToolOptions
-        - set: 'project.statusMessage = "切换工具：移动"'
+        - set: 'project.statusMessage = "切换工具：变换 (Transfer)"'
   toolEyedropperBtn:
     props:
       variant: 'isEyedropper ? "primary" : "secondary"'
@@ -513,20 +622,132 @@ objects:
         - set: 'project.activeTool = "eyedropper"'
         - fn: syncToolOptions
         - set: 'project.statusMessage = "切换工具：吸管"'
+  toolHLineBtn:
+    props:
+      enabled: not project.toolsLocked
+      variant: 'isHLine ? "primary" : "secondary"'
+      checked: isHLine
+    events:
+      click:
+        - set: 'project.activeTool = "h_center_line"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换映射工具：水平中心线 (H Center Line)"'
+      toggle:
+        - set: 'project.activeTool = "h_center_line"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换映射工具：水平中心线 (H Center Line)"'
+  toolVLineBtn:
+    props:
+      enabled: not project.toolsLocked
+      variant: 'isVLine ? "primary" : "secondary"'
+      checked: isVLine
+    events:
+      click:
+        - set: 'project.activeTool = "v_center_line"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换映射工具：垂直中心线 (V Center Line)"'
+      toggle:
+        - set: 'project.activeTool = "v_center_line"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换映射工具：垂直中心线 (V Center Line)"'
+  toolMapAreaBtn:
+    props:
+      enabled: not project.toolsLocked
+      variant: 'isMapArea ? "primary" : "secondary"'
+      checked: isMapArea
+    events:
+      click:
+        - set: 'project.activeTool = "mapping_area"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换映射工具：映射区域 (Mapping Area)"'
+      toggle:
+        - set: 'project.activeTool = "mapping_area"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换映射工具：映射区域 (Mapping Area)"'
+  toolAddLineBtn:
+    props:
+      enabled: not project.toolsLocked
+      variant: 'isAddLine ? "primary" : "secondary"'
+      checked: isAddLine
+    events:
+      click:
+        - set: 'project.activeTool = "additional_line"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换映射工具：辅助引导线 (Additional Line)"'
+      toggle:
+        - set: 'project.activeTool = "additional_line"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换映射工具：辅助引导线 (Additional Line)"'
+  toolAutoMapBtn:
+    props:
+      enabled: not project.toolsLocked
+      variant: 'isAutoMap ? "primary" : "secondary"'
+      checked: isAutoMap
+    events:
+      click:
+        - set: 'project.activeTool = "auto_mapping_2"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换映射工具：自动映射 (Auto Mapping 2)"'
+      toggle:
+        - set: 'project.activeTool = "auto_mapping_2"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换映射工具：自动映射 (Auto Mapping 2)"'
+  toolLockPolicyBtn:
+    props:
+      checked: project.toolsLocked
+      variant: 'project.toolsLocked ? "danger" : "secondary"'
+      text: 'project.toolsLocked ? "已锁扩展" : "工具锁定"'
+    events:
+      toggle:
+        - set: project.toolsLocked = value
+        - if: project.toolsLocked and isExtraToolActive
+          then:
+            - set: 'project.activeTool = "arrow"'
+            - fn: syncToolOptions
+            - set: 'project.statusMessage = "扩展映射工具已锁定，自动回退至选择工具 (Arrow)"'
+          else:
+            - set: 'project.statusMessage = project.toolsLocked ? "已启用工具锁定策略" : "已解除工具锁定策略"'
+  forcePadBox:
+    doc: docs/window.md#tools-dock
+    props:
+      text: '"压感板 (" + forcePad.fx + "," + forcePad.fy + ")"'
+      variant: 'forcePad.fx > 0 ? "primary" : "secondary"'
+    events:
+      click:
+        - if: forcePad.fx >= 70
+          then:
+            - set: forcePad.fx = 0
+            - set: forcePad.fy = 0
+            - set: forcePad.pressure = 50
+          else:
+            - set: forcePad.fx = forcePad.fx + 35
+            - set: forcePad.fy = forcePad.fy + 25
+            - set: forcePad.pressure = forcePad.pressure + 20
+        - set: 'project.statusMessage = "压感板向量更新：(" + forcePad.fx + ", " + forcePad.fy + ") 压力=" + forcePad.pressure + "%"'
   projectSummaryLabel:
     props:
       text: 'project.title + " (" + project.width + "x" + project.height + ")"'
 
   layersDock:
     doc: docs/window.md#layers-dock
+  layerViewTabBar:
+    bind: layers.viewTab
+    events:
+      change:
+        - set: 'project.statusMessage = value == 0 ? "切换至主视图图层表 (Main Layers)" : "切换至子视图图层表 (Child Layers)"'
   addLayerBtn:
     events:
       click:
         - push:
             to: layers.items
             item:
-              id: layers.nextId
+              id: '"lyr_" + layers.nextId'
               name: '"图层 " + layers.nextId'
+              kind: '"Vector"'
+              isGroup: false
+              depth: 0
+              collapsed: false
+              checked: true
               visible: true
               locked: false
         - set: layers.selectedIndex = layers.items.length - 1
@@ -536,7 +757,7 @@ objects:
     events:
       click:
         - push:
-            to: layers.treeItems
+            to: layers.items
             item:
               id: '"grp_" + layers.nextId'
               name: '"图层组 " + layers.nextId'
@@ -545,7 +766,9 @@ objects:
               depth: 0
               collapsed: false
               checked: true
-        - set: layers.treeSelectedIndex = layers.treeItems.length - 1
+              visible: true
+              locked: false
+        - set: layers.selectedIndex = layers.items.length - 1
         - set: layers.nextId = layers.nextId + 1
         - set: 'project.statusMessage = "已新建图层分组"'
   removeLayerBtn:
@@ -588,41 +811,34 @@ objects:
                 to: layers.selectedIndex + 1
             - set: layers.selectedIndex = layers.selectedIndex + 1
             - set: 'project.statusMessage = "图层已下移"'
-  layerTree:
-    doc: docs/window.md#layers-dock
-    bind: layers.treeSelectedIndex
-    props:
-      items: layers.treeItems
-      value: layers.treeSelectedIndex
+  unselectLayerBtn:
     events:
-      change:
-        - set: 'project.statusMessage = "选中图层树节点：" + value'
-      toggleCheck:
-        - set: layers.treeItems[index].checked = checked
-        - set: 'project.statusMessage = checked ? "图层树节点已显示" : "图层树节点已隐藏"'
-      toggleCollapse:
-        - set: layers.treeItems[index].collapsed = collapsed
-        - set: 'project.statusMessage = collapsed ? "图层组已折叠" : "图层组已展开"'
-      reorder:
-        - move:
-            in: layers.treeItems
-            from: from
-            to: to
-        - set: layers.treeSelectedIndex = to
-        - set: 'project.statusMessage = "图层树已重排：" + from + " → " + to'
+      click:
+        - set: layers.selectedIndex = -1
+        - set: 'project.statusMessage = "已取消图层选中状态"'
   layerList:
+    doc: docs/window.md#layers-dock
     bind: layers.selectedIndex
     props:
       items: layers.items
       value: layers.selectedIndex
     events:
+      change:
+        - set: 'project.statusMessage = "选中图层树节点：" + value'
+      toggleCheck:
+        - set: layers.items[index].checked = checked
+        - set: layers.items[index].visible = checked
+        - set: 'project.statusMessage = checked ? "图层树节点已显示" : "图层树节点已隐藏"'
+      toggleCollapse:
+        - set: layers.items[index].collapsed = collapsed
+        - set: 'project.statusMessage = collapsed ? "图层组已折叠" : "图层组已展开"'
       reorder:
         - move:
             in: layers.items
             from: from
             to: to
         - set: layers.selectedIndex = to
-        - set: 'project.statusMessage = "图层列表已拖动重排：" + from + " → " + to'
+        - set: 'project.statusMessage = "图层树已重排：" + from + " → " + to'
   layerVisibleLabel:
     props:
       text: 'layer.visible ? "当前图层：显示" : "当前图层：隐藏"'
@@ -638,6 +854,14 @@ objects:
     events:
       click:
         - emit: importImageAsset
+  assetToLayerBtn:
+    doc: docs/window.md#assets-panel
+    events:
+      click:
+        - fn:
+            name: manageLayerGroup
+            args:
+              mode: '"assetToLayer"'
   removeAssetBtn:
     props:
       enabled: canRemoveAsset
@@ -652,6 +876,11 @@ objects:
               then:
                 - set: assets.selectedIndex = assets.items.length - 1
             - set: 'project.statusMessage = "已移除选中素材"'
+  unselectAssetBtn:
+    events:
+      click:
+        - set: assets.selectedIndex = -1
+        - set: 'project.statusMessage = "已取消素材选中状态"'
   assetList:
     doc: docs/window.md#assets-panel
     bind: assets.selectedIndex
@@ -693,7 +922,24 @@ objects:
         - set: 'project.statusMessage = "画布缩放：" + project.zoom + "%"'
   activeToolLabel:
     props:
-      text: 'isBrush ? "当前工具：画笔" : (isEraser ? "当前工具：橡皮" : (isFill ? "当前工具：填充" : (isShape ? "当前工具：几何" : (isSelect ? "当前工具：套索" : (isMove ? "当前工具：移动" : "当前工具：吸管")))))'
+      text: '"工具：" + project.activeTool'
+  textureHostLabel:
+    props:
+      text: '"纹理子视图：" + (textureView.hostMode == "floating" ? "独立浮窗" : (textureView.hostMode == "embedded" ? "嵌入工具栏" : "中央页签")) + " (" + textureView.fileName + ")"'
+  followTimelineCheck:
+    bind: textureView.followTimeline
+    events:
+      change:
+        - set: 'project.statusMessage = textureView.followTimeline ? "已开启时间轴纹理跟随" : "已关闭时间轴纹理跟随"'
+  followTextureCheck:
+    bind: textureView.followTexture
+    events:
+      change:
+        - set: 'project.statusMessage = textureView.followTexture ? "已开启纹理 UV 实时同步" : "已关闭纹理 UV 实时同步"'
+  floatTextureBtn:
+    events:
+      click:
+        - emit: toggleTextureFloatWindow
   canvasHost:
     doc: docs/window.md#canvas-host
 
@@ -710,6 +956,9 @@ objects:
         - if: 'hook == "openDrawSettings"'
           then:
             - openWindow: drawSettingsDialog
+        - if: 'hook == "toggleTextureHost"'
+          then:
+            - emit: embedTextureInToolOptions
         - fn:
             name: recordHistory
             args:
@@ -743,7 +992,9 @@ objects:
     bind: layer.locked
     events:
       change:
-        - set: layers.items[layers.selectedIndex].locked = layer.locked
+        - if: layers.selectedIndex >= 0
+          then:
+            - set: layers.items[layers.selectedIndex].locked = layer.locked
   exportBtn:
     events:
       click:
@@ -820,6 +1071,40 @@ objects:
             name: recordHistory
             args:
               label: '"新增第 " + project.currentFrame + " 帧"'
+  addHoldFrameBtn:
+    events:
+      click:
+        - set: project.totalFrames = project.totalFrames + 1
+        - set: timeline.holdFrames = timeline.holdFrames + 1
+        - set: project.currentFrame = project.totalFrames
+        - set: 'project.statusMessage = "已插入延长帧 (Hold)：第 " + project.currentFrame + " 帧（共 " + timeline.holdFrames + " 延长帧）"'
+        - fn:
+            name: recordHistory
+            args:
+              label: '"插入延长帧 #" + project.currentFrame'
+  duplicateFrameBtn:
+    events:
+      click:
+        - set: project.totalFrames = project.totalFrames + 1
+        - set: project.currentFrame = project.currentFrame + 1
+        - set: 'project.statusMessage = "已复制当前帧至第 " + project.currentFrame + " 帧"'
+        - fn:
+            name: recordHistory
+            args:
+              label: '"复制帧至 #" + project.currentFrame'
+  moveFrameBackBtn:
+    props:
+      enabled: project.currentFrame > 1
+    events:
+      click:
+        - if: project.currentFrame > 1
+          then:
+            - set: project.currentFrame = project.currentFrame - 1
+            - set: 'project.statusMessage = "已将帧前移至位置 #" + project.currentFrame'
+            - fn:
+                name: recordHistory
+                args:
+                  label: '"前移帧至 #" + project.currentFrame'
   removeFrameBtn:
     props:
       enabled: canRemoveFrame
@@ -848,6 +1133,26 @@ objects:
       toggle:
         - set: project.onionSkin = value
         - set: 'project.statusMessage = project.onionSkin ? "已开启洋葱皮透视" : "已关闭洋葱皮透视"'
+  onionLinesCheck:
+    bind: timeline.onionLines
+    events:
+      change:
+        - set: 'project.statusMessage = timeline.onionLines ? "洋葱皮过滤：显示线稿层" : "洋葱皮过滤：隐藏线稿层"'
+  onionFillsCheck:
+    bind: timeline.onionFills
+    events:
+      change:
+        - set: 'project.statusMessage = timeline.onionFills ? "洋葱皮过滤：显示填充层" : "洋葱皮过滤：隐藏填充层"'
+  onionAmCheck:
+    bind: timeline.onionAm
+    events:
+      change:
+        - set: 'project.statusMessage = timeline.onionAm ? "洋葱皮过滤：显示自动映射层" : "洋葱皮过滤：隐藏自动映射层"'
+  onionGuideCheck:
+    bind: timeline.onionGuide
+    events:
+      change:
+        - set: 'project.statusMessage = timeline.onionGuide ? "洋葱皮过滤：显示辅助线" : "洋葱皮过滤：隐藏辅助线"'
   fpsSelectCombo:
     bind: project.fpsLabel
     events:
@@ -937,3 +1242,26 @@ objects:
       reject:
         - closeWindow: drawSettingsDialog
         - set: 'project.statusMessage = "已取消画笔压感设置"'
+
+  textureFloatDialog:
+    doc: docs/window.md#central-area
+  textureFloatInfoLabel:
+    props:
+      text: '"浮动纹理子视图 (" + textureView.fileName + ") — 同步UV=" + (textureView.followTexture ? "开启" : "关闭")'
+  dockTextureToTabBtn:
+    events:
+      click:
+        - set: 'textureView.hostMode = "tab"'
+        - set: project.workspaceTab = 1
+        - closeWindow: textureFloatDialog
+        - set: 'project.statusMessage = "已将纹理子视图归还至中央 Texture 页签"'
+  embedTextureBtn:
+    events:
+      click:
+        - emit: embedTextureInToolOptions
+  closeTextureFloatBtn:
+    events:
+      click:
+        - closeWindow: textureFloatDialog
+        - set: 'textureView.hostMode = "tab"'
+        - set: 'project.statusMessage = "已关闭纹理浮动窗口"'

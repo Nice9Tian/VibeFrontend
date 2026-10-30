@@ -857,6 +857,29 @@ export function flowHeightForWidth(
   return clampHeight(node, padTop + rowsH + padBottom);
 }
 
+export function dockHeightForWidth(
+  scene: Scene,
+  dock: SceneNode,
+  availWidth: number,
+  isVisible: (id: string) => boolean,
+): number {
+  const baseH = prefHeight(dock);
+  const layout = layoutOf(dock);
+  if (!layout || !isWrapLayout(layout) || dock.size?.fixedHeight !== undefined || dock.size?.vertical === "fixed") {
+    return baseH;
+  }
+  const hdrH = dock.headerHeight ?? 26;
+  const [padTop, padRight, padBottom, padLeft] = paddingOf(layout);
+  const colGap = layout.columnGap ?? layout.gap ?? 0;
+  const rowGap = layout.rowGap ?? layout.gap ?? 0;
+  const innerW = Math.max(0, availWidth - padLeft - padRight);
+  const visChildren = (dock.children ?? []).filter((cid) => Boolean(scene.nodes[cid]) && isVisible(cid));
+  const rows = computeFlowRows(scene, visChildren, innerW, colGap);
+  if (rows.length === 0) return baseH;
+  const rowsH = rows.reduce((sum, r) => sum + r.rowH, 0) + Math.max(0, rows.length - 1) * rowGap;
+  return clampHeight(dock, Math.max(baseH, hdrH + padTop + rowsH + padBottom));
+}
+
 /**
  * 计算一个窗口（或全部窗口）内所有节点的位置和尺寸。
  * 规则与 Qt 的 QMainWindow + QDockWidget + QVBoxLayout/QHBoxLayout/QGridLayout/QFormLayout/QStackedLayout 完全一致。
@@ -1346,7 +1369,7 @@ export function computeSceneLayout(
       let topH = 0;
       for (const did of byArea.top) {
         const d = scene.nodes[did]!;
-        const dh = prefHeight(d);
+        const dh = dockHeightForWidth(scene, d, W, isVisible);
         const dBox: ComputedBox = { x: 0, y: midY + topH, width: W, height: dh, absX: 0, absY: midY + topH, visible: winVis, windowId: winId };
         boxes.set(did, dBox);
         layoutSubtree(did, dBox);
@@ -1354,11 +1377,11 @@ export function computeSceneLayout(
       }
 
       let bottomH = 0;
-      for (const did of byArea.bottom) bottomH += prefHeight(scene.nodes[did]!);
+      for (const did of byArea.bottom) bottomH += dockHeightForWidth(scene, scene.nodes[did]!, W, isVisible);
       let bCurY = midY + midH - bottomH;
       for (const did of byArea.bottom) {
         const d = scene.nodes[did]!;
-        const dh = prefHeight(d);
+        const dh = dockHeightForWidth(scene, d, W, isVisible);
         const dBox: ComputedBox = { x: 0, y: bCurY, width: W, height: dh, absX: 0, absY: bCurY, visible: winVis, windowId: winId };
         boxes.set(did, dBox);
         layoutSubtree(did, dBox);

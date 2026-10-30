@@ -24,6 +24,7 @@ const SIZES: Array<{ width: number; height: number }> = [
   { width: 1280, height: 800 },
   { width: 1440, height: 900 },
   { width: 1024, height: 720 },
+  { width: 800, height: 600 },
 ];
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -515,11 +516,21 @@ async function main(): Promise<number> {
   console.log(`DOM 实测浏览器：${domMeasured.userAgent}`);
 
   // 2. 启动 Qt 可执行文件量取相同场景下的真实 QWidget 几何
+  const qtEnv = { ...process.env };
+  if (process.platform === "win32") {
+    const extraDirs = ["C:\\Qt\\6.9.1\\mingw_64\\bin", "C:\\Qt\\Tools\\mingw1310_64\\bin"].filter((d) =>
+      fs.existsSync(d),
+    );
+    if (extraDirs.length > 0) {
+      const pathKey = Object.keys(qtEnv).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+      qtEnv[pathKey] = [...extraDirs, qtEnv[pathKey] ?? ""].join(";");
+    }
+  }
   const steps = [
     ...SIZES.map((s) => `resize:${s.width}x${s.height};layout`),
     "click:newProjectBtn;layout",
   ].join(";");
-  const rawOut = execFileSync(qtExe, ["--steps", steps], { encoding: "utf8" });
+  const rawOut = execFileSync(qtExe, ["--steps", steps], { encoding: "utf8", env: qtEnv });
   const layoutLines = rawOut
     .split(/\r?\n/)
     .filter((line) => line.startsWith("layout "))

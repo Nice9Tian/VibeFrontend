@@ -482,7 +482,9 @@ function emitLayoutForContainer(
   if (layout.kind === "flow" || (layout.kind === "hbox" && layout.wrap)) {
     const colGap = layout.columnGap ?? layout.gap ?? 0;
     const rowGap = layout.rowGap ?? layout.gap ?? 0;
-    const minContainerH = ownerPlan ? Math.round(ownerPlan.size?.minHeight ?? 0) : 0;
+    const minContainerH = ownerPlan
+      ? Math.round(ownerPlan.size?.minHeight ?? (ownerPlan.kind === "dock" ? prefHeightPlan(ownerPlan) : 0))
+      : 0;
     const maxContainerH = ownerPlan && ownerPlan.size?.maxHeight !== undefined ? Math.round(ownerPlan.size.maxHeight) : 1000000;
     const autoHeight = ownerPlan ? !(ownerPlan.size?.fixedHeight !== undefined || ownerPlan.size?.vertical === "fixed") : true;
     lines.push(

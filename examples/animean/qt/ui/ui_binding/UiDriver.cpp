@@ -9,13 +9,16 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDropEvent>
 #include <QEnterEvent>
 #include <QEventLoop>
+#include <QFrame>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -96,7 +99,7 @@ QStringList compare(Ui &ui)
 QStringList runSteps(Ui &ui, const QStringList &steps)
 {
     QStringList output;
-    waitMs(10);
+    QApplication::processEvents();
     for (const QString &raw : steps) {
         const QString step = raw.trimmed();
         if (step.isEmpty())
@@ -120,8 +123,23 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
         if (verb == QLatin1String("check")) {
             const int row = step.section(QLatin1Char(':'), 2, 2).toInt();
             const QString rawBool = step.section(QLatin1Char(':'), 3, 3);
-            const bool checked = (rawBool == QLatin1String("1") || rawBool == QLatin1String("true"));
-            ui.toggleTreeCheck(id, row, checked);
+            const bool checked = (rawBool == QLatin1String("1") || rawBool == QLatin1String("true") || rawBool == QLatin1String("on"));
+            bool handledViaWidget = false;
+            if (auto *tree = ui.window()->findChild<QTreeWidget *>(id)) {
+                for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                    QTreeWidgetItem *it = tree->topLevelItem(i);
+                    if (it->data(0, Qt::UserRole).toInt() == row && (it->flags() & Qt::ItemIsUserCheckable)) {
+                        const Qt::CheckState targetState = checked ? Qt::Checked : Qt::Unchecked;
+                        if (it->checkState(0) != targetState) {
+                            it->setCheckState(0, targetState);
+                            handledViaWidget = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (!handledViaWidget)
+                ui.toggleTreeCheck(id, row, checked);
             QApplication::processEvents();
             continue;
         }
@@ -129,21 +147,130 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             const int row = step.section(QLatin1Char(':'), 2, 2).toInt();
             const QString rawBool = step.section(QLatin1Char(':'), 3, 3);
             const bool collapsed = (rawBool == QLatin1String("1") || rawBool == QLatin1String("true"));
-            ui.toggleTreeCollapse(id, row, collapsed);
+            bool handledViaWidget = false;
+            if (auto *tree = ui.window()->findChild<QTreeWidget *>(id)) {
+                for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                    QTreeWidgetItem *it = tree->topLevelItem(i);
+                    if (it->data(0, Qt::UserRole).toInt() == row && it->data(0, Qt::UserRole + 3).toBool()) {
+                        if (it->data(0, Qt::UserRole + 4).toBool() != collapsed) {
+                            emit tree->itemDoubleClicked(it, 0);
+                            handledViaWidget = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (!handledViaWidget)
+                ui.toggleTreeCollapse(id, row, collapsed);
             QApplication::processEvents();
             continue;
         }
         if (verb == QLatin1String("drag") || verb == QLatin1String("reorder")) {
             const int from = step.section(QLatin1Char(':'), 2, 2).toInt();
             const int to = step.section(QLatin1Char(':'), 3, 3).toInt();
-            ui.reorderControl(id, from, to);
+            bool handledViaDrop = false;
+            if (auto *tree = ui.window()->findChild<QTreeWidget *>(id)) {
+                QTreeWidgetItem *fromItem = nullptr;
+                QTreeWidgetItem *toItem = nullptr;
+                for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                    QTreeWidgetItem *it = tree->topLevelItem(i);
+                    const int r = it->data(0, Qt::UserRole).toInt();
+                    if (r == from) fromItem = it;
+                    if (r == to) toItem = it;
+                }
+                if (fromItem && toItem && tree->viewport()) {
+                    QMimeData mime;
+                    mime.setProperty("vfDragFromRow", from);
+                    mime.setProperty("vfDragToRow", to);
+                    const QPointF dropPos = tree->visualItemRect(toItem).center();
+                    QDropEvent dropEv(dropPos, Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+                    QApplication::sendEvent(tree->viewport(), &dropEv);
+                    if (!dropEv.isAccepted())
+                        static_cast<QObject &>(ui).eventFilter(tree->viewport(), &dropEv);
+                    handledViaDrop = dropEv.isAccepted();
+                }
+            } else if (auto *list = ui.window()->findChild<QListWidget *>(id)) {
+                if (from >= 0 && from < list->count() && to >= 0 && to < list->count() && list->viewport()) {
+                    QMimeData mime;
+                    mime.setProperty("vfDragFromRow", from);
+                    mime.setProperty("vfDragToRow", to);
+                    const QPointF dropPos = list->visualItemRect(list->item(to)).center();
+                    QDropEvent dropEv(dropPos, Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+                    QApplication::sendEvent(list->viewport(), &dropEv);
+                    if (!dropEv.isAccepted())
+                        static_cast<QObject &>(ui).eventFilter(list->viewport(), &dropEv);
+                    handledViaDrop = dropEv.isAccepted();
+                }
+            }
+            if (!handledViaDrop)
+                ui.reorderControl(id, from, to);
             QApplication::processEvents();
             continue;
         }
         if (verb == QLatin1String("form")) {
             const QString fieldName = step.section(QLatin1Char(':'), 2, 2);
             const QString rawVal = step.section(QLatin1Char(':'), 3);
-            ui.setDataFormField(id, fieldName, rawVal);
+            bool handledViaWidget = false;
+            if (auto *frame = ui.window()->findChild<QFrame *>(id)) {
+                const QList<QWidget *> cells = frame->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+                for (QWidget *cell : cells) {
+                    if (cell->property("vfFieldName").toString() != fieldName || cell->isHidden())
+                        continue;
+                    const QList<QWidget *> inner = cell->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+                    for (QWidget *w : inner) {
+                        const QString role = w->property("vfInputRole").toString();
+                        if (role == QLatin1String("slider")) {
+                            if (auto *slider = qobject_cast<QSlider *>(w)) {
+                                const int targetV = qBound(slider->minimum(), rawVal.toInt(), slider->maximum());
+                                if (slider->value() != targetV) {
+                                    slider->setValue(targetV);
+                                    handledViaWidget = true;
+                                }
+                            }
+                        } else if (role == QLatin1String("combo")) {
+                            if (auto *combo = qobject_cast<QComboBox *>(w)) {
+                                int idx = combo->findData(rawVal);
+                                if (idx < 0)
+                                    idx = combo->findText(rawVal);
+                                if (idx >= 0 && combo->currentIndex() != idx) {
+                                    combo->setCurrentIndex(idx);
+                                    handledViaWidget = true;
+                                }
+                            }
+                        } else if (role == QLatin1String("check")) {
+                            if (auto *cb = qobject_cast<QCheckBox *>(w)) {
+                                const QString s = rawVal.trimmed().toLower();
+                                const bool targetB = (s == QLatin1String("on") || s == QLatin1String("true") || s == QLatin1String("1"));
+                                if (cb->isChecked() != targetB) {
+                                    cb->setChecked(targetB);
+                                    handledViaWidget = true;
+                                }
+                            }
+                        } else if (role == QLatin1String("swatch")) {
+                            if (auto *swBtn = qobject_cast<QPushButton *>(w)) {
+                                if (swBtn->property("vfSwatchColor").toString() == rawVal) {
+                                    swBtn->click();
+                                    handledViaWidget = true;
+                                    break;
+                                }
+                            }
+                        } else if (role == QLatin1String("button") || role == QLatin1String("subwindow")) {
+                            if (auto *btn = qobject_cast<QPushButton *>(w)) {
+                                const QString btnVal = btn->property("vfBtnValue").toString();
+                                if (btnVal.isEmpty() || btnVal == rawVal || rawVal == QLatin1String("true") || rawVal == QLatin1String("1")) {
+                                    btn->click();
+                                    handledViaWidget = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (handledViaWidget)
+                        break;
+                }
+            }
+            if (!handledViaWidget)
+                ui.setDataFormField(id, fieldName, rawVal);
             QApplication::processEvents();
             continue;
         }
