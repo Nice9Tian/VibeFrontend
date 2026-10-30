@@ -47,6 +47,15 @@ function parseDeclObject(decl: ComponentDecl | Record<string, unknown> | string)
   return { ...(decl as Record<string, unknown>) };
 }
 
+function normalizeDeclEffectsForHash(effects: unknown): unknown {
+  if (!effects || typeof effects !== "object" || Array.isArray(effects)) return effects;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(effects as Record<string, unknown>)) {
+    out[k] = typeof v === "string" ? v.replace(/_\d+$/, "") : v;
+  }
+  return out;
+}
+
 /**
  * 计算控件的结构哈希（32 位十六进制 MD5）。
  * type、label、description 不参与计算；换行符与 JSON 缩进/键顺序不影响结果。
@@ -54,6 +63,9 @@ function parseDeclObject(decl: ComponentDecl | Record<string, unknown> | string)
 export function structHash(input: ComponentHashInput): string {
   const declObj = parseDeclObject(input.decl);
   const { type: _type, label: _label, description: _description, ...rest } = declObj;
+  if (rest.effects !== undefined) {
+    rest.effects = normalizeDeclEffectsForHash(rest.effects);
+  }
   const source = normalizeLf(input.source ?? "");
   const style = normalizeLf(input.style ?? "");
   const extraEntries = Object.keys(input.extraFiles ?? {})

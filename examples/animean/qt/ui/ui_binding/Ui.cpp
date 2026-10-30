@@ -23,16 +23,23 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMainWindow>
+#include <QMap>
+#include <QMargins>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMetaMethod>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPen>
 #include <QPointer>
 #include <QSignalBlocker>
 #include <QStatusBar>
+#include <QSvgRenderer>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QVariant>
+#include <QVariantAnimation>
+#include <functional>
 #include <QCheckBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -48,6 +55,234 @@ namespace {
 // 过渡动画超过它自己的时长这么多毫秒还没有结束，就不再等它
 const int kTransitionGraceMs = 300;
 
+// 状态图片控件：同一套 5 状态 SVG（normal / hover / pressed / selected / disabled）用 QSvgRenderer 九宫格绘制，
+// 状态切换带透明度过渡，文字由控件另外画在上面。
+class StateImageWidget : public QWidget
+{
+public:
+    explicit StateImageWidget(QWidget *parent = nullptr)
+        : QWidget(parent)
+        , m_anim(new QVariantAnimation(this))
+    {
+        setAttribute(Qt::WA_Hover, true);
+        m_anim->setStartValue(0.0);
+        m_anim->setEndValue(1.0);
+        QObject::connect(m_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant &v) {
+            m_transitionProgress = v.toReal();
+            update();
+        });
+        QObject::connect(m_anim, &QVariantAnimation::finished, this, [this] {
+            m_transitionProgress = 1.0;
+            m_prevImage.clear();
+            update();
+        });
+    }
+
+    void configure(const QString &basePath, const QMap<QString, QString> &stateFiles, const QMargins &slice, int transitionMs)
+    {
+        m_basePath = basePath;
+        m_stateFiles = stateFiles;
+        m_slice = slice;
+        m_transitionMs = qMax(0, transitionMs);
+        for (auto it = m_stateFiles.begin(); it != m_stateFiles.end(); ++it) {
+            const QString file = it.value();
+            if (!file.isEmpty() && !m_renderers.contains(file)) {
+                auto *renderer = new QSvgRenderer(m_basePath + file, this);
+                m_renderers.insert(file, renderer);
+            }
+        }
+        m_currentImage = m_stateFiles.value(QStringLiteral("normal"));
+    }
+
+    void applyViewState(const QVariantMap &props, const QString &visualState, const QString &stateImage, bool animate)
+    {
+        m_props = props;
+        m_visualState = visualState.isEmpty() ? QStringLiteral("normal") : visualState;
+        const QString nextImg = stateImage.isEmpty() ? m_stateFiles.value(m_visualState, m_stateFiles.value(QStringLiteral("normal"))) : stateImage;
+        if (!nextImg.isEmpty() && nextImg != m_currentImage) {
+            if (animate && m_transitionMs > 0 && !m_currentImage.isEmpty()) {
+                m_prevImage = m_currentImage;
+                m_currentImage = nextImg;
+                m_transitionProgress = 0.0;
+                m_anim->stop();
+                m_anim->setDuration(m_transitionMs);
+                m_anim->setStartValue(0.0);
+                m_anim->setEndValue(1.0);
+                m_anim->start();
+            } else {
+                m_anim->stop();
+                m_prevImage.clear();
+                m_currentImage = nextImg;
+                m_transitionProgress = 1.0;
+            }
+        }
+        update();
+    }
+
+    QString visualState() const { return m_visualState; }
+    QString currentStateImage() const { return m_currentImage; }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF bounds(rect());
+
+        if (m_transitionProgress < 1.0 && !m_prevImage.isEmpty()) {
+            painter.setOpacity(1.0 - m_transitionProgress);
+            renderNineSlice(&painter, m_renderers.value(m_prevImage), bounds);
+            painter.setOpacity(m_transitionProgress);
+            renderNineSlice(&painter, m_renderers.value(m_currentImage), bounds);
+        } else {
+            painter.setOpacity(1.0);
+            renderNineSlice(&painter, m_renderers.value(m_currentImage), bounds);
+        }
+        painter.setOpacity(1.0);
+
+        const QString text = m_props.value(QStringLiteral("text")).toString();
+        if (!text.isEmpty()) {
+            QColor color(QStringLiteral("#e2e8f0"));
+            if (m_visualState == QLatin1String("disabled")) {
+                const QString disCol = m_props.value(QStringLiteral("disabledTextColor")).toString();
+                color = QColor(disCol.isEmpty() ? QStringLiteral("#64748b") : disCol);
+            } else if (m_visualState == QLatin1String("selected")) {
+                const QString selCol = m_props.value(QStringLiteral("selectedTextColor")).toString();
+                color = QColor(selCol.isEmpty() ? QStringLiteral("#ffffff") : selCol);
+            } else {
+                const QString txtCol = m_props.value(QStringLiteral("textColor")).toString();
+                if (!txtCol.isEmpty())
+                    color = QColor(txtCol);
+            }
+            QFont f = font();
+            const int fontSize = m_props.value(QStringLiteral("fontSize")).toInt();
+            f.setPixelSize(fontSize > 0 ? fontSize : 13);
+            f.setWeight(QFont::DemiBold);
+            painter.setFont(f);
+            painter.setPen(color);
+            const QString alignStr = m_props.value(QStringLiteral("align")).toString();
+            Qt::Alignment align = Qt::AlignCenter;
+            if (alignStr == QLatin1String("left"))
+                align = Qt::AlignLeft | Qt::AlignVCenter;
+            else if (alignStr == QLatin1String("right"))
+                align = Qt::AlignRight | Qt::AlignVCenter;
+            painter.drawText(rect().adjusted(10, 0, -10, 0), align, text);
+        }
+    }
+
+private:
+    void renderNineSlice(QPainter *painter, QSvgRenderer *renderer, const QRectF &target) const
+    {
+        if (!renderer || !renderer->isValid() || target.isEmpty())
+            return;
+        QRectF vb = renderer->viewBoxF();
+        if (vb.isEmpty())
+            vb = QRectF(QPointF(0, 0), QSizeF(renderer->defaultSize()));
+        if (vb.isEmpty())
+            vb = QRectF(0, 0, 100, 36);
+
+        const qreal slTop = m_slice.top();
+        const qreal slRight = m_slice.right();
+        const qreal slBottom = m_slice.bottom();
+        const qreal slLeft = m_slice.left();
+        if (slTop <= 0 && slRight <= 0 && slBottom <= 0 && slLeft <= 0) {
+            renderer->render(painter, target);
+            return;
+        }
+
+        const qreal vw = vb.width();
+        const qreal vh = vb.height();
+        const qreal tw = target.width();
+        const qreal th = target.height();
+
+        const qreal sx[4] = { 0.0, qMin(slLeft, vw * 0.5), qMax(qMin(slLeft, vw * 0.5), vw - qMin(slRight, vw * 0.5)), vw };
+        const qreal sy[4] = { 0.0, qMin(slTop, vh * 0.5), qMax(qMin(slTop, vh * 0.5), vh - qMin(slBottom, vh * 0.5)), vh };
+        const qreal dx[4] = { 0.0, qMin(slLeft, tw * 0.5), qMax(qMin(slLeft, tw * 0.5), tw - qMin(slRight, tw * 0.5)), tw };
+        const qreal dy[4] = { 0.0, qMin(slTop, th * 0.5), qMax(qMin(slTop, th * 0.5), th - qMin(slBottom, th * 0.5)), th };
+
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                const qreal sw = sx[c + 1] - sx[c];
+                const qreal sh = sy[r + 1] - sy[r];
+                const qreal dw = dx[c + 1] - dx[c];
+                const qreal dh = dy[r + 1] - dy[r];
+                if (sw <= 0.0 || sh <= 0.0 || dw <= 0.0 || dh <= 0.0)
+                    continue;
+                const QRectF dstPatch(target.left() + dx[c], target.top() + dy[r], dw, dh);
+                const qreal scaleX = dw / sw;
+                const qreal scaleY = dh / sh;
+                const QRectF fullTarget(
+                    dstPatch.left() - sx[c] * scaleX,
+                    dstPatch.top() - sy[r] * scaleY,
+                    vw * scaleX,
+                    vh * scaleY
+                );
+                painter->save();
+                painter->setClipRect(dstPatch, Qt::IntersectClip);
+                renderer->render(painter, fullTarget);
+                painter->restore();
+            }
+        }
+    }
+
+    QString m_basePath;
+    QMap<QString, QString> m_stateFiles;
+    QMap<QString, QSvgRenderer *> m_renderers;
+    QMargins m_slice;
+    int m_transitionMs = 120;
+    QString m_visualState = QStringLiteral("normal");
+    QString m_currentImage;
+    QString m_prevImage;
+    qreal m_transitionProgress = 1.0;
+    QVariantAnimation *m_anim = nullptr;
+    QVariantMap m_props;
+};
+
+// 自绘效果控件：已注册绘制效果时调用实现绘制，未注册（或 --no-effects）时显示虚线占位框。
+class PaintEffectWidget : public QWidget
+{
+public:
+    using PaintCallback = std::function<bool(QPainter *, const QRect &, const QVariantMap &)>;
+
+    explicit PaintEffectWidget(QWidget *parent = nullptr) : QWidget(parent) {}
+
+    void configure(const QString &effectName, PaintCallback paintFn)
+    {
+        m_effectName = effectName;
+        m_paintFn = std::move(paintFn);
+    }
+
+    void applyProps(const QVariantMap &props)
+    {
+        m_props = props;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        if (m_paintFn && m_paintFn(&painter, rect(), m_props))
+            return;
+
+        painter.setPen(QPen(QColor(217, 119, 6, 190), 1, Qt::DashLine));
+        painter.setBrush(QColor(40, 32, 20, 120));
+        painter.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 6, 6);
+        painter.setPen(QColor(251, 191, 36));
+        painter.drawText(
+            rect().adjusted(6, 6, -6, -6),
+            Qt::AlignCenter | Qt::TextWordWrap,
+            QStringLiteral("%1\n[绘制效果占位：%2]").arg(objectName(), m_effectName)
+        );
+    }
+
+private:
+    QString m_effectName;
+    PaintCallback m_paintFn;
+    QVariantMap m_props;
+};
+
 struct PendingEvent
 {
     QString kind;
@@ -60,6 +295,8 @@ struct Control
 {
     QString id;
     QWidget *widget = nullptr;
+    StateImageWidget *stateImageWidget = nullptr;
+    PaintEffectWidget *paintEffectWidget = nullptr;
     // 控件属性名 → Qt 属性名
     QList<QPair<QString, QByteArray>> props;
     // 显示和隐藏时播放的效果的编号，没有是 -1
@@ -69,6 +306,8 @@ struct Control
     int generation = 0;
     // 画布上定下的位置和大小，过渡结束后恢复成它
     QRect designRect;
+    QSize designMinSize;
+    QSize designMaxSize;
     // 正在过渡中，以及这次过渡的动画
     bool transitioning = false;
     QPointer<QAbstractAnimation> transition;
@@ -163,6 +402,7 @@ struct Ui::Private
     void build();
     bool raiseBusinessEvent(const QString &name, const QJSValue &args);
     QAbstractAnimation *createVisibility(int effect, QWidget *target, bool showing);
+    bool paintCustomEffect(int effect, QPainter *painter, const QRect &rect, const QVariantMap &props);
 };
 
 Ui::Ui(QObject *parent)
@@ -244,6 +484,10 @@ QString Ui::widgetDump() const
         one.insert(QStringLiteral("enabled"), !control.widget->testAttribute(Qt::WA_ForceDisabled));
         one.insert(QStringLiteral("props"), props);
         one.insert(QStringLiteral("visible"), !control.widget->isHidden());
+        if (control.stateImageWidget) {
+            one.insert(QStringLiteral("visualState"), control.stateImageWidget->visualState());
+            one.insert(QStringLiteral("stateImage"), control.stateImageWidget->currentStateImage());
+        }
         all.insert(control.id, one);
     }
     return QString::fromUtf8(QJsonDocument(all).toJson(QJsonDocument::Compact));
@@ -326,14 +570,21 @@ bool Ui::eventFilter(QObject *watched, QEvent *event)
             d->dispatch(id, QStringLiteral("mouseenter"));
         break;
     case QEvent::Leave:
+        if (d->pressed == index) {
+            d->pressed = -1;
+            d->doubleClick = false;
+        }
         if (index > 0)
             d->dispatch(id, QStringLiteral("mouseleave"));
         break;
     case QEvent::MouseButtonPress:
     case QEvent::MouseButtonDblClick: {
         auto *mouse = static_cast<QMouseEvent *>(event);
+        int hit = d->controlAt(mouse->globalPosition().toPoint());
+        if (hit < 0 && d->controls.at(index).widget->findChildren<QWidget *>().isEmpty())
+            hit = index;
         // 没被里面的控件处理的事件会再传给外层，外层在这里认出“不是点在我自己身上”，不重复处理
-        if (mouse->button() != Qt::LeftButton || d->controlAt(mouse->globalPosition().toPoint()) != index)
+        if (mouse->button() != Qt::LeftButton || hit != index)
             break;
         d->pressed = index;
         d->doubleClick = event->type() == QEvent::MouseButtonDblClick;
@@ -345,12 +596,17 @@ bool Ui::eventFilter(QObject *watched, QEvent *event)
         auto *mouse = static_cast<QMouseEvent *>(event);
         if (mouse->button() != Qt::LeftButton || d->pressed != index)
             break;
-        const int target = d->controlAt(mouse->globalPosition().toPoint());
+        const bool insideWidget = d->controls.at(index).widget->rect().contains(mouse->position().toPoint());
+        int target = insideWidget ? d->controlAt(mouse->globalPosition().toPoint()) : -1;
+        if (target < 0 && insideWidget && d->controls.at(index).widget->findChildren<QWidget *>().isEmpty())
+            target = index;
         const bool doubleClick = d->doubleClick;
         d->pressed = -1;
         d->doubleClick = false;
         if (target > 0)
             d->dispatch(d->controls.at(target).id, QStringLiteral("mouseup"));
+        else if (index > 0)
+            d->dispatch(id, QStringLiteral("mouseup"));
         // 在同一个控件上按下又松开，才算一次点击
         if (target == index) {
             if (index > 0)
@@ -382,9 +638,13 @@ int Ui::Private::add(const QString &id, QWidget *widget, QList<QPair<QString, QB
     Control control;
     control.id = id;
     control.widget = widget;
+    control.stateImageWidget = dynamic_cast<StateImageWidget *>(widget);
+    control.paintEffectWidget = dynamic_cast<PaintEffectWidget *>(widget);
     control.props = std::move(props);
     control.effect = effect;
     control.designRect = widget->geometry();
+    control.designMinSize = widget->minimumSize();
+    control.designMaxSize = widget->maximumSize();
     // 对象名就是设计项目里的控件 ID，测试和调试都靠它找控件
     widget->setObjectName(id);
     widget->installEventFilter(q);
@@ -631,6 +891,15 @@ void Ui::Private::applyView()
                 if (control.widget->property(link.second.constData()) != wanted)
                     control.widget->setProperty(link.second.constData(), wanted);
             }
+            if (control.stateImageWidget) {
+                const QVariantMap propsMap = props.toVariant().toMap();
+                const QString visualState = view.property(QStringLiteral("visualState")).toString();
+                const QString stateImage = view.property(QStringLiteral("stateImage")).toString();
+                control.stateImageWidget->applyViewState(propsMap, visualState, stateImage, started);
+            }
+            if (control.paintEffectWidget) {
+                control.paintEffectWidget->applyProps(props.toVariant().toMap());
+            }
         }
         setShown(index, view.property(QStringLiteral("visible")).toBool());
     }
@@ -660,6 +929,12 @@ void Ui::Private::setShown(int index, bool shown)
     }
 
     widget->setVisible(true);
+    if (widget->parentWidget() && widget->parentWidget()->layout())
+        widget->parentWidget()->layout()->activate();
+    control.designRect = widget->geometry();
+    control.designMinSize = widget->minimumSize();
+    control.designMaxSize = widget->maximumSize();
+    widget->setMinimumHeight(0);
     control.transitioning = true;
     QAbstractAnimation *animation = createVisibility(control.effect, widget, shown);
     if (!animation) {
@@ -698,8 +973,12 @@ void Ui::Private::clearTransition(int index)
         animation->stop();
         animation->deleteLater();
     }
+    control.widget->setMinimumSize(control.designMinSize);
+    control.widget->setMaximumSize(control.designMaxSize);
     control.widget->setGeometry(control.designRect);
     control.widget->setGraphicsEffect(nullptr);
+    if (control.widget->parentWidget() && control.widget->parentWidget()->layout())
+        control.widget->parentWidget()->layout()->activate();
 }
 
 // 一次过渡结束：动画跑完、没有动画、超时，都走这里。已经被后来的一次取代的，不做任何事。
@@ -1042,6 +1321,33 @@ void Ui::Private::build()
     w_exportResultLabel->setProperty("wordWrap", true);
     add(QStringLiteral("exportResultLabel"), w_exportResultLabel, { { QStringLiteral("text"), "text" }, { QStringLiteral("tone"), "vfTone" }, { QStringLiteral("align"), "vfAlign" } });
 
+    // colorPanelToggleBtn：StateButton
+    auto *w_colorPanelToggleBtn = new StateImageWidget(body_w_inspectorDock);
+    w_colorPanelToggleBtn->configure(
+        QStringLiteral(":/vf/logic/components/StateButton/"),
+        { { QStringLiteral("normal"), QStringLiteral("normal.svg") }, { QStringLiteral("hover"), QStringLiteral("hover.svg") }, { QStringLiteral("pressed"), QStringLiteral("pressed.svg") }, { QStringLiteral("selected"), QStringLiteral("selected.svg") }, { QStringLiteral("disabled"), QStringLiteral("disabled.svg") } },
+        QMargins(8, 8, 8, 8),
+        120
+    );
+    add(QStringLiteral("colorPanelToggleBtn"), w_colorPanelToggleBtn, { { QStringLiteral("selected"), "selected" }, { QStringLiteral("text"), "text" } });
+
+    // colorPanel：容器
+    auto *w_colorPanel = new QFrame(body_w_inspectorDock);
+    w_colorPanel->setFrameShape(QFrame::NoFrame);
+    add(QStringLiteral("colorPanel"), w_colorPanel, {}, 1 /* 效果 PanelExpand */);
+
+    // colorPickerCanvas：ColorPicker
+    auto *w_colorPickerCanvas = new PaintEffectWidget(w_colorPanel);
+    w_colorPickerCanvas->configure(QStringLiteral("ColorPickerDraw"), [this](QPainter *painter, const QRect &rect, const QVariantMap &props) {
+        return paintCustomEffect(0, painter, rect, props);
+    });
+    add(QStringLiteral("colorPickerCanvas"), w_colorPickerCanvas, { { QStringLiteral("brightness"), "brightness" }, { QStringLiteral("hexColor"), "hexColor" }, { QStringLiteral("hue"), "hue" }, { QStringLiteral("saturation"), "saturation" } });
+
+    // colorHexLabel：Label
+    auto *w_colorHexLabel = new QLabel(w_colorPanel);
+    w_colorHexLabel->setProperty("wordWrap", true);
+    add(QStringLiteral("colorHexLabel"), w_colorHexLabel, { { QStringLiteral("text"), "text" }, { QStringLiteral("tone"), "vfTone" }, { QStringLiteral("align"), "vfAlign" } });
+
     // timelineDock：停靠面板（bottom）
     auto *w_timelineDock = new QDockWidget(QStringLiteral("时间轴"), &window);
     w_timelineDock->setFeatures(QDockWidget::NoDockWidgetFeatures);
@@ -1321,6 +1627,12 @@ void Ui::Private::build()
     w_inspectorStack->setMinimumHeight(0);
     w_inspectorStack->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     lay_body_w_inspectorDock->addWidget(w_inspectorStack, 1);
+    w_colorPanelToggleBtn->setFixedHeight(34);
+    w_colorPanelToggleBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    lay_body_w_inspectorDock->addWidget(w_colorPanelToggleBtn, 0);
+    w_colorPanel->setFixedHeight(154);
+    w_colorPanel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    lay_body_w_inspectorDock->addWidget(w_colorPanel, 0);
 
     // inspectorTabs 的排版（grid）
     auto *lay_w_inspectorTabs = new QGridLayout(w_inspectorTabs);
@@ -1387,6 +1699,18 @@ void Ui::Private::build()
     w_exportResultLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     lay_w_exportPage->addWidget(w_exportResultLabel, 0);
     lay_w_exportPage->addStretch(1);
+
+    // colorPanel 的排版（vbox）
+    auto *lay_w_colorPanel = new QVBoxLayout(w_colorPanel);
+    lay_w_colorPanel->setContentsMargins(6, 6, 6, 6);
+    lay_w_colorPanel->setSpacing(6);
+    w_colorPickerCanvas->setFixedHeight(112);
+    w_colorPickerCanvas->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    lay_w_colorPanel->addWidget(w_colorPickerCanvas, 0);
+    w_colorHexLabel->setFixedHeight(24);
+    w_colorHexLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    lay_w_colorPanel->addWidget(w_colorHexLabel, 0);
+    lay_w_colorPanel->addStretch(1);
 
     // timelineDock 的排版（hbox）
     auto *lay_body_w_timelineDock = new QHBoxLayout(body_w_timelineDock);
@@ -1508,10 +1832,31 @@ bool Ui::Private::raiseBusinessEvent(const QString &name, const QJSValue &args)
 // 显示隐藏的过渡：有人提供了实现，就让它创建动画并返回；没有就返回空，由调用方直接切到结束状态。
 QAbstractAnimation *Ui::Private::createVisibility(int effect, QWidget *target, bool showing)
 {
-    Q_UNUSED(effect);
-    Q_UNUSED(target);
-    Q_UNUSED(showing);
+    switch (effect) {
+    case 1: // PanelExpand
+        if (auto *implementation = effects.panelExpand())
+            return implementation->createTransition(target, showing);
+        break;
+    default:
+        break;
+    }
     return nullptr;
+}
+
+// 控件自绘效果：有人提供了实现，就调用它的 paint 并返回 true；没有就返回 false，由调用方显示占位框。
+bool Ui::Private::paintCustomEffect(int effect, QPainter *painter, const QRect &rect, const QVariantMap &props)
+{
+    switch (effect) {
+    case 0: // ColorPickerDraw
+        if (auto *implementation = effects.colorPickerDraw()) {
+            implementation->paint(painter, rect, props);
+            return true;
+        }
+        break;
+    default:
+        break;
+    }
+    return false;
 }
 
 // 业务接口的实现

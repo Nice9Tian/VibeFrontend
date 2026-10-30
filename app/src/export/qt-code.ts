@@ -1,7 +1,7 @@
 // 导出成 Qt 时，随设计项目变化的那些文字：两个接口层的头文件、界面绑定层里的生成部分、接口清单。
 // 固定不变的文件在 app/qt-templates/ 里，是普通的 C++ 和 CMake 文件；其中写着 //@VF:名字@ 的行由这里生成的内容替换。
 import type { Value } from "../expr.ts";
-import { paddingOf, type DockArea, type LayoutSpec } from "../model.ts";
+import { normalizeStateImageSlice, paddingOf, STATE_IMAGE_KEYS, type DockArea, type LayoutSpec } from "../model.ts";
 import type { BusinessState, ControlPlan, EffectSlot, EventParam, InterfaceSummary, WindowPlan } from "./qt.ts";
 
 export interface Context {
@@ -197,6 +197,7 @@ function effectHex(effect: EffectSlot): string {
 
 export function uiEffectsHeader(context: Context): string {
   const { effects } = context.summary;
+  const anyPaint = effects.some((e) => e.kind === "paint");
   const lines: string[] = [
     `// 界面接口层。${GENERATED_NOTE}`,
     "//",
@@ -210,19 +211,26 @@ export function uiEffectsHeader(context: Context): string {
     "#pragma once",
     "",
     "#include <memory>",
+  ];
+  if (anyPaint) {
+    lines.push("#include <QRect>", "#include <QVariantMap>");
+  }
+  lines.push(
     "",
     "class QAbstractAnimation;",
+    ...(anyPaint ? ["class QPainter;"] : []),
     "class QWidget;",
     "",
     "namespace vf {",
-  ];
+  );
   for (const effect of effects) {
     const name = effect.className;
     const hex = effectHex(effect);
+    const isPaint = effect.kind === "paint";
     lines.push(
       "",
       "// ---------------------------------------------------------------------------",
-      `// 效果 ${effect.name}（${oneLine(effect.label)}）：控件显示和隐藏时的过渡`,
+      `// 效果 ${effect.name}（${oneLine(effect.label)}）：${isPaint ? "控件自绘内容" : "控件显示和隐藏时的过渡"}`,
       `// 工具里的实现：设计项目的 ${effect.source}`,
       `// 当前哈希：${effect.hash}`,
       "// ---------------------------------------------------------------------------",
@@ -244,18 +252,28 @@ export function uiEffectsHeader(context: Context): string {
       "public:",
       `    virtual ~${name}() = default;`,
       "",
-      "    // 创建这次过渡的动画并返回它。target：要显示或隐藏的控件。showing：true 为显示，false 为隐藏。",
-      "    // 调用时控件是显示着的，位置和大小是画布上定下的样子。没有动画可做时返回空指针。",
-      "    //",
-      "    // 实现里只做两件事：把控件摆成动画开始时的样子，创建动画并设好起止值。不要自己启动动画。",
-      "    // 其余的事由界面绑定层负责，不用写，写漏了也不会出错：",
-      "    //   - 启动动画，监听它的结束；动画超时没有结束时也照样收尾；",
-      "    //   - 动画结束，或者被下一次过渡打断时，停掉并删除动画，把控件的位置和大小恢复成画布上的样子，",
-      "    //     清掉控件上的图形效果（QGraphicsEffect，例如为了淡入淡出加的透明度效果）；",
-      "    //   - 把控件定到最终的显示或隐藏状态。",
-      "    virtual QAbstractAnimation *createTransition(QWidget *target, bool showing) = 0;",
-      "};",
     );
+    if (isPaint) {
+      lines.push(
+        "    // 在目标控件上绘制内容。painter 已在目标控件上开启；rect 是控件绘图区域；props 是逻辑算出的当前属性。",
+        "    virtual void paint(QPainter *painter, const QRect &rect, const QVariantMap &props) = 0;",
+        "};",
+      );
+    } else {
+      lines.push(
+        "    // 创建这次过渡的动画并返回它。target：要显示或隐藏的控件。showing：true 为显示，false 为隐藏。",
+        "    // 调用时控件是显示着的，位置和大小是画布上定下的样子。没有动画可做时返回空指针。",
+        "    //",
+        "    // 实现里只做两件事：把控件摆成动画开始时的样子，创建动画并设好起止值。不要自己启动动画。",
+        "    // 其余的事由界面绑定层负责，不用写，写漏了也不会出错：",
+        "    //   - 启动动画，监听它的结束；动画超时没有结束时也照样收尾；",
+        "    //   - 动画结束，或者被下一次过渡打断时，停掉并删除动画，把控件的位置和大小恢复成画布上的样子，",
+        "    //     清掉控件上的图形效果（QGraphicsEffect，例如为了淡入淡出加的透明度效果）；",
+        "    //   - 把控件定到最终的显示或隐藏状态。",
+        "    virtual QAbstractAnimation *createTransition(QWidget *target, bool showing) = 0;",
+        "};",
+      );
+    }
   }
   lines.push(
     "",
@@ -316,7 +334,7 @@ function usesExtendedLayout(context: Context): boolean {
 
 /** Ui.cpp 用到的、模板里没有包含的 Qt 控件类 */
 export function includes(context: Context): string {
-  const already = new Set(["QFrame", "QLabel", "QMainWindow", "QWidget", "QComboBox", "QDialog", "QDockWidget", "QListWidget", "QMenu", "QMenuBar", "QStatusBar", "QVBoxLayout"]);
+  const already = new Set(["QFrame", "QLabel", "QMainWindow", "QWidget", "QComboBox", "QDialog", "QDockWidget", "QListWidget", "QMenu", "QMenuBar", "QStatusBar", "QVBoxLayout", "StateImageWidget", "PaintEffectWidget"]);
   const classes = new Set<string>();
   for (const control of context.controls) {
     if (!already.has(control.qtClass)) classes.add(control.qtClass);
@@ -588,6 +606,35 @@ function emitLayoutForContainer(
   }
 }
 
+function emitStateImageConfig(lines: string[], v: string, control: ControlPlan): void {
+  const si = control.stateImages;
+  if (!si) return;
+  const [slTop, slRight, slBottom, slLeft] = normalizeStateImageSlice(si);
+  const trMs = typeof si.transitionMs === "number" && Number.isFinite(si.transitionMs) ? Math.max(0, Math.round(si.transitionMs)) : 120;
+  const pairs: string[] = [];
+  for (const key of STATE_IMAGE_KEYS) {
+    const file = si[key] ?? (key === "pressed" && si.hover ? si.hover : si.normal);
+    if (file) pairs.push(`{ ${qstr(key)}, ${qstr(file)} }`);
+  }
+  lines.push(
+    `    ${v}->configure(`,
+    `        ${qstr(`:/vf/logic/components/${control.type}/`)},`,
+    `        { ${pairs.join(", ")} },`,
+    `        QMargins(${slLeft}, ${slTop}, ${slRight}, ${slBottom}),`,
+    `        ${trMs}`,
+    "    );",
+  );
+}
+
+function emitPaintEffectConfig(lines: string[], v: string, control: ControlPlan): void {
+  const effName = control.paintEffectName ?? control.type;
+  lines.push(
+    `    ${v}->configure(${qstr(effName)}, [this](QPainter *painter, const QRect &rect, const QVariantMap &props) {`,
+    `        return paintCustomEffect(${control.paintEffect}, painter, rect, props);`,
+    "    });",
+  );
+}
+
 function buildFunction(context: Context): string[] {
   const { window, controls, summary } = context;
   if (!usesExtendedLayout(context)) {
@@ -614,6 +661,10 @@ function buildFunction(context: Context): string[] {
       if (control.kind === "container" || control.kind === "placeholder") {
         lines.push(`    ${v}->setFrameShape(QFrame::StyledPanel);`);
         if (control.placeholder !== null) lines.push(`    addPlaceholder(${v}, ${qstr(control.placeholder)});`);
+      } else if (control.kind === "stateImage" && control.stateImages) {
+        emitStateImageConfig(lines, v, control);
+      } else if (control.kind === "paintEffect") {
+        emitPaintEffectConfig(lines, v, control);
       }
       for (const [name, value] of control.fixed) lines.push(`    ${v}->setProperty("${escapeCpp(name)}", ${cppValue(value)});`);
       const props = control.props.map(([name, qtName]) => `{ ${qstr(name)}, "${escapeCpp(qtName)}" }`).join(", ");
@@ -767,6 +818,10 @@ function buildFunction(context: Context): string[] {
       } else if (control.kind === "placeholder") {
         lines.push(`    ${v}->setFrameShape(QFrame::StyledPanel);`);
         if (control.placeholder !== null) lines.push(`    addPlaceholder(${v}, ${qstr(control.placeholder)});`);
+      } else if (control.kind === "stateImage" && control.stateImages) {
+        emitStateImageConfig(lines, v, control);
+      } else if (control.kind === "paintEffect") {
+        emitPaintEffectConfig(lines, v, control);
       }
     }
 
@@ -872,25 +927,50 @@ function raiseFunction(context: Context): string[] {
 
 function effectFunction(context: Context): string[] {
   const { effects } = context.summary;
+  const transitionEffects = effects.map((effect, index) => ({ effect, index })).filter(({ effect }) => effect.kind !== "paint");
+  const paintEffects = effects.map((effect, index) => ({ effect, index })).filter(({ effect }) => effect.kind === "paint");
   const lines: string[] = [
     "// 显示隐藏的过渡：有人提供了实现，就让它创建动画并返回；没有就返回空，由调用方直接切到结束状态。",
     "QAbstractAnimation *Ui::Private::createVisibility(int effect, QWidget *target, bool showing)",
     "{",
   ];
-  if (effects.length === 0) {
+  if (transitionEffects.length === 0) {
     lines.push("    Q_UNUSED(effect);", "    Q_UNUSED(target);", "    Q_UNUSED(showing);", "    return nullptr;", "}");
-    return lines;
+  } else {
+    lines.push("    switch (effect) {");
+    for (const { effect, index } of transitionEffects) {
+      lines.push(
+        `    case ${index}: // ${effect.name}`,
+        `        if (auto *implementation = effects.${effect.getter}())`,
+        "            return implementation->createTransition(target, showing);",
+        "        break;",
+      );
+    }
+    lines.push("    default:", "        break;", "    }", "    return nullptr;", "}");
   }
-  lines.push("    switch (effect) {");
-  effects.forEach((effect, index) => {
-    lines.push(
-      `    case ${index}: // ${effect.name}`,
-      `        if (auto *implementation = effects.${effect.getter}())`,
-      "            return implementation->createTransition(target, showing);",
-      "        break;",
-    );
-  });
-  lines.push("    default:", "        break;", "    }", "    return nullptr;", "}");
+
+  lines.push(
+    "",
+    "// 控件自绘效果：有人提供了实现，就调用它的 paint 并返回 true；没有就返回 false，由调用方显示占位框。",
+    "bool Ui::Private::paintCustomEffect(int effect, QPainter *painter, const QRect &rect, const QVariantMap &props)",
+    "{",
+  );
+  if (paintEffects.length === 0) {
+    lines.push("    Q_UNUSED(effect);", "    Q_UNUSED(painter);", "    Q_UNUSED(rect);", "    Q_UNUSED(props);", "    return false;", "}");
+  } else {
+    lines.push("    switch (effect) {");
+    for (const { effect, index } of paintEffects) {
+      lines.push(
+        `    case ${index}: // ${effect.name}`,
+        `        if (auto *implementation = effects.${effect.getter}()) {`,
+        "            implementation->paint(painter, rect, props);",
+        "            return true;",
+        "        }",
+        "        break;",
+      );
+    }
+    lines.push("    default:", "        break;", "    }", "    return false;", "}");
+  }
   return lines;
 }
 
@@ -1016,9 +1096,12 @@ export function interfaceDoc(context: Context): string {
   else {
     lines.push("| 效果 | 种类 | 要继承的类 | 在设计项目里的实现 | 用在哪些控件上 |", "| --- | --- | --- | --- | --- |");
     effects.forEach((effect, index) => {
-      const users = context.controls.filter((control) => control.effect === index).map((control) => `\`${control.id}\``);
+      const users = context.controls
+        .filter((control) => control.effect === index || control.paintEffect === index)
+        .map((control) => `\`${control.id}\``);
+      const kindLabel = effect.kind === "paint" ? "控件自绘效果" : "显示和隐藏的过渡";
       lines.push(
-        `| \`${effect.name}\`（${oneLine(effect.label)}） | 显示和隐藏的过渡 | \`vf::${effect.className}<${effectHex(effect)}>\` | \`${effect.source}\` | ${users.join("、") || "（没有用到）"} |`,
+        `| \`${effect.name}\`（${oneLine(effect.label)}） | ${kindLabel} | \`vf::${effect.className}<${effectHex(effect)}>\` | \`${effect.source}\` | ${users.join("、") || "（没有用到）"} |`,
       );
     });
   }

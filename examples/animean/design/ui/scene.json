@@ -201,7 +201,7 @@
       "headerHeight": 26,
       "title": "检查器",
       "layout": { "kind": "vbox", "padding": 10, "gap": 8 },
-      "children": ["inspectorTabs", "inspectorStack"]
+      "children": ["inspectorTabs", "inspectorStack", "colorPanelToggleBtn", "colorPanel"]
     },
     "inspectorTabs": {
       "type": "Grid",
@@ -302,6 +302,31 @@
       "width": 232,
       "height": 28,
       "props": { "text": "尚未导出", "tone": "muted" }
+    },
+    "colorPanelToggleBtn": {
+      "type": "StateButton",
+      "width": 240,
+      "height": 34,
+      "props": { "text": "收起调色盘", "selected": true }
+    },
+    "colorPanel": {
+      "type": "VBox",
+      "width": 240,
+      "height": 154,
+      "layout": { "kind": "vbox", "padding": 6, "gap": 6 },
+      "children": ["colorPickerCanvas", "colorHexLabel"]
+    },
+    "colorPickerCanvas": {
+      "type": "ColorPicker",
+      "width": 228,
+      "height": 112,
+      "props": { "hue": 210, "saturation": 78, "brightness": 92, "hexColor": "#3394eb" }
+    },
+    "colorHexLabel": {
+      "type": "Label",
+      "width": 228,
+      "height": 24,
+      "props": { "text": "当前颜色：#3394eb", "tone": "muted" }
     },
 
     "timelineDock": {
