@@ -4,7 +4,7 @@
 //    从浮窗恢复（restore）、关闭后从菜单重新打开、拖动分隔条调整停靠区或并排面板大小；
 // 3. 提供预览模式下的 DOM 交互（拖动标题栏或页签吸附/并排/叠页签/浮出、分隔条拖拽改大小、浮窗拖拽与缩放）。
 
-import { dockHeightForWidth, prefHeight, prefWidth, type ComputedBox, type Scene, type SceneNode } from "./model.ts";
+import { dockMinHeightForWidth, prefHeight, prefWidth, type ComputedBox, type Scene, type SceneNode } from "./model.ts";
 
 export type DockArea = "left" | "right" | "top" | "bottom";
 export type DockSplitOrientation = "horizontal" | "vertical";
@@ -606,7 +606,21 @@ export function dockResizeArea(
   const next = cloneDockLayout(layout);
   const minSize = area === "left" || area === "right" ? 80 : 48;
   const clamped = Math.max(minSize, Math.min(900, Math.round(size)));
-  next.areas[area].size = clamped;
+  const areaSpec = next.areas[area];
+  areaSpec.size = clamped;
+  // 沿厚度方向并排时，停靠区厚度是各组之和，要按比例缩放各组，否则归一化后又回到原来的和
+  const orient = areaSpec.splitOrientation ?? defaultSplitOrientation(area);
+  if (areaSpec.groups.length >= 2 && orient !== defaultSplitOrientation(area)) {
+    const groupEntries = areaSpec.groups.map((group) => {
+      const activeId = group.active && group.tabs.includes(group.active) ? group.active : group.tabs[0];
+      const activeDock = (activeId ? scene.nodes[activeId] : undefined) ?? ({ type: "Dock", width: 240, height: 280 } as SceneNode);
+      return { group, activeDock };
+    });
+    const scaled = distributeGroupAxisSizes(clamped, groupEntries, orient);
+    areaSpec.groups.forEach((group, gi) => {
+      group.size = scaled[gi];
+    });
+  }
   return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
 }
 
@@ -718,6 +732,28 @@ function distributeGroupAxisSizes(
   return out;
 }
 
+/** 窗口放不下全部停靠区时，给中央区留下的最小尺寸。 */
+const MIN_CENTER_WIDTH = 120;
+const MIN_CENTER_HEIGHT = 80;
+
+interface VisibleDockGroup {
+  group: DockGroupSpec;
+  groupIndex: number;
+  visibleTabs: string[];
+  activeId: string;
+  activeDock: SceneNode;
+}
+
+interface EdgeHeights {
+  orient: DockSplitOrientation;
+  /** 横向并排时各组的宽度 */
+  widths: number[];
+  /** 横向并排时只有一个共用厚度；竖向并排时是各组高度 */
+  heights: number[];
+  /** 各高度的内容下限，收窄时不低于它 */
+  floors: number[];
+}
+
 /**
  * 根据 DockLayoutSpec 计算主窗口所有停靠面板、中央区及分隔条的几何框。
  */
@@ -742,7 +778,7 @@ export function computeDockWindowLayout(
 
   const resolveAreaVisibleGroups = (area: DockArea) => {
     const areaSpec = layout.areas[area];
-    const visGroups: Array<{ group: DockGroupSpec; groupIndex: number; visibleTabs: string[]; activeId: string; activeDock: SceneNode }> = [];
+    const visGroups: VisibleDockGroup[] = [];
     areaSpec.groups.forEach((group, groupIndex) => {
       const visibleTabs = group.tabs.filter((tid) => scene.nodes[tid] && isVisible(tid));
       if (visibleTabs.length === 0) {
@@ -801,21 +837,48 @@ export function computeDockWindowLayout(
     }
   };
 
-  // 1. Top 停靠区
-  const topGroups = resolveAreaVisibleGroups("top");
-  let topH = 0;
-  if (topGroups.length > 0) {
-    const orient = layout.areas.top.splitOrientation ?? "horizontal";
+  // 顶部、底部的高度：横向并排时共用一个厚度；竖向并排时各组独立，厚度是各组之和。
+  // 只有换行布局的面板按内容下限撑高，其他面板完全跟随停靠排列。
+  const resolveEdgeHeights = (area: "top" | "bottom", groups: VisibleDockGroup[]): EdgeHeights => {
+    const orient = layout.areas[area].splitOrientation ?? "horizontal";
     if (orient === "horizontal") {
-      const widths = distributeGroupAxisSizes(W, topGroups, "horizontal");
-      const baseTopH = Math.max(40, Math.round(layout.areas.top.size ?? prefHeight(topGroups[0].activeDock)));
-      topH = Math.max(
-        baseTopH,
-        ...topGroups.map((g, idx) => dockHeightForWidth(scene, g.activeDock, widths[idx], isVisible)),
-      );
+      const widths = distributeGroupAxisSizes(W, groups, "horizontal");
+      const base = Math.max(40, Math.round(layout.areas[area].size ?? prefHeight(groups[0].activeDock)));
+      const floor = Math.max(0, ...groups.map((g, idx) => dockMinHeightForWidth(scene, g.activeDock, widths[idx], isVisible)));
+      return { orient, widths, heights: [Math.max(base, floor)], floors: [floor] };
+    }
+    const floors = groups.map((g) => dockMinHeightForWidth(scene, g.activeDock, W, isVisible));
+    const heights = groups.map((g, idx) =>
+      Math.max(40, Math.round(g.group.size ?? layout.areas[area].size ?? prefHeight(g.activeDock)), floors[idx]),
+    );
+    return { orient, widths: [], heights, floors };
+  };
+
+  const topGroups = resolveAreaVisibleGroups("top");
+  const bottomGroups = resolveAreaVisibleGroups("bottom");
+  const topEdge = topGroups.length > 0 ? resolveEdgeHeights("top", topGroups) : null;
+  const bottomEdge = bottomGroups.length > 0 ? resolveEdgeHeights("bottom", bottomGroups) : null;
+
+  // 窗口放不下时只收窄实际尺寸，排列描述里的尺寸不变，窗口放大后恢复
+  const edgeSum = (edge: EdgeHeights | null) => (edge ? edge.heights.reduce((acc, h) => acc + h, 0) : 0);
+  let edgeExcess = edgeSum(topEdge) + edgeSum(bottomEdge) - Math.max(0, midH - MIN_CENTER_HEIGHT);
+  for (const edge of [bottomEdge, topEdge]) {
+    if (!edge) continue;
+    for (let i = edge.heights.length - 1; i >= 0 && edgeExcess > 0; i--) {
+      const cut = Math.min(edgeExcess, Math.max(0, edge.heights[i] - Math.max(40, edge.floors[i])));
+      edge.heights[i] -= cut;
+      edgeExcess -= cut;
+    }
+  }
+
+  // 1. Top 停靠区
+  let topH = 0;
+  if (topEdge) {
+    if (topEdge.orient === "horizontal") {
+      topH = topEdge.heights[0];
       let curX = 0;
       topGroups.forEach((g, idx) => {
-        const gw = widths[idx];
+        const gw = topEdge.widths[idx];
         assignGroupBoxes("top", g, curX, midY, gw, topH);
         curX += gw;
         if (idx < topGroups.length - 1) {
@@ -835,11 +898,7 @@ export function computeDockWindowLayout(
     } else {
       let curY = midY;
       topGroups.forEach((g, idx) => {
-        const gh = Math.max(
-          40,
-          Math.round(g.group.size ?? layout.areas.top.size ?? prefHeight(g.activeDock)),
-          dockHeightForWidth(scene, g.activeDock, W, isVisible),
-        );
+        const gh = topEdge.heights[idx];
         assignGroupBoxes("top", g, 0, curY, W, gh);
         curY += gh;
         topH += gh;
@@ -871,21 +930,14 @@ export function computeDockWindowLayout(
   }
 
   // 2. Bottom 停靠区
-  const bottomGroups = resolveAreaVisibleGroups("bottom");
   let bottomH = 0;
-  if (bottomGroups.length > 0) {
-    const orient = layout.areas.bottom.splitOrientation ?? "horizontal";
-    if (orient === "horizontal") {
-      const widths = distributeGroupAxisSizes(W, bottomGroups, "horizontal");
-      const baseBottomH = Math.max(40, Math.round(layout.areas.bottom.size ?? prefHeight(bottomGroups[0].activeDock)));
-      bottomH = Math.max(
-        baseBottomH,
-        ...bottomGroups.map((g, idx) => dockHeightForWidth(scene, g.activeDock, widths[idx], isVisible)),
-      );
+  if (bottomEdge) {
+    if (bottomEdge.orient === "horizontal") {
+      bottomH = bottomEdge.heights[0];
       const bY = midY + midH - bottomH;
       let curX = 0;
       bottomGroups.forEach((g, idx) => {
-        const gw = widths[idx];
+        const gw = bottomEdge.widths[idx];
         assignGroupBoxes("bottom", g, curX, bY, gw, bottomH);
         curX += gw;
         if (idx < bottomGroups.length - 1) {
@@ -903,17 +955,10 @@ export function computeDockWindowLayout(
         }
       });
     } else {
-      const ghList = bottomGroups.map((g) =>
-        Math.max(
-          40,
-          Math.round(g.group.size ?? layout.areas.bottom.size ?? prefHeight(g.activeDock)),
-          dockHeightForWidth(scene, g.activeDock, W, isVisible),
-        ),
-      );
-      bottomH = ghList.reduce((a, b) => a + b, 0);
+      bottomH = edgeSum(bottomEdge);
       let curY = midY + midH - bottomH;
       bottomGroups.forEach((g, idx) => {
-        const gh = ghList[idx];
+        const gh = bottomEdge.heights[idx];
         assignGroupBoxes("bottom", g, 0, curY, W, gh);
         curY += gh;
         if (idx < bottomGroups.length - 1) {
@@ -946,13 +991,35 @@ export function computeDockWindowLayout(
   const centerY = midY + topH;
   const centerH = Math.max(0, midH - topH - bottomH);
 
-  // 3. Left 停靠区
+  // 左右停靠区的宽度：竖向并排时共用一个厚度；横向并排时各组独立，厚度是各组之和
+  const resolveSideWidths = (area: "left" | "right", groups: VisibleDockGroup[]): number[] => {
+    const orient = layout.areas[area].splitOrientation ?? "vertical";
+    if (orient === "vertical") {
+      return [Math.max(60, Math.round(layout.areas[area].size ?? prefWidth(groups[0].activeDock)))];
+    }
+    return groups.map((g) => Math.max(60, Math.round(g.group.size ?? layout.areas[area].size ?? prefWidth(g.activeDock))));
+  };
+
   const leftGroups = resolveAreaVisibleGroups("left");
+  const rightGroups = resolveAreaVisibleGroups("right");
+  const leftWidths = leftGroups.length > 0 ? resolveSideWidths("left", leftGroups) : [];
+  const rightWidths = rightGroups.length > 0 ? resolveSideWidths("right", rightGroups) : [];
+  const sumOf = (list: number[]) => list.reduce((acc, v) => acc + v, 0);
+  let sideExcess = sumOf(leftWidths) + sumOf(rightWidths) - Math.max(0, W - MIN_CENTER_WIDTH);
+  for (const list of [rightWidths, leftWidths]) {
+    for (let i = list.length - 1; i >= 0 && sideExcess > 0; i--) {
+      const cut = Math.min(sideExcess, Math.max(0, list[i] - 60));
+      list[i] -= cut;
+      sideExcess -= cut;
+    }
+  }
+
+  // 3. Left 停靠区
   let leftW = 0;
   if (leftGroups.length > 0) {
     const orient = layout.areas.left.splitOrientation ?? "vertical";
     if (orient === "vertical") {
-      leftW = Math.max(60, Math.round(layout.areas.left.size ?? prefWidth(leftGroups[0].activeDock)));
+      leftW = leftWidths[0];
       const heights = distributeGroupAxisSizes(centerH, leftGroups, "vertical");
       let curY = centerY;
       leftGroups.forEach((g, idx) => {
@@ -975,7 +1042,7 @@ export function computeDockWindowLayout(
       });
     } else {
       leftGroups.forEach((g, idx) => {
-        const gw = Math.max(60, Math.round(g.group.size ?? layout.areas.left.size ?? prefWidth(g.activeDock)));
+        const gw = leftWidths[idx];
         assignGroupBoxes("left", g, leftW, centerY, gw, centerH);
         leftW += gw;
         if (idx < leftGroups.length - 1) {
@@ -1006,12 +1073,11 @@ export function computeDockWindowLayout(
   }
 
   // 4. Right 停靠区
-  const rightGroups = resolveAreaVisibleGroups("right");
   let rightW = 0;
   if (rightGroups.length > 0) {
     const orient = layout.areas.right.splitOrientation ?? "vertical";
     if (orient === "vertical") {
-      rightW = Math.max(60, Math.round(layout.areas.right.size ?? prefWidth(rightGroups[0].activeDock)));
+      rightW = rightWidths[0];
       const rX = W - rightW;
       const heights = distributeGroupAxisSizes(centerH, rightGroups, "vertical");
       let curY = centerY;
@@ -1034,11 +1100,10 @@ export function computeDockWindowLayout(
         }
       });
     } else {
-      const gwList = rightGroups.map((g) => Math.max(60, Math.round(g.group.size ?? layout.areas.right.size ?? prefWidth(g.activeDock))));
-      rightW = gwList.reduce((a, b) => a + b, 0);
+      rightW = sumOf(rightWidths);
       let rCurX = W - rightW;
       rightGroups.forEach((g, idx) => {
-        const gw = gwList[idx];
+        const gw = rightWidths[idx];
         assignGroupBoxes("right", g, rCurX, centerY, gw, centerH);
         rCurX += gw;
         if (idx < rightGroups.length - 1) {
@@ -1099,6 +1164,40 @@ export function computeDockWindowLayout(
   };
 
   return { dockBoxes, centralBox, splitters, activeTabByDock };
+}
+
+/**
+ * 把排列描述换算成当前窗口尺寸下的实际尺寸：换行面板撑高、窗口放不下时收窄、并排比例随窗口缩放后，
+ * 描述里的尺寸与实际不同。和 Qt 实测比较时用这一份；没有可见面板的组和停靠区不带尺寸。
+ */
+export function effectiveDockLayout(
+  layout: DockLayoutSpec,
+  boxOf: (dockId: string) => { width: number; height: number; visible: boolean } | undefined,
+): DockLayoutSpec {
+  const out = cloneDockLayout(layout);
+  for (const area of DOCK_AREAS) {
+    const areaSpec = out.areas[area];
+    const orient = areaSpec.splitOrientation ?? defaultSplitOrientation(area);
+    const horizontalThickness = area === "left" || area === "right";
+    const alongThickness = orient !== defaultSplitOrientation(area);
+    const shown: Array<{ group: DockGroupSpec; shownTab: string; box: { width: number; height: number } }> = [];
+    for (const group of areaSpec.groups) {
+      delete group.size;
+      const shownTab = group.tabs.find((tid) => boxOf(tid)?.visible);
+      if (shownTab) shown.push({ group, shownTab, box: boxOf(shownTab)! });
+    }
+    let thickness = 0;
+    for (const { group, shownTab, box } of shown) {
+      // 描述里的激活页签可能已关闭，这时显示的是组里另一个页签
+      group.active = shownTab;
+      const groupThickness = horizontalThickness ? box.width : box.height;
+      thickness = alongThickness ? thickness + groupThickness : Math.max(thickness, groupThickness);
+      if (shown.length >= 2) group.size = orient === "horizontal" ? box.width : box.height;
+    }
+    if (thickness > 0) areaSpec.size = thickness;
+    else delete areaSpec.size;
+  }
+  return out;
 }
 
 // ---------- 预览模式下的 DOM 停靠交互控制 ----------

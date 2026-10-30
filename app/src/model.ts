@@ -1151,16 +1151,20 @@ export function flowHeightForWidth(
   return clampHeight(node, padTop + rowsH + padBottom);
 }
 
-export function dockHeightForWidth(
+/**
+ * 停靠面板按给定宽度放下内容所需的最小高度，用作顶部、底部停靠区的下限。
+ * 只有换行布局的高度随宽度变化，才有内容下限；其他面板的高度完全由停靠排列决定，返回 0。
+ * 设计高度不是下限：面板被移到别的停靠区后，厚度跟随该停靠区。
+ */
+export function dockMinHeightForWidth(
   scene: Scene,
   dock: SceneNode,
   availWidth: number,
   isVisible: (id: string) => boolean,
 ): number {
-  const baseH = prefHeight(dock);
   const layout = layoutOf(dock);
   if (!layout || !isWrapLayout(layout) || dock.size?.fixedHeight !== undefined || dock.size?.vertical === "fixed") {
-    return baseH;
+    return 0;
   }
   const hdrH = dock.headerHeight ?? 26;
   const [padTop, padRight, padBottom, padLeft] = paddingOf(layout);
@@ -1169,9 +1173,9 @@ export function dockHeightForWidth(
   const innerW = Math.max(0, availWidth - padLeft - padRight);
   const visChildren = (dock.children ?? []).filter((cid) => Boolean(scene.nodes[cid]) && isVisible(cid));
   const rows = computeFlowRows(scene, visChildren, innerW, colGap);
-  if (rows.length === 0) return baseH;
+  if (rows.length === 0) return 0;
   const rowsH = rows.reduce((sum, r) => sum + r.rowH, 0) + Math.max(0, rows.length - 1) * rowGap;
-  return clampHeight(dock, Math.max(baseH, hdrH + padTop + rowsH + padBottom));
+  return clampHeight(dock, hdrH + padTop + rowsH + padBottom);
 }
 
 /**

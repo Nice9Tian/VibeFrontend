@@ -39,6 +39,7 @@ import {
   worldToNodeLocalInScene,
 } from "../transform.ts";
 import { Runtime, type ActionSimMode, type NodeView } from "../runtime.ts";
+import { effectiveDockLayout } from "../dock.ts";
 import { dumpRuntime } from "./dump.ts";
 
 /** 导出时写进 project.json 的内容：逻辑运行层需要的那一部分项目数据。 */
@@ -242,6 +243,12 @@ export function computeLayout(width: number, height: number): Record<string, { x
 
 export function dockLayout(): string {
   return JSON.stringify(runtime.getDockLayout(scene.root));
+}
+
+/** 当前窗口尺寸下应有的实际排列，check 用它和 Qt 实测比较。 */
+export function effectiveDockLayoutAt(width: number, height: number): string {
+  const boxes = computeLayout(width, height);
+  return JSON.stringify(effectiveDockLayout(runtime.getDockLayout(scene.root), (id) => boxes[id]));
 }
 
 export function dockOp(op: string, argsJson: string): OutgoingEvent[] {

@@ -36,6 +36,10 @@ public:
     QString layoutDump() const;
     // 当前各停靠面板在窗口中的实际停靠排列（四个区域、并排、页签组、浮窗）。一行 JSON，和 stateDump 里的 docks 对照。
     QString dockDump() const;
+    // 逻辑层认为当前窗口尺寸下应有的实际排列，和 dockDump 比较
+    QString wantedDockDump() const;
+    // 把 dockId 拖到 globalPos 松手会发生什么（"tabify"、"split:after:vertical"、"move:left"、"float"），驱动用它找落点
+    QString dockDropAt(const QString &dockId, const QPoint &globalPos) const;
 
     // 供自动化测试驱动触发请求事件、切换动作模拟方式、执行停靠操作、拨动预览时钟与驱动复合控件事件
     void triggerRequest(const QString &name, const QString &jsonArgs = QString());

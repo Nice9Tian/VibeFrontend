@@ -53,14 +53,21 @@ void sendMouse(QWidget *widget, QEvent::Type type, Qt::MouseButtons buttons)
     QApplication::sendEvent(widget, &event);
 }
 
-void sendMouseDrag(QWidget *widget, const QPoint &startLocal, const QPoint &endGlobal, Qt::KeyboardModifiers mods = Qt::NoModifier)
+// 和真实鼠标一样：按下落在哪个最里层的控件上，直到松开的所有事件都发给它
+// viaMidpoint 为 false 时一步拖到终点：分隔条每移动一次都按比例重算并取整，分两步会和一步到位差 1 像素
+void sendMouseDrag(QWidget *pressed, const QPoint &pressLocal, const QPoint &endGlobal, Qt::KeyboardModifiers mods = Qt::NoModifier, bool viaMidpoint = true)
 {
+    QWidget *child = pressed->childAt(pressLocal);
+    QWidget *widget = child ? child : pressed;
+    const QPoint startLocal = widget->mapFrom(pressed, pressLocal);
     const QPoint startGlobal = widget->mapToGlobal(startLocal);
     const QPoint midGlobal((startGlobal.x() + endGlobal.x()) / 2, (startGlobal.y() + endGlobal.y()) / 2);
     QMouseEvent press(QEvent::MouseButtonPress, QPointF(startLocal), QPointF(startGlobal), Qt::LeftButton, Qt::LeftButton, mods);
     QApplication::sendEvent(widget, &press);
-    QMouseEvent move1(QEvent::MouseMove, QPointF(widget->mapFromGlobal(midGlobal)), QPointF(midGlobal), Qt::NoButton, Qt::LeftButton, mods);
-    QApplication::sendEvent(widget, &move1);
+    if (viaMidpoint) {
+        QMouseEvent move1(QEvent::MouseMove, QPointF(widget->mapFromGlobal(midGlobal)), QPointF(midGlobal), Qt::NoButton, Qt::LeftButton, mods);
+        QApplication::sendEvent(widget, &move1);
+    }
     QMouseEvent move2(QEvent::MouseMove, QPointF(widget->mapFromGlobal(endGlobal)), QPointF(endGlobal), Qt::NoButton, Qt::LeftButton, mods);
     QApplication::sendEvent(widget, &move2);
     QMouseEvent release(QEvent::MouseButtonRelease, QPointF(widget->mapFromGlobal(endGlobal)), QPointF(endGlobal), Qt::LeftButton, Qt::NoButton, mods);
@@ -89,6 +96,64 @@ T *findVisibleWidget(QWidget *root, const QString &objectName)
     return nullptr;
 }
 
+// 拖一个面板时按住的地方：它的页签按钮（没激活的页签也能直接拖）
+QPushButton *dockDragHandle(Ui &ui, const QString &dockId)
+{
+    return findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_tab_") + dockId);
+}
+
+// 叠页签时只有激活的面板在窗口里，其余的被 QMainWindow 移到窗口外面，所以按位置认
+QDockWidget *shownDockOfGroup(Ui &ui, QDockWidget *dock)
+{
+    auto *mw = qobject_cast<QMainWindow *>(ui.window());
+    if (!mw)
+        return dock;
+    QList<QDockWidget *> group = mw->tabifiedDockWidgets(dock);
+    group.prepend(dock);
+    for (QDockWidget *member : group) {
+        if (member && !member->isHidden() && mw->rect().intersects(member->geometry()))
+            return member;
+    }
+    return dock;
+}
+
+// 在面板上找一个松手会触发 wanted 的点，离 preferred 最近的优先。
+// 找不到说明这个操作拖不出来（比如面板太薄，都落在窗口边缘的吸附带里），和预览里的手势一样做不到
+bool findDropPoint(Ui &ui, const QString &dockId, QDockWidget *target, const QString &wanted, const QPoint &preferred, QPoint *outGlobal)
+{
+    bool found = false;
+    qint64 bestDist = 0;
+    for (int y = 1; y < target->height(); y += 3) {
+        for (int x = 1; x < target->width(); x += 3) {
+            const QPoint global = target->mapToGlobal(QPoint(x, y));
+            if (ui.dockDropAt(dockId, global) != wanted)
+                continue;
+            const qint64 dx = x - preferred.x();
+            const qint64 dy = y - preferred.y();
+            const qint64 dist = dx * dx + dy * dy;
+            if (!found || dist < bestDist) {
+                found = true;
+                bestDist = dist;
+                *outGlobal = global;
+            }
+        }
+    }
+    return found;
+}
+
+// 标题栏上没有按钮的一点；按钮把标题栏占满时返回 false
+bool headerBlankPoint(QWidget *header, QPoint *out)
+{
+    for (int x = header->width() / 2; x > 0; x -= 4) {
+        const QPoint p(x, header->height() / 2);
+        if (!header->childAt(p)) {
+            *out = p;
+            return true;
+        }
+    }
+    return false;
+}
+
 QString toText(const QJsonValue &value)
 {
     return QString::fromUtf8(QJsonDocument(QJsonObject{ { QStringLiteral("v"), value } }).toJson(QJsonDocument::Compact));
@@ -106,18 +171,18 @@ bool dockLayoutsMatch(const QJsonObject &wanted, const QJsonObject &actual, int 
         if (wGroups.size() != aGroups.size())
             return false;
         if (!wGroups.isEmpty()) {
-            if (qAbs(wArea.value(QStringLiteral("size")).toInt() - aArea.value(QStringLiteral("size")).toInt()) > tolerancePx)
+            if (wArea.contains(QStringLiteral("size"))
+                && qAbs(wArea.value(QStringLiteral("size")).toInt() - aArea.value(QStringLiteral("size")).toInt()) > tolerancePx)
                 return false;
-            int wSum = 0;
-            int aSum = 0;
-            if (wGroups.size() >= 2) {
-                if (wArea.value(QStringLiteral("splitOrientation")).toString() != aArea.value(QStringLiteral("splitOrientation")).toString())
-                    return false;
-                for (int gi = 0; gi < wGroups.size(); ++gi) {
-                    wSum += wGroups.at(gi).toObject().value(QStringLiteral("size")).toInt();
-                    aSum += aGroups.at(gi).toObject().value(QStringLiteral("size")).toInt();
-                }
+            // 并排方向只能从两个以上看得见的组的位置量出来
+            int shownGroups = 0;
+            for (const QJsonValue &wg : wGroups) {
+                if (wg.toObject().contains(QStringLiteral("size")))
+                    ++shownGroups;
             }
+            if (shownGroups >= 2
+                && wArea.value(QStringLiteral("splitOrientation")).toString() != aArea.value(QStringLiteral("splitOrientation")).toString())
+                return false;
             for (int gi = 0; gi < wGroups.size(); ++gi) {
                 const QJsonObject wg = wGroups.at(gi).toObject();
                 const QJsonObject ag = aGroups.at(gi).toObject();
@@ -125,15 +190,9 @@ bool dockLayoutsMatch(const QJsonObject &wanted, const QJsonObject &actual, int 
                     return false;
                 if (wg.value(QStringLiteral("active")).toString() != ag.value(QStringLiteral("active")).toString())
                     return false;
-                if (wGroups.size() >= 2) {
-                    const int wgSize = wg.value(QStringLiteral("size")).toInt();
-                    const int agSize = ag.value(QStringLiteral("size")).toInt();
-                    const int expectedSize = (wSum > 0 && aSum > 0)
-                        ? qRound(double(wgSize) * double(aSum) / double(wSum))
-                        : wgSize;
-                    if (qAbs(expectedSize - agSize) > tolerancePx)
-                        return false;
-                }
+                if (wg.contains(QStringLiteral("size"))
+                    && qAbs(wg.value(QStringLiteral("size")).toInt() - ag.value(QStringLiteral("size")).toInt()) > tolerancePx)
+                    return false;
             }
         }
     }
@@ -187,7 +246,7 @@ QStringList compare(Ui &ui)
         }
     }
     if (stateRoot.contains(QStringLiteral("docks"))) {
-        const QJsonObject wantedDocks = stateRoot.value(QStringLiteral("docks")).toObject();
+        const QJsonObject wantedDocks = QJsonDocument::fromJson(ui.wantedDockDump().toUtf8()).object();
         const QJsonObject actualDocks = QJsonDocument::fromJson(ui.dockDump().toUtf8()).object();
         if (!dockLayoutsMatch(wantedDocks, actualDocks)) {
             lines.append(QStringLiteral("check MISMATCH docks wanted=%1 actual=%2")
@@ -427,26 +486,15 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             const QString arg4 = step.section(QLatin1Char(':'), 5, 5);
             QJsonObject args;
             if (op == QLatin1String("tabify")) {
-                auto *hdr = findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg2);
-                if (!hdr) {
-                    if (auto *tabBtn = findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_tab_") + arg2)) {
-                        click(tabBtn);
-                        QApplication::processEvents();
-                        hdr = findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg2);
-                    }
-                }
+                QPushButton *handle = dockDragHandle(ui, arg2);
                 auto *targetDock = ui.window()->findChild<QDockWidget *>(arg1);
-                if (hdr && targetDock && !targetDock->isHidden()) {
-                    QDockWidget *visualTarget = targetDock;
-                    if (auto *mw = qobject_cast<QMainWindow *>(ui.window())) {
-                        for (QDockWidget *p : mw->tabifiedDockWidgets(targetDock)) {
-                            if (p && !p->isHidden() && p->height() > visualTarget->height())
-                                visualTarget = p;
-                        }
+                if (handle && arg1 != arg2 && targetDock && !targetDock->isHidden() && !targetDock->isFloating()) {
+                    QDockWidget *visualTarget = shownDockOfGroup(ui, targetDock);
+                    QPoint endGlobal;
+                    if (findDropPoint(ui, arg2, visualTarget, QStringLiteral("tabify"), visualTarget->rect().center(), &endGlobal)) {
+                        sendMouseDrag(handle, handle->rect().center(), endGlobal);
+                        continue;
                     }
-                    const QPoint endGlobal = visualTarget->mapToGlobal(QPoint(visualTarget->width() / 2, 12));
-                    sendMouseDrag(hdr, hdr->rect().center(), endGlobal);
-                    continue;
                 }
                 args.insert(QStringLiteral("target"), arg1);
                 args.insert(QStringLiteral("dock"), arg2);
@@ -493,8 +541,16 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                             const QPoint curRel = ui.window()->mapFromGlobal(dw->mapToGlobal(QPoint(0, 0)));
                             const QPoint delta(tx - curRel.x(), ty - curRel.y());
                             if (delta != QPoint(0, 0)) {
-                                const QPoint startGlobal = hdr->mapToGlobal(hdr->rect().center());
-                                sendMouseDrag(hdr, hdr->rect().center(), startGlobal + delta, Qt::ShiftModifier);
+                                QPoint pressAt;
+                                QWidget *pressOn = hdr;
+                                if (!headerBlankPoint(hdr, &pressAt)) {
+                                    pressOn = dockDragHandle(ui, arg1);
+                                    pressAt = pressOn ? pressOn->rect().center() : QPoint();
+                                }
+                                if (pressOn) {
+                                    const QPoint startGlobal = pressOn->mapToGlobal(pressAt);
+                                    sendMouseDrag(pressOn, pressAt, startGlobal + delta, Qt::ShiftModifier);
+                                }
                             }
                         }
                         if (parts.size() >= 4) {
@@ -537,15 +593,7 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                     args.insert(QStringLiteral("area"), arg2);
             } else if (op == QLatin1String("move")) {
                 if (arg3.isEmpty()) {
-                    auto *hdr = findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg1);
-                    if (!hdr) {
-                        if (auto *tabBtn = findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_tab_") + arg1)) {
-                            click(tabBtn);
-                            QApplication::processEvents();
-                            hdr = findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg1);
-                        }
-                    }
-                    if (hdr) {
+                    if (QPushButton *handle = dockDragHandle(ui, arg1)) {
                         const int w = ui.window()->width();
                         const int h = ui.window()->height();
                         QPoint edgeLocal(w / 2, h / 2);
@@ -557,21 +605,8 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                             edgeLocal = QPoint(w / 2, 40);
                         else if (arg2 == QLatin1String("bottom"))
                             edgeLocal = QPoint(w / 2, h - 36);
-                        bool covered = false;
-                        const QList<QDockWidget *> allDocks = ui.window()->findChildren<QDockWidget *>();
-                        for (QDockWidget *other : allDocks) {
-                            if (!other || other->objectName() == arg1 || other->isHidden() || other->isFloating())
-                                continue;
-                            const QRect r(ui.window()->mapFromGlobal(other->mapToGlobal(QPoint(0, 0))), other->size());
-                            if (r.contains(edgeLocal)) {
-                                covered = true;
-                                break;
-                            }
-                        }
-                        if (!covered) {
-                            sendMouseDrag(hdr, hdr->rect().center(), ui.window()->mapToGlobal(edgeLocal));
-                            continue;
-                        }
+                        sendMouseDrag(handle, handle->rect().center(), ui.window()->mapToGlobal(edgeLocal));
+                        continue;
                     }
                 }
                 args.insert(QStringLiteral("dock"), arg1);
@@ -579,42 +614,34 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                 if (!arg3.isEmpty())
                     args.insert(QStringLiteral("index"), arg3.toInt());
             } else if (op == QLatin1String("split")) {
-                auto *hdr = findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg2);
-                if (!hdr) {
-                    if (auto *tabBtn = findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_tab_") + arg2)) {
-                        click(tabBtn);
-                        QApplication::processEvents();
-                        hdr = findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg2);
-                    }
-                }
+                QPushButton *handle = dockDragHandle(ui, arg2);
                 auto *targetDock = ui.window()->findChild<QDockWidget *>(arg1);
-                if (hdr && targetDock && !targetDock->isHidden()) {
-                    QDockWidget *visualTarget = targetDock;
-                    if (auto *mw = qobject_cast<QMainWindow *>(ui.window())) {
-                        for (QDockWidget *p : mw->tabifiedDockWidgets(targetDock)) {
-                            if (p && !p->isHidden() && p->height() > visualTarget->height())
-                                visualTarget = p;
-                        }
-                    }
+                if (handle && arg1 != arg2 && targetDock && !targetDock->isHidden() && !targetDock->isFloating()) {
+                    QDockWidget *visualTarget = shownDockOfGroup(ui, targetDock);
                     const QString pos = arg3.isEmpty() ? QStringLiteral("after") : arg3;
                     QString orient = arg4;
                     if (orient.isEmpty()) {
+                        // 不写方向时沿用该停靠区现有的并排方向，和逻辑层相同
                         auto *mw = qobject_cast<QMainWindow *>(ui.window());
                         const Qt::DockWidgetArea a = mw ? mw->dockWidgetArea(visualTarget) : Qt::LeftDockWidgetArea;
-                        orient = (a == Qt::LeftDockWidgetArea || a == Qt::RightDockWidgetArea)
-                            ? QStringLiteral("vertical")
-                            : QStringLiteral("horizontal");
+                        const bool side = (a == Qt::LeftDockWidgetArea || a == Qt::RightDockWidgetArea);
+                        const QString areaKey = a == Qt::LeftDockWidgetArea ? QStringLiteral("left")
+                            : a == Qt::RightDockWidgetArea ? QStringLiteral("right")
+                            : a == Qt::TopDockWidgetArea ? QStringLiteral("top") : QStringLiteral("bottom");
+                        const QJsonObject curDocks = QJsonDocument::fromJson(ui.dockDump().toUtf8()).object();
+                        orient = curDocks.value(QStringLiteral("areas")).toObject().value(areaKey).toObject()
+                                     .value(QStringLiteral("splitOrientation")).toString(side ? QStringLiteral("vertical") : QStringLiteral("horizontal"));
                     }
-                    const int hdrH = 26;
-                    const int bodyH = qMax(20, visualTarget->height() - hdrH);
-                    QPoint targetLocal(visualTarget->width() / 2, hdrH + bodyH / 2);
-                    if (orient == QLatin1String("vertical")) {
-                        targetLocal.setY(hdrH + int(bodyH * (pos == QLatin1String("before") ? 0.12 : 0.88)));
-                    } else {
-                        targetLocal.setX(int(visualTarget->width() * (pos == QLatin1String("before") ? 0.10 : 0.90)));
+                    QPoint preferred = visualTarget->rect().center();
+                    if (orient == QLatin1String("vertical"))
+                        preferred.setY(int(visualTarget->height() * (pos == QLatin1String("before") ? 0.12 : 0.88)));
+                    else
+                        preferred.setX(int(visualTarget->width() * (pos == QLatin1String("before") ? 0.10 : 0.90)));
+                    QPoint endGlobal;
+                    if (findDropPoint(ui, arg2, visualTarget, QStringLiteral("split:%1:%2").arg(pos, orient), preferred, &endGlobal)) {
+                        sendMouseDrag(handle, handle->rect().center(), endGlobal);
+                        continue;
                     }
-                    sendMouseDrag(hdr, hdr->rect().center(), visualTarget->mapToGlobal(targetLocal));
-                    continue;
                 }
                 args.insert(QStringLiteral("target"), arg1);
                 args.insert(QStringLiteral("dock"), arg2);
@@ -639,7 +666,7 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                         else if (arg1 == QLatin1String("bottom"))
                             delta.setY(-(targetSize - curSize));
                         const QPoint startGlobal = sp->mapToGlobal(sp->rect().center());
-                        sendMouseDrag(sp, sp->rect().center(), startGlobal + delta);
+                        sendMouseDrag(sp, sp->rect().center(), startGlobal + delta, Qt::NoModifier, false);
                         continue;
                     }
                 }
@@ -658,7 +685,7 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                         const bool horiz = areaObj.value(QStringLiteral("splitOrientation")).toString() == QLatin1String("horizontal");
                         const QPoint delta = horiz ? QPoint(targetSize - curSize, 0) : QPoint(0, targetSize - curSize);
                         const QPoint startGlobal = sp->mapToGlobal(sp->rect().center());
-                        sendMouseDrag(sp, sp->rect().center(), startGlobal + delta);
+                        sendMouseDrag(sp, sp->rect().center(), startGlobal + delta, Qt::NoModifier, false);
                         continue;
                     }
                 }

@@ -4040,10 +4040,29 @@ var VF = (function(exports) {
 	}
 	/** 拖动停靠区与中央区之间的分隔条，调整停靠区厚度（宽度或高度）。 */
 	function dockResizeArea(layout, scene, winNode, area, size) {
-		var _winNode$width9, _winNode$height9;
+		var _areaSpec$splitOrient3, _winNode$width9, _winNode$height9;
 		const next = cloneDockLayout(layout);
 		const clamped = Math.max(area === "left" || area === "right" ? 80 : 48, Math.min(900, Math.round(size)));
-		next.areas[area].size = clamped;
+		const areaSpec = next.areas[area];
+		areaSpec.size = clamped;
+		const orient = (_areaSpec$splitOrient3 = areaSpec.splitOrientation) !== null && _areaSpec$splitOrient3 !== void 0 ? _areaSpec$splitOrient3 : defaultSplitOrientation(area);
+		if (areaSpec.groups.length >= 2 && orient !== defaultSplitOrientation(area)) {
+			const scaled = distributeGroupAxisSizes(clamped, areaSpec.groups.map((group) => {
+				var _ref6;
+				const activeId = group.active && group.tabs.includes(group.active) ? group.active : group.tabs[0];
+				return {
+					group,
+					activeDock: (_ref6 = activeId ? scene.nodes[activeId] : void 0) !== null && _ref6 !== void 0 ? _ref6 : {
+						type: "Dock",
+						width: 240,
+						height: 280
+					}
+				};
+			}), orient);
+			areaSpec.groups.forEach((group, gi) => {
+				group.size = scaled[gi];
+			});
+		}
 		return normalizeDockLayout(scene, _objectSpread2(_objectSpread2({}, winNode), {}, {
 			type: "Window",
 			width: (_winNode$width9 = winNode === null || winNode === void 0 ? void 0 : winNode.width) !== null && _winNode$width9 !== void 0 ? _winNode$width9 : 1280,
@@ -4052,7 +4071,7 @@ var VF = (function(exports) {
 		}));
 	}
 	function computeReferenceAreaSplitSpan(layout, scene, winNode, area) {
-		var _winNode$menuBar$heig, _statusNode$height, _areaSpec$splitOrient3, _layout$areas$top$gro2, _layout$areas$top4, _layout$areas$bottom$2, _layout$areas$bottom4;
+		var _winNode$menuBar$heig, _statusNode$height, _areaSpec$splitOrient4, _layout$areas$top$gro2, _layout$areas$top4, _layout$areas$bottom$2, _layout$areas$bottom4;
 		const W = (winNode === null || winNode === void 0 ? void 0 : winNode.width) && winNode.width > 0 ? winNode.width : 1280;
 		const H = (winNode === null || winNode === void 0 ? void 0 : winNode.height) && winNode.height > 0 ? winNode.height : 800;
 		const menuH = (winNode === null || winNode === void 0 ? void 0 : winNode.menuBar) ? Math.max(0, Math.round((_winNode$menuBar$heig = winNode.menuBar.height) !== null && _winNode$menuBar$heig !== void 0 ? _winNode$menuBar$heig : 28)) : 0;
@@ -4060,7 +4079,7 @@ var VF = (function(exports) {
 		const statusH = statusNode ? Math.round((_statusNode$height = statusNode.height) !== null && _statusNode$height !== void 0 ? _statusNode$height : 28) : 0;
 		const midH = Math.max(0, H - menuH - statusH);
 		const areaSpec = layout.areas[area];
-		if (((_areaSpec$splitOrient3 = areaSpec === null || areaSpec === void 0 ? void 0 : areaSpec.splitOrientation) !== null && _areaSpec$splitOrient3 !== void 0 ? _areaSpec$splitOrient3 : defaultSplitOrientation(area)) === "horizontal") {
+		if (((_areaSpec$splitOrient4 = areaSpec === null || areaSpec === void 0 ? void 0 : areaSpec.splitOrientation) !== null && _areaSpec$splitOrient4 !== void 0 ? _areaSpec$splitOrient4 : defaultSplitOrientation(area)) === "horizontal") {
 			var _areaSpec$groups$0$ac2, _areaSpec$groups$, _areaSpec$groups$2, _areaSpec$size;
 			if (area === "top" || area === "bottom") return W;
 			const firstId = (_areaSpec$groups$0$ac2 = areaSpec === null || areaSpec === void 0 || (_areaSpec$groups$ = areaSpec.groups[0]) === null || _areaSpec$groups$ === void 0 ? void 0 : _areaSpec$groups$.active) !== null && _areaSpec$groups$0$ac2 !== void 0 ? _areaSpec$groups$0$ac2 : areaSpec === null || areaSpec === void 0 || (_areaSpec$groups$2 = areaSpec.groups[0]) === null || _areaSpec$groups$2 === void 0 ? void 0 : _areaSpec$groups$2.tabs[0];
@@ -4087,7 +4106,7 @@ var VF = (function(exports) {
 	}
 	/** 拖动同一停靠区内并排组之间的分隔条，仅在相邻的第 groupIndex 与第 groupIndex+1 组之间重新分配尺寸，保持其余组不变。 */
 	function dockResizeSplit(layout, scene, winNode, area, groupIndex, size) {
-		var _areaSpec$groups, _areaSpec$splitOrient4, _winNode$width12, _winNode$height12;
+		var _areaSpec$groups, _areaSpec$splitOrient5, _winNode$width12, _winNode$height12;
 		const next = cloneDockLayout(layout);
 		const areaSpec = next.areas[area];
 		const groups = (_areaSpec$groups = areaSpec === null || areaSpec === void 0 ? void 0 : areaSpec.groups) !== null && _areaSpec$groups !== void 0 ? _areaSpec$groups : [];
@@ -4100,7 +4119,7 @@ var VF = (function(exports) {
 				dockLayout: next
 			}));
 		}
-		const orient = (_areaSpec$splitOrient4 = areaSpec.splitOrientation) !== null && _areaSpec$splitOrient4 !== void 0 ? _areaSpec$splitOrient4 : defaultSplitOrientation(area);
+		const orient = (_areaSpec$splitOrient5 = areaSpec.splitOrientation) !== null && _areaSpec$splitOrient5 !== void 0 ? _areaSpec$splitOrient5 : defaultSplitOrientation(area);
 		const minEach = orient === "horizontal" ? 60 : 48;
 		if (groups.length === 1 || groupIndex === groups.length - 1) {
 			var _winNode$width11, _winNode$height11;
@@ -4113,11 +4132,11 @@ var VF = (function(exports) {
 			}));
 		}
 		const curSizes = distributeGroupAxisSizes(computeReferenceAreaSplitSpan(next, scene, winNode, area), groups.map((group) => {
-			var _ref6;
+			var _ref7;
 			const activeId = group.active && group.tabs.includes(group.active) ? group.active : group.tabs[0];
 			return {
 				group,
-				activeDock: (_ref6 = activeId ? scene.nodes[activeId] : void 0) !== null && _ref6 !== void 0 ? _ref6 : {
+				activeDock: (_ref7 = activeId ? scene.nodes[activeId] : void 0) !== null && _ref7 !== void 0 ? _ref7 : {
 					type: "Dock",
 					width: 240,
 					height: 280
@@ -4158,6 +4177,9 @@ var VF = (function(exports) {
 		}
 		return out;
 	}
+	/** 窗口放不下全部停靠区时，给中央区留下的最小尺寸。 */
+	const MIN_CENTER_WIDTH = 120;
+	const MIN_CENTER_HEIGHT = 80;
 	/**
 	* 根据 DockLayoutSpec 计算主窗口所有停靠面板、中央区及分隔条的几何框。
 	*/
@@ -4229,18 +4251,53 @@ var VF = (function(exports) {
 				});
 			}
 		};
+		const resolveEdgeHeights = (area, groups) => {
+			var _layout$areas$area$sp;
+			const orient = (_layout$areas$area$sp = layout.areas[area].splitOrientation) !== null && _layout$areas$area$sp !== void 0 ? _layout$areas$area$sp : "horizontal";
+			if (orient === "horizontal") {
+				var _layout$areas$area$si;
+				const widths = distributeGroupAxisSizes(W, groups, "horizontal");
+				const base = Math.max(40, Math.round((_layout$areas$area$si = layout.areas[area].size) !== null && _layout$areas$area$si !== void 0 ? _layout$areas$area$si : prefHeight(groups[0].activeDock)));
+				const floor = Math.max(0, ...groups.map((g, idx) => dockMinHeightForWidth(scene, g.activeDock, widths[idx], isVisible)));
+				return {
+					orient,
+					widths,
+					heights: [Math.max(base, floor)],
+					floors: [floor]
+				};
+			}
+			const floors = groups.map((g) => dockMinHeightForWidth(scene, g.activeDock, W, isVisible));
+			return {
+				orient,
+				widths: [],
+				heights: groups.map((g, idx) => {
+					var _ref8, _g$group$size;
+					return Math.max(40, Math.round((_ref8 = (_g$group$size = g.group.size) !== null && _g$group$size !== void 0 ? _g$group$size : layout.areas[area].size) !== null && _ref8 !== void 0 ? _ref8 : prefHeight(g.activeDock)), floors[idx]);
+				}),
+				floors
+			};
+		};
 		const topGroups = resolveAreaVisibleGroups("top");
+		const bottomGroups = resolveAreaVisibleGroups("bottom");
+		const topEdge = topGroups.length > 0 ? resolveEdgeHeights("top", topGroups) : null;
+		const bottomEdge = bottomGroups.length > 0 ? resolveEdgeHeights("bottom", bottomGroups) : null;
+		const edgeSum = (edge) => edge ? edge.heights.reduce((acc, h) => acc + h, 0) : 0;
+		let edgeExcess = edgeSum(topEdge) + edgeSum(bottomEdge) - Math.max(0, midH - MIN_CENTER_HEIGHT);
+		for (const edge of [bottomEdge, topEdge]) {
+			if (!edge) continue;
+			for (let i = edge.heights.length - 1; i >= 0 && edgeExcess > 0; i--) {
+				const cut = Math.min(edgeExcess, Math.max(0, edge.heights[i] - Math.max(40, edge.floors[i])));
+				edge.heights[i] -= cut;
+				edgeExcess -= cut;
+			}
+		}
 		let topH = 0;
-		if (topGroups.length > 0) {
-			var _layout$areas$top$spl;
-			if (((_layout$areas$top$spl = layout.areas.top.splitOrientation) !== null && _layout$areas$top$spl !== void 0 ? _layout$areas$top$spl : "horizontal") === "horizontal") {
-				var _layout$areas$top$siz2;
-				const widths = distributeGroupAxisSizes(W, topGroups, "horizontal");
-				const baseTopH = Math.max(40, Math.round((_layout$areas$top$siz2 = layout.areas.top.size) !== null && _layout$areas$top$siz2 !== void 0 ? _layout$areas$top$siz2 : prefHeight(topGroups[0].activeDock)));
-				topH = Math.max(baseTopH, ...topGroups.map((g, idx) => dockHeightForWidth(scene, g.activeDock, widths[idx], isVisible)));
+		if (topEdge) {
+			if (topEdge.orient === "horizontal") {
+				topH = topEdge.heights[0];
 				let curX = 0;
 				topGroups.forEach((g, idx) => {
-					const gw = widths[idx];
+					const gw = topEdge.widths[idx];
 					assignGroupBoxes("top", g, curX, midY, gw, topH);
 					curX += gw;
 					if (idx < topGroups.length - 1) splitters.push({
@@ -4258,8 +4315,7 @@ var VF = (function(exports) {
 			} else {
 				let curY = midY;
 				topGroups.forEach((g, idx) => {
-					var _ref7, _g$group$size;
-					const gh = Math.max(40, Math.round((_ref7 = (_g$group$size = g.group.size) !== null && _g$group$size !== void 0 ? _g$group$size : layout.areas.top.size) !== null && _ref7 !== void 0 ? _ref7 : prefHeight(g.activeDock)), dockHeightForWidth(scene, g.activeDock, W, isVisible));
+					const gh = topEdge.heights[idx];
 					assignGroupBoxes("top", g, 0, curY, W, gh);
 					curY += gh;
 					topH += gh;
@@ -4287,19 +4343,14 @@ var VF = (function(exports) {
 				currentSize: topH
 			});
 		}
-		const bottomGroups = resolveAreaVisibleGroups("bottom");
 		let bottomH = 0;
-		if (bottomGroups.length > 0) {
-			var _layout$areas$bottom$5;
-			if (((_layout$areas$bottom$5 = layout.areas.bottom.splitOrientation) !== null && _layout$areas$bottom$5 !== void 0 ? _layout$areas$bottom$5 : "horizontal") === "horizontal") {
-				var _layout$areas$bottom$6;
-				const widths = distributeGroupAxisSizes(W, bottomGroups, "horizontal");
-				const baseBottomH = Math.max(40, Math.round((_layout$areas$bottom$6 = layout.areas.bottom.size) !== null && _layout$areas$bottom$6 !== void 0 ? _layout$areas$bottom$6 : prefHeight(bottomGroups[0].activeDock)));
-				bottomH = Math.max(baseBottomH, ...bottomGroups.map((g, idx) => dockHeightForWidth(scene, g.activeDock, widths[idx], isVisible)));
+		if (bottomEdge) {
+			if (bottomEdge.orient === "horizontal") {
+				bottomH = bottomEdge.heights[0];
 				const bY = midY + midH - bottomH;
 				let curX = 0;
 				bottomGroups.forEach((g, idx) => {
-					const gw = widths[idx];
+					const gw = bottomEdge.widths[idx];
 					assignGroupBoxes("bottom", g, curX, bY, gw, bottomH);
 					curX += gw;
 					if (idx < bottomGroups.length - 1) splitters.push({
@@ -4315,14 +4366,10 @@ var VF = (function(exports) {
 					});
 				});
 			} else {
-				const ghList = bottomGroups.map((g) => {
-					var _ref8, _g$group$size2;
-					return Math.max(40, Math.round((_ref8 = (_g$group$size2 = g.group.size) !== null && _g$group$size2 !== void 0 ? _g$group$size2 : layout.areas.bottom.size) !== null && _ref8 !== void 0 ? _ref8 : prefHeight(g.activeDock)), dockHeightForWidth(scene, g.activeDock, W, isVisible));
-				});
-				bottomH = ghList.reduce((a, b) => a + b, 0);
+				bottomH = edgeSum(bottomEdge);
 				let curY = midY + midH - bottomH;
 				bottomGroups.forEach((g, idx) => {
-					const gh = ghList[idx];
+					const gh = bottomEdge.heights[idx];
 					assignGroupBoxes("bottom", g, 0, curY, W, gh);
 					curY += gh;
 					if (idx < bottomGroups.length - 1) splitters.push({
@@ -4351,13 +4398,33 @@ var VF = (function(exports) {
 		}
 		const centerY = midY + topH;
 		const centerH = Math.max(0, midH - topH - bottomH);
+		const resolveSideWidths = (area, groups) => {
+			var _layout$areas$area$sp2;
+			if (((_layout$areas$area$sp2 = layout.areas[area].splitOrientation) !== null && _layout$areas$area$sp2 !== void 0 ? _layout$areas$area$sp2 : "vertical") === "vertical") {
+				var _layout$areas$area$si2;
+				return [Math.max(60, Math.round((_layout$areas$area$si2 = layout.areas[area].size) !== null && _layout$areas$area$si2 !== void 0 ? _layout$areas$area$si2 : prefWidth(groups[0].activeDock)))];
+			}
+			return groups.map((g) => {
+				var _ref9, _g$group$size2;
+				return Math.max(60, Math.round((_ref9 = (_g$group$size2 = g.group.size) !== null && _g$group$size2 !== void 0 ? _g$group$size2 : layout.areas[area].size) !== null && _ref9 !== void 0 ? _ref9 : prefWidth(g.activeDock)));
+			});
+		};
 		const leftGroups = resolveAreaVisibleGroups("left");
+		const rightGroups = resolveAreaVisibleGroups("right");
+		const leftWidths = leftGroups.length > 0 ? resolveSideWidths("left", leftGroups) : [];
+		const rightWidths = rightGroups.length > 0 ? resolveSideWidths("right", rightGroups) : [];
+		const sumOf = (list) => list.reduce((acc, v) => acc + v, 0);
+		let sideExcess = sumOf(leftWidths) + sumOf(rightWidths) - Math.max(0, W - MIN_CENTER_WIDTH);
+		for (const list of [rightWidths, leftWidths]) for (let i = list.length - 1; i >= 0 && sideExcess > 0; i--) {
+			const cut = Math.min(sideExcess, Math.max(0, list[i] - 60));
+			list[i] -= cut;
+			sideExcess -= cut;
+		}
 		let leftW = 0;
 		if (leftGroups.length > 0) {
 			var _layout$areas$left$sp;
 			if (((_layout$areas$left$sp = layout.areas.left.splitOrientation) !== null && _layout$areas$left$sp !== void 0 ? _layout$areas$left$sp : "vertical") === "vertical") {
-				var _layout$areas$left$si;
-				leftW = Math.max(60, Math.round((_layout$areas$left$si = layout.areas.left.size) !== null && _layout$areas$left$si !== void 0 ? _layout$areas$left$si : prefWidth(leftGroups[0].activeDock)));
+				leftW = leftWidths[0];
 				const heights = distributeGroupAxisSizes(centerH, leftGroups, "vertical");
 				let curY = centerY;
 				leftGroups.forEach((g, idx) => {
@@ -4377,8 +4444,7 @@ var VF = (function(exports) {
 					});
 				});
 			} else leftGroups.forEach((g, idx) => {
-				var _ref9, _g$group$size3;
-				const gw = Math.max(60, Math.round((_ref9 = (_g$group$size3 = g.group.size) !== null && _g$group$size3 !== void 0 ? _g$group$size3 : layout.areas.left.size) !== null && _ref9 !== void 0 ? _ref9 : prefWidth(g.activeDock)));
+				const gw = leftWidths[idx];
 				assignGroupBoxes("left", g, leftW, centerY, gw, centerH);
 				leftW += gw;
 				if (idx < leftGroups.length - 1) splitters.push({
@@ -4404,13 +4470,11 @@ var VF = (function(exports) {
 				currentSize: leftW
 			});
 		}
-		const rightGroups = resolveAreaVisibleGroups("right");
 		let rightW = 0;
 		if (rightGroups.length > 0) {
 			var _layout$areas$right$s;
 			if (((_layout$areas$right$s = layout.areas.right.splitOrientation) !== null && _layout$areas$right$s !== void 0 ? _layout$areas$right$s : "vertical") === "vertical") {
-				var _layout$areas$right$s2;
-				rightW = Math.max(60, Math.round((_layout$areas$right$s2 = layout.areas.right.size) !== null && _layout$areas$right$s2 !== void 0 ? _layout$areas$right$s2 : prefWidth(rightGroups[0].activeDock)));
+				rightW = rightWidths[0];
 				const rX = W - rightW;
 				const heights = distributeGroupAxisSizes(centerH, rightGroups, "vertical");
 				let curY = centerY;
@@ -4431,14 +4495,10 @@ var VF = (function(exports) {
 					});
 				});
 			} else {
-				const gwList = rightGroups.map((g) => {
-					var _ref10, _g$group$size4;
-					return Math.max(60, Math.round((_ref10 = (_g$group$size4 = g.group.size) !== null && _g$group$size4 !== void 0 ? _g$group$size4 : layout.areas.right.size) !== null && _ref10 !== void 0 ? _ref10 : prefWidth(g.activeDock)));
-				});
-				rightW = gwList.reduce((a, b) => a + b, 0);
+				rightW = sumOf(rightWidths);
 				let rCurX = W - rightW;
 				rightGroups.forEach((g, idx) => {
-					const gw = gwList[idx];
+					const gw = rightWidths[idx];
 					assignGroupBoxes("right", g, rCurX, centerY, gw, centerH);
 					rCurX += gw;
 					if (idx < rightGroups.length - 1) splitters.push({
@@ -4496,6 +4556,43 @@ var VF = (function(exports) {
 			splitters,
 			activeTabByDock
 		};
+	}
+	/**
+	* 把排列描述换算成当前窗口尺寸下的实际尺寸：换行面板撑高、窗口放不下时收窄、并排比例随窗口缩放后，
+	* 描述里的尺寸与实际不同。和 Qt 实测比较时用这一份；没有可见面板的组和停靠区不带尺寸。
+	*/
+	function effectiveDockLayout(layout, boxOf) {
+		const out = cloneDockLayout(layout);
+		for (const area of DOCK_AREAS) {
+			var _areaSpec$splitOrient6;
+			const areaSpec = out.areas[area];
+			const orient = (_areaSpec$splitOrient6 = areaSpec.splitOrientation) !== null && _areaSpec$splitOrient6 !== void 0 ? _areaSpec$splitOrient6 : defaultSplitOrientation(area);
+			const horizontalThickness = area === "left" || area === "right";
+			const alongThickness = orient !== defaultSplitOrientation(area);
+			const shown = [];
+			for (const group of areaSpec.groups) {
+				delete group.size;
+				const shownTab = group.tabs.find((tid) => {
+					var _boxOf;
+					return (_boxOf = boxOf(tid)) === null || _boxOf === void 0 ? void 0 : _boxOf.visible;
+				});
+				if (shownTab) shown.push({
+					group,
+					shownTab,
+					box: boxOf(shownTab)
+				});
+			}
+			let thickness = 0;
+			for (const { group, shownTab, box } of shown) {
+				group.active = shownTab;
+				const groupThickness = horizontalThickness ? box.width : box.height;
+				thickness = alongThickness ? thickness + groupThickness : Math.max(thickness, groupThickness);
+				if (shown.length >= 2) group.size = orient === "horizontal" ? box.width : box.height;
+			}
+			if (thickness > 0) areaSpec.size = thickness;
+			else delete areaSpec.size;
+		}
+		return out;
 	}
 	//#endregion
 	//#region src/model.ts
@@ -4894,20 +4991,24 @@ var VF = (function(exports) {
 		if (rows.length === 0) return prefHeight(node);
 		return clampHeight(node, padTop + (rows.reduce((sum, r) => sum + r.rowH, 0) + Math.max(0, rows.length - 1) * rowGap) + padBottom);
 	}
-	function dockHeightForWidth(scene, dock, availWidth, isVisible) {
+	/**
+	* 停靠面板按给定宽度放下内容所需的最小高度，用作顶部、底部停靠区的下限。
+	* 只有换行布局的高度随宽度变化，才有内容下限；其他面板的高度完全由停靠排列决定，返回 0。
+	* 设计高度不是下限：面板被移到别的停靠区后，厚度跟随该停靠区。
+	*/
+	function dockMinHeightForWidth(scene, dock, availWidth, isVisible) {
 		var _dock$size, _dock$size2, _dock$headerHeight, _ref8, _layout$columnGap2, _ref9, _layout$rowGap2, _dock$children;
-		const baseH = prefHeight(dock);
 		const layout = layoutOf(dock);
-		if (!layout || !isWrapLayout(layout) || ((_dock$size = dock.size) === null || _dock$size === void 0 ? void 0 : _dock$size.fixedHeight) !== void 0 || ((_dock$size2 = dock.size) === null || _dock$size2 === void 0 ? void 0 : _dock$size2.vertical) === "fixed") return baseH;
+		if (!layout || !isWrapLayout(layout) || ((_dock$size = dock.size) === null || _dock$size === void 0 ? void 0 : _dock$size.fixedHeight) !== void 0 || ((_dock$size2 = dock.size) === null || _dock$size2 === void 0 ? void 0 : _dock$size2.vertical) === "fixed") return 0;
 		const hdrH = (_dock$headerHeight = dock.headerHeight) !== null && _dock$headerHeight !== void 0 ? _dock$headerHeight : 26;
 		const [padTop, padRight, padBottom, padLeft] = paddingOf(layout);
 		const colGap = (_ref8 = (_layout$columnGap2 = layout.columnGap) !== null && _layout$columnGap2 !== void 0 ? _layout$columnGap2 : layout.gap) !== null && _ref8 !== void 0 ? _ref8 : 0;
 		const rowGap = (_ref9 = (_layout$rowGap2 = layout.rowGap) !== null && _layout$rowGap2 !== void 0 ? _layout$rowGap2 : layout.gap) !== null && _ref9 !== void 0 ? _ref9 : 0;
 		const innerW = Math.max(0, availWidth - padLeft - padRight);
 		const rows = computeFlowRows(scene, ((_dock$children = dock.children) !== null && _dock$children !== void 0 ? _dock$children : []).filter((cid) => Boolean(scene.nodes[cid]) && isVisible(cid)), innerW, colGap);
-		if (rows.length === 0) return baseH;
+		if (rows.length === 0) return 0;
 		const rowsH = rows.reduce((sum, r) => sum + r.rowH, 0) + Math.max(0, rows.length - 1) * rowGap;
-		return clampHeight(dock, Math.max(baseH, hdrH + padTop + rowsH + padBottom));
+		return clampHeight(dock, hdrH + padTop + rowsH + padBottom);
 	}
 	/**
 	* 计算一个窗口（或全部窗口）内所有节点的位置和尺寸。
@@ -7368,6 +7469,11 @@ var VF = (function(exports) {
 	function dockLayout() {
 		return JSON.stringify(runtime.getDockLayout(scene.root));
 	}
+	/** 当前窗口尺寸下应有的实际排列，check 用它和 Qt 实测比较。 */
+	function effectiveDockLayoutAt(width, height) {
+		const boxes = computeLayout(width, height);
+		return JSON.stringify(effectiveDockLayout(runtime.getDockLayout(scene.root), (id) => boxes[id]));
+	}
 	function dockOp(op, argsJson) {
 		let args = {};
 		if (argsJson) try {
@@ -7802,6 +7908,7 @@ var VF = (function(exports) {
 	exports.dockLayout = dockLayout;
 	exports.dockOp = dockOp;
 	exports.dump = dump;
+	exports.effectiveDockLayoutAt = effectiveDockLayoutAt;
 	exports.finishActionError = finishActionError;
 	exports.finishActionSuccess = finishActionSuccess;
 	exports.fireTimer = fireTimer;

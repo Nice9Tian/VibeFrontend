@@ -20,6 +20,7 @@ import { check } from "../src/check.ts";
 import {
   computeDockWindowLayout,
   dockActivateTab,
+  effectiveDockLayout,
   dockFloat,
   dockIdsOfLayout,
   dockMoveToArea,
@@ -33,6 +34,7 @@ import {
   removeDockLayoutReferences,
   renameDockLayoutReferences,
 } from "../src/dock.ts";
+import type { DockLayoutSpec } from "../src/dock.ts";
 import {
   applyAddNodeToScene,
   applyDockLayoutToScene,
@@ -55,6 +57,7 @@ import { loadProjectFiles } from "../src/loader.ts";
 import {
   childrenOfNode,
   computeSceneLayout,
+  dockMinHeightForWidth,
   removeNodeReferences,
   renameNodeReferences,
   STANDARD_COMPONENTS,
@@ -67,9 +70,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..");
 const ANIMEAN_DIR = path.resolve(APP_ROOT, "../examples/animean/design");
 const ANIMEAN_QT_EXE = [
+  process.env.VF_ANIMEAN_EXE,
   path.join(os.tmpdir(), "vf-build-animean/app/vf_animean.exe"),
   path.resolve(APP_ROOT, "../examples/animean/qt/build/app/vf_animean.exe"),
-].find((p) => fs.existsSync(p)) ?? path.join(os.tmpdir(), "vf-build-animean/app/vf_animean.exe");
+].find((p): p is string => Boolean(p) && fs.existsSync(p!)) ?? path.join(os.tmpdir(), "vf-build-animean/app/vf_animean.exe");
 
 function buildQtEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -352,6 +356,83 @@ async function testDockModelAndReferences(): Promise<void> {
     !dockIdsOfLayout(sceneLe.nodes[sceneLe.root].dockLayout!).includes("extraBottomDock"),
     "insertOrMoveNodeInLayout 移入普通容器后应从主窗口 dockLayout 移除",
   );
+
+  // 10) [审核三 阻塞 1] 顶部、底部停靠区的高度只跟随排列描述，只有换行布局按内容下限撑高
+  const edgeScene = project.scene;
+  const edgeWin = edgeScene.nodes[edgeScene.root];
+  const always = () => true;
+  const edgeLayoutOf = (spec: DockLayoutSpec, w = 1280, h = 800) =>
+    computeDockWindowLayout(edgeScene, edgeScene.root, edgeWin, w, 28, h - 56, true, always, spec);
+  const base = normalizeDockLayout(edgeScene, edgeWin);
+  assert.equal(
+    dockMinHeightForWidth(edgeScene, edgeScene.nodes.timelineDock, 1280, always),
+    0,
+    "非换行面板没有内容下限，设计高度不是下限",
+  );
+  assert.equal(dockMinHeightForWidth(edgeScene, edgeScene.nodes.inspectorDock, 1280, always), 0);
+  const toolsFloorWide = dockMinHeightForWidth(edgeScene, edgeScene.nodes.toolsDock, 1280, always);
+  const toolsFloorNarrow = dockMinHeightForWidth(edgeScene, edgeScene.nodes.toolsDock, 800, always);
+  assert.ok(toolsFloorWide > 0 && toolsFloorNarrow > toolsFloorWide, "换行面板变窄后内容下限变高");
+
+  const bottomSmall = edgeLayoutOf(dockResizeArea(base, edgeScene, edgeWin, "bottom", 100));
+  assert.equal(bottomSmall.dockBoxes.get("timelineDock")!.height, 100, "底部停靠区能缩到比设计高度小");
+  const tabInBottom = edgeLayoutOf(dockTabify(base, edgeScene, edgeWin, "timelineDock", "inspectorDock"));
+  assert.equal(tabInBottom.dockBoxes.get("inspectorDock")!.height, 132, "叠进底部的面板跟随底部厚度");
+  const moveToTop = edgeLayoutOf(dockMoveToArea(base, edgeScene, edgeWin, "inspectorDock", "top"));
+  const topToolsBox = moveToTop.dockBoxes.get("toolsDock")!;
+  assert.equal(
+    moveToTop.dockBoxes.get("inspectorDock")!.height,
+    Math.max(62, dockMinHeightForWidth(edgeScene, edgeScene.nodes.toolsDock, topToolsBox.width, always)),
+    "移到顶部的面板跟随顶部厚度，只有工具条变窄换行时才撑高，不取自己的设计高度 554",
+  );
+  const vSplitSpec = dockSplit(base, edgeScene, edgeWin, "timelineDock", "inspectorDock", "after", "vertical");
+  const vSplit = edgeLayoutOf(vSplitSpec);
+  assert.equal(
+    vSplit.dockBoxes.get("timelineDock")!.height + vSplit.dockBoxes.get("inspectorDock")!.height,
+    132,
+    "底部竖向分栏后各组高度之和等于停靠区厚度",
+  );
+  assert.equal(vSplit.centralBox.height, 800 - 56 - 62 - 132, "底部竖向分栏不挤占中央区");
+
+  const narrowTools = edgeLayoutOf(base, 800, 600);
+  assert.equal(narrowTools.dockBoxes.get("toolsDock")!.height, toolsFloorNarrow, "窄窗口下换行面板仍按内容撑高");
+  const toolsTiny = edgeLayoutOf(dockResizeArea(base, edgeScene, edgeWin, "top", 48));
+  assert.equal(toolsTiny.dockBoxes.get("toolsDock")!.height, Math.max(48, toolsFloorWide), "换行面板的下限是内容高度，不是设计高度");
+
+  // 11) 沿厚度方向并排时拖停靠区分隔条按比例缩放各组，否则归一化后又回到原来的和
+  const vSplitResized = dockResizeArea(vSplitSpec, edgeScene, edgeWin, "bottom", 200);
+  assert.equal(vSplitResized.areas.bottom.size, 200);
+  assert.equal(vSplitResized.areas.bottom.groups.reduce((acc, g) => acc + (g.size ?? 0), 0), 200);
+  const hSplitLeft = dockSplit(base, edgeScene, edgeWin, "layersDock", "inspectorDock", "after", "horizontal");
+  const hSplitResized = dockResizeArea(hSplitLeft, edgeScene, edgeWin, "left", 300);
+  assert.equal(hSplitResized.areas.left.size, 300);
+  assert.equal(hSplitResized.areas.left.groups.reduce((acc, g) => acc + (g.size ?? 0), 0), 300);
+
+  // 12) 窗口放不下全部停靠区时只收窄实际尺寸，中央区留有余地，描述不变、窗口放大后恢复
+  const hugeBottom = dockResizeArea(base, edgeScene, edgeWin, "bottom", 700);
+  const hugeBox = edgeLayoutOf(hugeBottom);
+  assert.equal(hugeBottom.areas.bottom.size, 700, "排列描述里的尺寸保持用户拖到的值");
+  assert.ok(hugeBox.centralBox.height >= 80, "中央区保留最小高度");
+  assert.ok(hugeBox.dockBoxes.get("timelineDock")!.absY + hugeBox.dockBoxes.get("timelineDock")!.height <= 772, "底部停靠区不超出窗口");
+  assert.equal(edgeLayoutOf(hugeBottom, 1600, 1000).dockBoxes.get("timelineDock")!.height, 700, "窗口放大后恢复");
+  const hugeSides = dockResizeArea(dockResizeArea(base, edgeScene, edgeWin, "left", 900), edgeScene, edgeWin, "right", 900);
+  assert.ok(edgeLayoutOf(hugeSides).centralBox.width >= 120, "中央区保留最小宽度");
+
+  // 13) 比较用的实际排列：换行撑高、关闭页签后显示的页签、只剩一组时不带分栏尺寸
+  const boxesOf = (spec: DockLayoutSpec, w: number, h: number) => {
+    const boxes = edgeLayoutOf(spec, w, h).dockBoxes;
+    return (id: string) => boxes.get(id);
+  };
+  const effNarrow = effectiveDockLayout(base, boxesOf(base, 800, 600));
+  assert.equal(effNarrow.areas.top.size, toolsFloorNarrow, "实际厚度含换行撑高");
+  assert.equal(base.areas.top.size, 62, "描述不被实际尺寸改写");
+  const closedActive = dockTabify(base, edgeScene, edgeWin, "layersDock", "inspectorDock");
+  const closedBoxes = computeDockWindowLayout(
+    edgeScene, edgeScene.root, edgeWin, 1280, 28, 744, true, (id) => id !== "inspectorDock", closedActive,
+  ).dockBoxes;
+  const effClosed = effectiveDockLayout(closedActive, (id) => closedBoxes.get(id));
+  assert.equal(closedActive.areas.left.groups[0].active, "inspectorDock");
+  assert.equal(effClosed.areas.left.groups[0].active, "layersDock", "激活页签已关闭时实际显示的是组里另一个");
 
   console.log("PASS 1. 停靠纯模型运算、layoutedit 同步、3组分栏缩放、关闭激活页签自动切换、持久化撤销重做与 FloatBox 独立显隐检查");
 }
@@ -1274,9 +1355,62 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     assert.equal(qtHsDocks.areas.left.splitOrientation, "horizontal", "左侧停靠区应记录为 horizontal 分栏");
     assert.equal(qtHsDocks.areas.left.size, 236, "左侧水平分栏联合总宽度应为 236px");
 
+    // 以下都从 Qt 实测的 docks / layout 判断，鼠标事件走和用户操作相同的路径
+    const qtRun = (steps: string) => {
+      const out = execFileSync(ANIMEAN_QT_EXE, ["--steps", steps], { encoding: "utf8", env: qtEnv });
+      const lines = out.split(/\r?\n/).filter(Boolean);
+      for (const l of lines.filter((x) => x.startsWith("check "))) assert.equal(l, "check ok", `${steps}\n${l}`);
+      const docks = JSON.parse(lines.find((l) => l.startsWith("docks "))!.slice("docks ".length));
+      const layoutRow = lines.find((l) => l.startsWith("layout "));
+      const boxes = layoutRow ? JSON.parse(layoutRow.slice("layout ".length)) : {};
+      return { docks, boxes } as { docks: DockLayoutSpec; boxes: Record<string, { width: number; height: number }> };
+    };
+
+    // [审核三 阻塞 1] 顶部、底部停靠区能缩小，面板移入后不撑大
+    assert.equal(qtRun("dock:resize:bottom:100;check;docks").docks.areas.bottom.size, 100);
+    const qtBottomTab = qtRun("dock:tabify:timelineDock:inspectorDock;check;docks;layout");
+    assert.equal(qtBottomTab.docks.areas.bottom.size, 132, "侧边面板叠进底部后厚度不变");
+    assert.equal(qtBottomTab.boxes.inspectorDock.height, 132);
+    assert.equal(qtRun("dock:move:inspectorDock:top;check;docks").docks.areas.top.size, 94, "移到顶部后按工具条换行的内容下限");
+    const qtBottomSplit = qtRun("dock:split:timelineDock:inspectorDock:after:vertical;check;dock:resize:bottom:200;check;docks");
+    assert.equal(qtBottomSplit.docks.areas.bottom.size, 200, "竖向分栏的底部停靠区也能拖分隔条改厚度");
+    assert.equal(qtBottomSplit.docks.areas.bottom.groups.length, 2);
+
+    // [审核三 阻塞 2] 三个页签占满标题栏时，拖页签走停靠拖拽，不穿透到 QDockWidget 原生拖拽
+    const threeTabs = "dock:tabify:layersDock:inspectorDock;dock:tabify:layersDock:timelineDock;";
+    const qtThree = qtRun(`${threeTabs}dock:split:layersDock:timelineDock:after;check;docks`);
+    assert.deepEqual(qtThree.docks.floating, [], "拖页签拆分栏不应产生浮窗");
+    assert.deepEqual(qtThree.docks.areas.left.groups.map((g) => g.tabs), [["layersDock", "inspectorDock"], ["timelineDock"]]);
+    // 没激活的页签也能直接拖，组里剩下的页签和激活页签不变
+    const qtInactive = qtRun(`${threeTabs}dock:split:timelineDock:inspectorDock:after;check;docks`);
+    assert.deepEqual(qtInactive.docks.areas.left.groups.map((g) => g.tabs), [["layersDock", "timelineDock"], ["inspectorDock"]]);
+    assert.equal(qtInactive.docks.areas.left.groups[0].active, "timelineDock");
+    assert.deepEqual(
+      qtRun(`${threeTabs}dock:move:layersDock:right;check;docks`).docks.areas.right.groups.map((g) => g.tabs),
+      [["layersDock"]],
+      "拖没激活的页签到右边缘，只有它移走",
+    );
+    // 点页签仍然是切换
+    assert.equal(qtRun(`${threeTabs}dock:tab:inspectorDock;check;docks`).docks.areas.left.groups[0].active, "inspectorDock");
+    // 窗口来回缩放后叠页签组和分栏都保持，比较用当前窗口下的实际尺寸
+    const qtRoundTrip = qtRun(`${threeTabs}dock:split:layersDock:timelineDock:after;check;resize:800x600;wait:120;check;resize:1280x800;wait:120;check;docks`);
+    assert.equal(qtRoundTrip.docks.areas.left.groups.length, 2);
+
+    // 窗口放不下时 Qt 不被停靠面板撑大
+    const qtHuge = qtRun("dock:resize:bottom:700;check;docks;layout");
+    assert.ok(qtHuge.docks.areas.bottom.size! <= 800 - 56 - 62 - 80 + 3, `底部实测厚度 ${qtHuge.docks.areas.bottom.size}`);
+    // 全部页签关闭的组夹在中间时，分隔条序号和逻辑层一致
+    const qtClosedMiddle = qtRun(
+      "dock:split:layersDock:timelineDock:after;dock:split:timelineDock:inspectorDock:after;dock:close:timelineDock;check;dock:resizeSplit:left:0:300;check;docks",
+    );
+    assert.equal(qtClosedMiddle.docks.areas.left.groups.length, 3);
+
     console.log(
       `PASS 3. 停靠编排 + FloatBox 浮出移位后无头 Chrome DOM 与 Qt 实测几何对比：共 ${count} 个可见控件，最大偏差 ${maxDiff}px（<= 3px），父 Dock 关闭后 FloatBox 独立显隐、真实 QTest 鼠标拖拽及复审组合场景验证通过`,
     );
+  } else {
+    console.log(`未运行第 3 项：找不到 Qt 程序 ${ANIMEAN_QT_EXE}。用环境变量 VF_ANIMEAN_EXE 指定`);
+    process.exitCode = 1;
   }
 }
 

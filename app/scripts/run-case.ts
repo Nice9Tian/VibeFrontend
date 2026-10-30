@@ -246,6 +246,40 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string; noEffects
     steps:
       "toggle:onionSkinBox;check;state;floatbox:move:onionSkinBox:420,180;check;state;toggle:onionSkinBox;check;state",
   },
+  {
+    name: "45. 底部与顶部停靠区：缩小、侧边面板移入后厚度跟随停靠区，只有换行面板按内容撑高",
+    steps:
+      "dock:resize:bottom:100;check;state;dock:resize:bottom:132;check;state;dock:tabify:timelineDock:inspectorDock;check;state;dock:tab:timelineDock;check;state;dock:move:inspectorDock:top;check;state;dock:move:layersDock:bottom;check;state",
+  },
+  {
+    name: "46. 底部竖向分栏：分栏后厚度不变，拖停靠区分隔条按比例缩放各组，拖分栏分隔条改比例",
+    steps:
+      "dock:split:timelineDock:inspectorDock:after:vertical;check;state;dock:resize:bottom:200;check;state;dock:resizeSplit:bottom:0:80;check;state",
+  },
+  {
+    name: "47. 三个页签占满标题栏：拖激活页签拆出分栏不产生浮窗，组里其余页签保持",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;check;state;dock:tabify:layersDock:timelineDock;check;state;dock:split:layersDock:timelineDock:after;check;state",
+  },
+  {
+    name: "48. 三个页签：直接拖没激活的页签拆分栏、移到别的停靠区、切页签",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;dock:tabify:layersDock:timelineDock;check;state;dock:split:layersDock:inspectorDock:after;check;state;dock:tabify:layersDock:inspectorDock;check;state;dock:tab:layersDock;check;state;dock:move:timelineDock:right;check;state",
+  },
+  {
+    name: "49. 叠页签组与分栏在窗口来回缩放后保持，换行面板在窄窗口撑高",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;dock:split:layersDock:timelineDock:after;check;state;resize:800x600;wait:120;check;state;resize:1280x800;wait:120;check;state",
+  },
+  {
+    name: "50. 窗口放不下的停靠区厚度：只收窄实际尺寸，中央区保留余地，缩小后恢复",
+    steps: "dock:resize:bottom:700;check;state;resize:1024x720;wait:120;check;dock:resize:bottom:132;check;state",
+  },
+  {
+    name: "51. 关闭的组夹在并排组中间：并排方向与分隔条序号不错位，关闭的激活页签叠入后显示另一个页签",
+    steps:
+      "dock:split:layersDock:timelineDock:after:horizontal;dock:split:timelineDock:inspectorDock:after;dock:close:timelineDock;check;state;dock:resizeSplit:left:0:100;check;state;click:menuToggleTimeline;check;state;dock:close:inspectorDock;dock:tabify:layersDock:inspectorDock;check;state",
+  },
 ];
 
 interface FlatTreeRow {
