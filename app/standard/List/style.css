@@ -49,6 +49,10 @@
   font-weight: 500;
 }
 
+.vf-std-list-row.muted {
+  opacity: 0.45;
+}
+
 .vf-std-list-check {
   font-size: 12px;
   color: #94a3b8;

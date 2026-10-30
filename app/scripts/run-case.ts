@@ -89,7 +89,176 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string }> = [
     steps:
       "click:newProjectBtn;check;state;click:cancelNewProjectBtn;check;state;click:newProjectBtn;close:newProjectDialog;check;state;click:menuToggleTimeline;check;state;click:menuToggleTimeline;check;state",
   },
+  {
+    name: "17. [类别1：7种工具切换与可勾选图标按钮] 画笔/橡皮/填充/几何/套索/移动/吸管全部切换与动态选项表联动",
+    steps:
+      "click:toolShapeBtn;check;state;click:toolSelectBtn;check;state;click:toolMoveBtn;check;state;click:toolEyedropperBtn;check;state;click:toolBrushBtn;check;state",
+  },
+  {
+    name: "18. [类别2：DataForm 滑条/下拉/复选与 visible_when 条件显隐] 笔刷半径、切换 Bezier 笔触显示平滑滑条、修改平滑等级",
+    steps:
+      "form:toolOptionsForm:brushSize:42;check;state;form:toolOptionsForm:strokeMode:Bezier;check;state;form:toolOptionsForm:smoothLevel:15;check;state;form:toolOptionsForm:pressureSize:false;check;state",
+  },
+  {
+    name: "19. [类别3：DataForm 跨工具（填充/移动）参数修改与按钮触发] 填充工具闭合缺口开关、移动工具点击重置变换按钮",
+    steps:
+      "click:toolFillBtn;form:toolOptionsForm:tolerance:64;check;state;form:toolOptionsForm:closeGap:false;check;state;click:toolMoveBtn;form:toolOptionsForm:resetTransformBtn:true;check;state",
+  },
+  {
+    name: "20. [类别4：DataForm 子窗口按钮触发压感设置对话框与 DialogButtonBox 确定/取消] 打开压感对话框与 accept/reject",
+    steps:
+      "form:toolOptionsForm:openAdvBrush:true;check;state;select:pressureCurveCombo:SoftS;input:minRadiusSpin:25;input:tiltSensitivitySlider:80;click:antiAliasCheck;accept:drawSettingsButtonBox;check;state;click:menuDrawSettings;check;state;reject:drawSettingsButtonBox;check;state",
+  },
+  {
+    name: "21. [类别5：图层树 Tree 节点选择、显隐勾选 toggleCheck 与分组折叠 toggleCollapse]",
+    steps:
+      "select:layerTree:1;check;state;check:layerTree:1:false;check;state;check:layerTree:1:true;check;state;collapse:layerTree:0:true;check;state;collapse:layerTree:0:false;check;state",
+  },
+  {
+    name: "22. [类别6：图层树 Tree 新建分组与拖拽重排 drag/reorder]",
+    steps: "click:addGroupBtn;check;state;drag:layerTree:0:2;check;state;reorder:layerTree:2:0;check;state",
+  },
+  {
+    name: "23. [类别7：图层列表 List 拖拽重排 drag/reorder 与选中同步]",
+    steps: "drag:layerList:0:2;check;state;reorder:layerList:2:1;check;state",
+  },
+  {
+    name: "24. [类别8：图层树右键菜单 contextMenu（复制/锁定/删除图层）]",
+    steps: "click:ctxDuplicateLayer;check;state;click:ctxToggleLockLayer;check;state;click:ctxDeleteLayer;check;state",
+  },
+  {
+    name: "25. [类别9：素材库面板 List 增删选、拖拽重排与多行文本 TextArea 备注编辑]",
+    steps:
+      "click:addAssetBtn;check;state;select:assetList:1;check;state;drag:assetList:3:0;check;state;input:assetNoteInput:水彩纹理第2版，用于背景叠加层;check;state;click:removeAssetBtn;check;state",
+  },
+  {
+    name: "26. [类别10：历史记录面板 List 回溯置灰 mutedFrom、撤销/重做与新操作截断分支]",
+    steps:
+      "click:tabHistoryBtn;check;state;click:undoBtn;check;state;click:undoBtn;check;state;click:redoBtn;check;state;select:historyList:0;check;state;click:addFrameBtn;check;state;click:clearHistoryBtn;check;state",
+  },
+  {
+    name: "27. [类别11：中央工作区 TabBar（Drawing/Texture）切换、缩放 Slider 与画布右键菜单]",
+    steps:
+      "select:workspaceTabBar:Texture;check;state;select:workspaceTabBar:0;check;state;input:zoomSlider:200;check;state;click:ctxResetZoom;check;state;click:ctxClearCanvas;check;state",
+  },
+  {
+    name: "28. [类别12：时间轴关键帧增删、帧率下拉切换、帧定位 Slider 与视口 ScrollBar]",
+    steps:
+      "click:addFrameBtn;check;state;input:frameSlider:12;check;state;select:fpsSelectCombo:30 fps;check;state;input:timelineScrollBar:45;check;state;click:removeFrameBtn;check;state",
+  },
+  {
+    name: "29. [类别13：时间轴播放/循环/洋葱皮可勾选按钮 toggle 与预览时钟 clock.tick 推进帧]",
+    steps:
+      "clock:120;check;state;toggle:playToggleBtn;check;state;clock:240;check;state;clock:360;check;state;toggle:loopToggleBtn;check;state;toggle:onionToggleBtn;check;state;toggle:playToggleBtn;check;state",
+  },
+  {
+    name: "30. [类别14：时间轴循环边界回绕与非循环播放自动停止]",
+    steps:
+      "input:frameSlider:24;toggle:playToggleBtn;clock:500;check;state;input:frameSlider:24;toggle:loopToggleBtn;clock:1000;check;state",
+  },
+  {
+    name: "31. [类别15：文件菜单（打开/保存/另存为）与二级子菜单（导入素材/导出视频）]",
+    steps:
+      "click:menuOpenProject;check;state;click:menuSaveProject;check;state;click:menuSaveAsProject;check;state;click:menuImportImage;check;state;mock:exportClip:success;click:menuExportClip;check;state",
+  },
+  {
+    name: "32. [类别16：编辑菜单（撤销/重做/清空当前帧）联动历史面板]",
+    steps: "click:menuClearFrame;check;state;click:menuUndo;check;state;click:menuRedo;check;state",
+  },
+  {
+    name: "33. [类别17：自动映射菜单（一键自动上色/生成中间帧补间/同步纹理映射）]",
+    steps: "click:menuAutoColorize;check;state;click:menuAutoInbetween;check;state;click:menuTextureSync;check;state",
+  },
+  {
+    name: "34. [类别18：绘图设置二级子菜单单选组（抖动修正 S0/S5/S12 互斥切换）]",
+    steps: "click:menuStabOff;check;state;click:menuStabHigh;check;state;click:menuStabMed;check;state",
+  },
+  {
+    name: "35. [类别19：主题菜单单选组（深色/石墨灰/浅色互斥切换）]",
+    steps: "click:menuThemeGraphite;check;state;click:menuThemeLight;check;state;click:menuThemeDark;check;state",
+  },
+  {
+    name: "36. [类别20：视图菜单可勾选项（全部 4 个停靠面板显隐、洋葱皮开关、重置工作区布局）]",
+    steps:
+      "click:menuToggleTools;check;state;click:menuToggleTools;check;state;click:menuToggleInspector;check;state;click:menuToggleInspector;check;state;click:menuOnionSkinToggle;check;state;input:zoomSlider:250;select:workspaceTabBar:1;click:menuResetLayout;check;state",
+  },
+  {
+    name: "37. [类别21：工具栏按钮弹出菜单 popupMenu（重置当前工具参数 / 打开压感设置）]",
+    steps:
+      "form:toolOptionsForm:brushSize:99;check;state;click:popupResetTool;check;state;click:popupOpenDrawSettings;check;state;reject:drawSettingsButtonBox;check;state",
+  },
+  {
+    name: "38. [类别22：新增标准控件 Slider 与 ScrollBar 边界夹紧测试]",
+    steps:
+      "input:zoomSlider:999;check;state;input:zoomSlider:5;check;state;input:timelineScrollBar:250;check;state;input:timelineScrollBar:-30;check;state",
+  },
+  {
+    name: "39. [类别23：新增标准控件 TextArea 逐字键入 type: 与完整输入 input: 一致性]",
+    steps: "input:assetNoteInput:备注A;check;state;type:assetNoteInput:123;check;state",
+  },
+  {
+    name: "40. [类别24：新增标准控件 TabBar 与 Tree 越界/折叠子节点选择忽略与恢复]",
+    steps:
+      "select:workspaceTabBar:99;select:workspaceTabBar:NotATab;check;state;collapse:layerTree:0:true;select:layerTree:1;check;state;collapse:layerTree:0:false;select:layerTree:1;check;state",
+  },
 ];
+
+interface FlatTreeRow {
+  index: number;
+  id: string;
+  depth: number;
+  isGroup: boolean;
+  collapsed: boolean;
+  hiddenByAncestor: boolean;
+}
+
+function buildFlatTreeRows(rawItems: unknown): FlatTreeRow[] {
+  if (!Array.isArray(rawItems)) return [];
+  const rows: FlatTreeRow[] = [];
+  const walk = (list: unknown[], depthOffset: number) => {
+    for (const item of list) {
+      const idx = rows.length;
+      if (typeof item !== "object" || item === null || Array.isArray(item)) {
+        rows.push({
+          index: idx,
+          id: String(idx),
+          depth: depthOffset,
+          isGroup: false,
+          collapsed: false,
+          hiddenByAncestor: false,
+        });
+        continue;
+      }
+      const map = item as Record<string, unknown>;
+      const children = Array.isArray(map.children) ? map.children : [];
+      const depth = typeof map.depth === "number" ? map.depth : depthOffset;
+      const isGroup = Boolean(map.isGroup || map.kind === "group" || children.length > 0);
+      const id = String(map.id ?? map.name ?? idx);
+      rows.push({
+        index: idx,
+        id,
+        depth,
+        isGroup,
+        collapsed: Boolean(map.collapsed),
+        hiddenByAncestor: false,
+      });
+      if (children.length > 0) walk(children, depth + 1);
+    }
+  };
+  walk(rawItems, 0);
+  let collapsedDepth = -1;
+  for (const r of rows) {
+    if (collapsedDepth >= 0) {
+      if (r.depth > collapsedDepth) {
+        r.hiddenByAncestor = true;
+        continue;
+      }
+      collapsedDepth = -1;
+    }
+    if (r.isGroup && r.collapsed) collapsedDepth = r.depth;
+  }
+  return rows;
+}
 
 async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string[]> {
   const outLines: string[] = [];
@@ -106,8 +275,18 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
     const rest = step.split(":").slice(2).join(":");
     if (verb === "state") {
       outLines.push(`state ${dumpRuntime(runtime, project.scene)}`);
-    } else if (verb === "wait" || verb === "check" || verb === "size" || verb === "shot" || verb === "resize" || verb === "layout") {
+    } else if (
+      verb === "wait" ||
+      (verb === "check" && !id) ||
+      verb === "size" ||
+      verb === "shot" ||
+      verb === "resize" ||
+      verb === "layout"
+    ) {
       continue;
+    } else if (verb === "clock") {
+      const ms = Number(id);
+      if (Number.isFinite(ms)) runtime.setClock(ms);
     } else if (verb === "request") {
       let args: Record<string, Value> = {};
       if (rest) {
@@ -124,8 +303,64 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
       runtime.setActionSimulation(id, { mode: (modeStr || "real") as ActionSimMode, delayMs });
     } else if (!project.scene.nodes[id] && !findMenuItem(project.scene, id)) {
       outLines.push(`error 找不到控件 ${id}（步骤 ${step}）`);
+    } else if (verb === "check") {
+      const [rowStr = "0", boolStr = "false"] = rest.split(":");
+      const row = Number(rowStr);
+      const checked = boolStr === "1" || boolStr === "true";
+      const rows = buildFlatTreeRows(runtime.view(id).props.items);
+      const itemId = row >= 0 && row < rows.length ? rows[row].id : String(row);
+      runtime.dispatch(id, "toggleCheck", { index: row, id: itemId, checked });
+    } else if (verb === "collapse") {
+      const [rowStr = "0", boolStr = "false"] = rest.split(":");
+      const row = Number(rowStr);
+      const collapsed = boolStr === "1" || boolStr === "true";
+      const rows = buildFlatTreeRows(runtime.view(id).props.items);
+      const itemId = row >= 0 && row < rows.length ? rows[row].id : String(row);
+      runtime.dispatch(id, "toggleCollapse", { index: row, id: itemId, collapsed });
+    } else if (verb === "drag" || verb === "reorder") {
+      const [fromStr = "0", toStr = "0"] = rest.split(":");
+      const from = Number(fromStr);
+      const to = Number(toStr);
+      if (Number.isInteger(from) && Number.isInteger(to) && from !== to) {
+        runtime.dispatch(id, "reorder", { from, to });
+      }
+    } else if (verb === "form") {
+      const [fieldName = "", ...valParts] = rest.split(":");
+      const rawVal = valParts.join(":");
+      const view = runtime.view(id);
+      const schema = (view.props.schema ?? {}) as Record<string, unknown>;
+      const ctrls = Array.isArray(schema.controls) ? (schema.controls as Array<Record<string, unknown>>) : [];
+      const cm = ctrls.find((c) => String(c.name ?? "") === fieldName);
+      if (cm) {
+        const type = String(cm.type ?? "slider");
+        const hook = String(cm.hook ?? "");
+        let value: Value = rawVal;
+        if (type === "slider") {
+          const minV = Number(cm.min ?? 0);
+          const maxV = Number(cm.max ?? 100);
+          const rawNum = Number(rawVal);
+          value = Math.max(minV, Math.min(maxV, Number.isFinite(rawNum) ? Math.trunc(rawNum) : 0));
+        } else if (type === "check") {
+          value = rawVal === "true" || rawVal === "1";
+        } else if (type === "button" || type === "subwindow") {
+          value = true;
+        }
+        runtime.dispatch(id, "change", { name: fieldName, value, hook, type });
+      }
+    } else if (verb === "accept") {
+      const node = project.scene.nodes[id];
+      if (node?.type === "DialogButtonBox") {
+        runtime.dispatch(id, "accept");
+      } else {
+        runtime.closeWindow(id);
+      }
     } else if (verb === "close" || verb === "reject") {
-      runtime.closeWindow(id);
+      const node = project.scene.nodes[id];
+      if (node?.type === "DialogButtonBox") {
+        runtime.dispatch(id, "reject");
+      } else {
+        runtime.closeWindow(id);
+      }
     } else if (verb === "click" || verb === "dblclick") {
       const node = project.scene.nodes[id];
       const cbBefore = node?.type === "CheckBox" ? Boolean(runtime.view(id).props.value) : false;
@@ -163,16 +398,23 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
       }
     } else if (verb === "input") {
       const node = project.scene.nodes[id];
-      if (node?.type === "SpinBox") {
+      if (node?.type === "SpinBox" || node?.type === "Slider" || node?.type === "ScrollBar") {
         const view = runtime.view(id);
+        const defMax = node.type === "SpinBox" ? 9999 : 100;
         const min = Number(view.props.min ?? 0);
-        const max = Number(view.props.max ?? 9999);
+        const max = Number(view.props.max ?? defMax);
         const rawNum = Number(rest);
         if (Number.isFinite(rawNum)) {
           const clamped = Math.max(min, Math.min(max, Math.trunc(rawNum)));
           if (clamped !== Number(view.props.value ?? 0)) {
             runtime.dispatch(id, "change", clamped);
           }
+        }
+      } else if (node?.type === "TextArea") {
+        const cur = String(runtime.view(id).props.value ?? "");
+        typed.set(id, rest);
+        if (rest !== cur) {
+          runtime.dispatch(id, "change", rest);
         }
       } else {
         typed.set(id, rest);
@@ -202,6 +444,48 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
         if (/^-?\d+$/.test(rest.trim())) {
           const row = Number(rest.trim());
           if (Number.isInteger(row) && row >= 0 && row < items.length && row !== Number(view.props.value ?? -1)) {
+            runtime.dispatch(id, "change", row);
+            runtime.dispatch(id, "select", row);
+          }
+        }
+      } else if (node?.type === "TabBar") {
+        const view = runtime.view(id);
+        const rawTabs = view.props.tabs;
+        const tabs = Array.isArray(rawTabs)
+          ? rawTabs.map((it, i) =>
+              typeof it === "object" && it !== null
+                ? String(
+                    (it as Record<string, unknown>).label ??
+                      (it as Record<string, unknown>).title ??
+                      (it as Record<string, unknown>).name ??
+                      i,
+                  )
+                : String(it),
+            )
+          : String(rawTabs ?? "")
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+        let idx = tabs.indexOf(rest);
+        if (idx < 0 && /^-?\d+$/.test(rest.trim())) {
+          const n = Number(rest.trim());
+          if (Number.isInteger(n) && n >= 0 && n < tabs.length) idx = n;
+        }
+        if (idx >= 0 && idx !== Number(view.props.value ?? 0)) {
+          runtime.dispatch(id, "change", idx);
+        }
+      } else if (node?.type === "Tree") {
+        const view = runtime.view(id);
+        const rows = buildFlatTreeRows(view.props.items);
+        if (/^-?\d+$/.test(rest.trim())) {
+          const row = Number(rest.trim());
+          if (
+            Number.isInteger(row) &&
+            row >= 0 &&
+            row < rows.length &&
+            !rows[row].hiddenByAncestor &&
+            row !== Number(view.props.value ?? 0)
+          ) {
             runtime.dispatch(id, "change", row);
             runtime.dispatch(id, "select", row);
           }

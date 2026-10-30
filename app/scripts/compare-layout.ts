@@ -60,6 +60,11 @@ function buildHtmlPage(): string {
       position: relative;
       overflow: hidden;
       user-select: none;
+      --color-text: #e2e8f0;
+      --color-heading: #f8fafc;
+      --color-muted: #94a3b8;
+      --color-surface: #1e293b;
+      --color-border: #334155;
     }
   </style>
 </head>
@@ -73,6 +78,7 @@ function buildHtmlPage(): string {
       MOUSE_EVENTS,
       STANDARD_COMPONENTS,
     } from "/src/model.ts";
+    import { STANDARD_COMPONENT_LIST } from "/standard/index.ts";
     import { Runtime } from "/src/runtime.ts";
 
     const projectRes = await fetch("/project-data.json");
@@ -83,6 +89,14 @@ function buildHtmlPage(): string {
       effects: new Map(),
       docs: new Map(),
     };
+
+    for (const std of STANDARD_COMPONENT_LIST) {
+      if (std.styleText) {
+        const styleEl = document.createElement("style");
+        styleEl.textContent = \`@scope ([data-vf-type="\${std.decl.type}"]) { \${std.styleText} }\`;
+        document.head.append(styleEl);
+      }
+    }
 
     const runtime = new Runtime(project);
     runtime.start();
@@ -181,7 +195,13 @@ function buildHtmlPage(): string {
       if (root.menuBar) {
         const bar = document.createElement("div");
         const mh = root.menuBar.height ?? 28;
-        bar.style.cssText = \`position:absolute;left:0;top:0;width:100%;height:\${mh}px;display:flex;align-items:center;gap:4px;padding:0 8px;background:#111827;border-bottom:1px solid #263042;box-sizing:border-box;z-index:20;font-size:12px;color:#e2e8f0;\`;
+        bar.style.cssText = \`position:absolute;left:0;top:0;width:100%;height:\${mh}px;display:flex;align-items:center;gap:12px;padding:0 10px;background:#111827;border-bottom:1px solid #263042;box-sizing:border-box;z-index:20;font-size:12px;color:#e2e8f0;\`;
+        for (const m of root.menuBar.menus ?? []) {
+          const item = document.createElement("span");
+          item.style.cssText = "font-weight:600;color:#cbd5e1;padding:2px 6px;border-radius:4px;background:#1e293b;";
+          item.textContent = m.title;
+          bar.append(item);
+        }
         stage.append(bar);
       }
 
@@ -280,40 +300,47 @@ function buildHtmlPage(): string {
 
     const sizes = ${JSON.stringify(SIZES)};
     renderStage(sizes[0]);
+    if (new URLSearchParams(window.location.search).get("shot") === "1") {
+      applyViews(sizes[0]);
+      await nextFrame();
+    } else {
+      const measuredScenarios = [];
+      for (const size of sizes) {
+        applyViews(size);
+        await nextFrame();
+        measuredScenarios.push(measureDomBoxes());
+      }
 
-    const measuredScenarios = [];
-    for (const size of sizes) {
-      applyViews(size);
+      // 第 4 个场景：在 1024x720 下真实点击 DOM 中的 newProjectBtn 打开新建项目对话框后量取 DOM
+      const lastSize = sizes[sizes.length - 1];
+      const btnEl = stage.querySelector('[data-vf-id="newProjectBtn"] button') || stage.querySelector('[data-vf-id="newProjectBtn"]');
+      if (btnEl) {
+        btnEl.click();
+      } else {
+        runtime.dispatch("newProjectBtn", "click");
+      }
+      applyViews(lastSize);
       await nextFrame();
       measuredScenarios.push(measureDomBoxes());
-    }
 
-    // 第 4 个场景：在 1024x720 下真实点击 DOM 中的 newProjectBtn 打开新建项目对话框后量取 DOM
-    const lastSize = sizes[sizes.length - 1];
-    const btnEl = stage.querySelector('[data-vf-id="newProjectBtn"] button') || stage.querySelector('[data-vf-id="newProjectBtn"]');
-    if (btnEl) {
-      btnEl.click();
-    } else {
-      runtime.dispatch("newProjectBtn", "click");
+      await fetch("/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userAgent: navigator.userAgent,
+          scenarios: measuredScenarios,
+        }),
+      });
     }
-    applyViews(lastSize);
-    await nextFrame();
-    measuredScenarios.push(measureDomBoxes());
-
-    await fetch("/report", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userAgent: navigator.userAgent,
-        scenarios: measuredScenarios,
-      }),
-    });
   </script>
 </body>
 </html>`;
 }
 
-async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadProjectFiles>>): Promise<{
+async function measureInHeadlessBrowser(
+  project: Awaited<ReturnType<typeof loadProjectFiles>>,
+  webShotOutPath?: string,
+): Promise<{
   userAgent: string;
   scenarios: Array<Record<string, Box>>;
 }> {
@@ -370,8 +397,14 @@ async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadP
         return;
       }
       if (filePath.endsWith(".json")) {
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-        res.end(fs.readFileSync(filePath, "utf8"));
+        const rawJson = fs.readFileSync(filePath, "utf8");
+        if (req.headers["sec-fetch-dest"] === "script" || (req.headers.accept ?? "").includes("javascript")) {
+          res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8" });
+          res.end(`export default ${rawJson};`);
+        } else {
+          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(rawJson);
+        }
         return;
       }
       if (filePath.endsWith(".css")) {
@@ -424,7 +457,36 @@ async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadP
   }, 15000);
 
   try {
-    return await reportPromise;
+    const res = await reportPromise;
+    if (webShotOutPath) {
+      const shotProfileDir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-shot-chrome-"));
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const shotProc = spawn(
+            browserExe,
+            [
+              "--headless=new",
+              "--disable-gpu",
+              "--hide-scrollbars",
+              "--no-first-run",
+              "--no-default-browser-check",
+              "--window-size=1280,800",
+              `--user-data-dir=${shotProfileDir}`,
+              `--screenshot=${webShotOutPath}`,
+              `${url}?shot=1`,
+            ],
+            { stdio: "ignore" },
+          );
+          shotProc.on("exit", () => resolve());
+          shotProc.on("error", reject);
+        });
+      } finally {
+        try {
+          fs.rmSync(shotProfileDir, { recursive: true, force: true });
+        } catch {}
+      }
+    }
+    return res;
   } finally {
     clearTimeout(timeout);
     try {
@@ -438,17 +500,18 @@ async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadP
 }
 
 async function main(): Promise<number> {
-  const [projectArg, qtExeArg] = process.argv.slice(2);
+  const [projectArg, qtExeArg, webShotArg] = process.argv.slice(2);
   if (!projectArg || !qtExeArg) {
-    console.log("用法：node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>");
+    console.log("用法：node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径> [Web截图输出路径]");
     return 2;
   }
   const projectDir = path.resolve(projectArg);
   const qtExe = path.resolve(qtExeArg);
+  const webShotOutPath = webShotArg ? path.resolve(webShotArg) : undefined;
   const project = await loadProjectFiles(nodeIO(projectDir), null);
 
   // 1. 启动无头浏览器渲染真实 DOM 并通过 getBoundingClientRect() 量取各场景下每个可见控件的屏幕坐标
-  const domMeasured = await measureInHeadlessBrowser(project);
+  const domMeasured = await measureInHeadlessBrowser(project, webShotOutPath);
   console.log(`DOM 实测浏览器：${domMeasured.userAgent}`);
 
   // 2. 启动 Qt 可执行文件量取相同场景下的真实 QWidget 几何

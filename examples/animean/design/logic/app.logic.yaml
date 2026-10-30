@@ -14,22 +14,78 @@ state:
     fps:
       type: number
       initial: 24
+    fpsLabel:
+      type: string
+      initial: "24 fps"
     transparent:
       type: boolean
       initial: true
     activeTool:
       type: enum
-      values: [brush, eraser, fill]
+      values: [brush, eraser, fill, shape, select, move, eyedropper]
       initial: brush
+    workspaceTab:
+      type: number
+      initial: 0
+    zoom:
+      type: number
+      initial: 100
     currentFrame:
       type: number
       initial: 1
+    totalFrames:
+      type: number
+      initial: 24
+    playing:
+      type: boolean
+      initial: false
+    loopPlay:
+      type: boolean
+      initial: true
+    onionSkin:
+      type: boolean
+      initial: false
+    timelineScroll:
+      type: number
+      initial: 0
+    theme:
+      type: enum
+      values: [dark, graphite, light]
+      initial: dark
+    stabilizer:
+      type: enum
+      values: [off, med, high]
+      initial: med
     statusMessage:
       type: string
       initial: "就绪"
     exportResult:
       type: string
       initial: "尚未导出"
+  toolOptions:
+    schema:
+      type: object
+      initial:
+        row_spacing: 6
+        column_spacing: 8
+        controls:
+          - { name: "brushSize", type: "slider", title: "笔刷半径", hook: "setBrushSize", min: 1, max: 200, value: 18, row: 0, start_column: 0, end_column: 1 }
+          - { name: "brushHardness", type: "slider", title: "笔尖硬度", hook: "setBrushHardness", min: 0, max: 100, value: 85, row: 1, start_column: 0, end_column: 1 }
+          - { name: "strokeMode", type: "list", title: "笔触模式", hook: "setStrokeMode", options: ["Freehand", "Bezier", "Calligraphy"], value: "Freehand", row: 2, start_column: 0, end_column: 1 }
+          - { name: "smoothLevel", type: "slider", title: "曲线平滑", hook: "setSmoothLevel", min: 0, max: 20, value: 8, row: 3, start_column: 0, end_column: 1, visible_when: "strokeMode != 'Freehand'" }
+          - { name: "pressureSize", type: "check", title: "压感半径", hook: "setPressureSize", value: true, row: 4, column: 0 }
+          - { name: "openAdvBrush", type: "subwindow", title: "压感曲线...", hook: "openDrawSettings", row: 4, column: 1 }
+    values:
+      type: object
+      initial:
+        brushSize: 18
+        brushHardness: 85
+        strokeMode: "Freehand"
+        smoothLevel: 8
+        pressureSize: true
+    lastHook:
+      type: string
+      initial: "switch:brush"
   layer:
     visible:
       type: boolean
@@ -57,6 +113,48 @@ state:
     nextId:
       type: number
       initial: 4
+    treeItems:
+      type: array
+      initial:
+        - { id: "grp_char", name: "角色图层组", kind: "group", isGroup: true, depth: 0, collapsed: false, checked: true }
+        - { id: "lyr_line", name: "人物线稿", kind: "Vector", isGroup: false, depth: 1, collapsed: false, checked: true }
+        - { id: "lyr_color", name: "人物铺色", kind: "Raster", isGroup: false, depth: 1, collapsed: false, checked: true }
+        - { id: "lyr_bg", name: "远景背景层", kind: "Raster", isGroup: false, depth: 0, collapsed: false, checked: true }
+    treeSelectedIndex:
+      type: number
+      initial: 0
+  assets:
+    items:
+      type: array
+      initial:
+        - { id: 1, name: "角色设定草图.png", badge: "PNG" }
+        - { id: 2, name: "水彩纸纹理_01.tex", badge: "TEX" }
+        - { id: 3, name: "森林背景远景.png", badge: "PNG" }
+    selectedIndex:
+      type: number
+      initial: 0
+    nextId:
+      type: number
+      initial: 4
+    note:
+      type: string
+      initial: "主角全身三视图参考，用于第 1-12 帧原画对位。"
+  history:
+    items:
+      type: array
+      initial:
+        - { id: 1, name: "初始化画布 (1920x1080)", badge: "#1" }
+        - { id: 2, name: "导入角色线稿层", badge: "#2" }
+        - { id: 3, name: "绘制第 1 帧关键帧", badge: "#3" }
+    selectedIndex:
+      type: number
+      initial: 2
+    mutedFrom:
+      type: number
+      initial: -1
+    nextId:
+      type: number
+      initial: 4
   inspector:
     tabIndex:
       type: number
@@ -80,6 +178,19 @@ state:
     transparent:
       type: boolean
       initial: true
+  drawSettings:
+    pressureCurve:
+      type: string
+      initial: "Linear"
+    minRadius:
+      type: number
+      initial: 15
+    tiltSensitivity:
+      type: number
+      initial: 60
+    antiAlias:
+      type: boolean
+      initial: true
 
 conditions:
   canRemoveLayer:
@@ -91,6 +202,12 @@ conditions:
   canMoveLayerDown:
     type: symbol
     expr: layers.selectedIndex >= 0 and layers.selectedIndex < layers.items.length - 1
+  canRemoveAsset:
+    type: symbol
+    expr: assets.items.length > 1 and assets.selectedIndex >= 0
+  canRemoveFrame:
+    type: symbol
+    expr: project.totalFrames > 1
   isBrush:
     type: symbol
     expr: project.activeTool == "brush"
@@ -100,19 +217,173 @@ conditions:
   isFill:
     type: symbol
     expr: project.activeTool == "fill"
+  isShape:
+    type: symbol
+    expr: project.activeTool == "shape"
+  isSelect:
+    type: symbol
+    expr: project.activeTool == "select"
+  isMove:
+    type: symbol
+    expr: project.activeTool == "move"
+  isEyedropper:
+    type: symbol
+    expr: project.activeTool == "eyedropper"
   isPropsTab:
     type: symbol
     expr: inspector.tabIndex == 0
   isExportTab:
     type: symbol
     expr: inspector.tabIndex == 1
+  isHistoryTab:
+    type: symbol
+    expr: inspector.tabIndex == 2
 
 events:
+  clock.tick:
+    - if: project.playing
+      then:
+        - if: project.currentFrame < project.totalFrames
+          then:
+            - set: project.currentFrame = project.currentFrame + 1
+          else:
+            - if: project.loopPlay
+              then:
+                - set: project.currentFrame = 1
+              else:
+                - set: project.playing = false
+        - set: 'project.statusMessage = "播放时钟推进：" + ms + " ms（第 " + project.currentFrame + " 帧）"'
+      else:
+        - set: 'project.statusMessage = "时钟同步：" + ms + " ms"'
   openNewProject:
     - set: 'newProject.name = "新动画镜头"'
     - set: 'newProject.preset = "1080p"'
     - fn: syncPresetDimensions
     - openWindow: newProjectDialog
+  openProjectFile:
+    - set: 'project.title = "导入工程_镜头02"'
+    - set: 'project.statusMessage = "已打开项目：导入工程_镜头02"'
+    - fn:
+        name: recordHistory
+        args:
+          label: '"打开项目：导入工程_镜头02"'
+  saveProjectFile:
+    - set: 'project.statusMessage = "已保存项目：" + project.title'
+    - fn:
+        name: recordHistory
+        args:
+          label: '"保存项目快照"'
+  saveAsProjectFile:
+    - set: 'project.title = project.title + "_副本"'
+    - set: 'project.statusMessage = "已另存为：" + project.title'
+  importImageAsset:
+    - push:
+        to: assets.items
+        item:
+          id: assets.nextId
+          name: '"贴图素材_" + assets.nextId + ".png"'
+          badge: '"PNG"'
+    - set: assets.selectedIndex = assets.items.length - 1
+    - set: assets.nextId = assets.nextId + 1
+    - set: 'project.statusMessage = "已导入图像素材"'
+    - fn:
+        name: recordHistory
+        args:
+          label: '"导入外部素材"'
+  triggerExportClip:
+    - set: inspector.tabIndex = 1
+    - call: exportClip
+  toggleOnionSkin:
+    - set: project.onionSkin = not project.onionSkin
+    - set: 'project.statusMessage = project.onionSkin ? "已开启洋葱皮透视" : "已关闭洋葱皮透视"'
+  resetWorkspaceLayout:
+    - set: project.workspaceTab = 0
+    - set: project.zoom = 100
+    - set: inspector.tabIndex = 0
+    - set: 'project.statusMessage = "工作区视图与缩放已重置"'
+  undoHistory:
+    - fn:
+        name: rewindHistory
+        args:
+          mode: '"undo"'
+  redoHistory:
+    - fn:
+        name: rewindHistory
+        args:
+          mode: '"redo"'
+  clearCurrentFrame:
+    - set: 'project.statusMessage = "已清空第 " + project.currentFrame + " 帧画布内容"'
+    - fn:
+        name: recordHistory
+        args:
+          label: '"清空第 " + project.currentFrame + " 帧"'
+  runAutoColorize:
+    - set: 'project.statusMessage = "自动映射：已完成当前帧智能上色"'
+    - fn:
+        name: recordHistory
+        args:
+          label: '"执行一键自动上色"'
+  runAutoInbetween:
+    - set: project.totalFrames = project.totalFrames + 2
+    - set: 'project.statusMessage = "自动映射：已生成 2 帧补间动画"'
+    - fn:
+        name: recordHistory
+        args:
+          label: '"生成中间帧补间 (+2)"'
+  syncTextureMapping:
+    - set: project.workspaceTab = 1
+    - set: 'project.statusMessage = "已切换至纹理贴图区并同步 UV 映射"'
+  openDrawSettings:
+    - openWindow: drawSettingsDialog
+  setStabilizerOff:
+    - set: 'project.stabilizer = "off"'
+    - set: 'project.statusMessage = "抖动修正：关闭 (S0)"'
+  setStabilizerMed:
+    - set: 'project.stabilizer = "med"'
+    - set: 'project.statusMessage = "抖动修正：标准 (S5)"'
+  setStabilizerHigh:
+    - set: 'project.stabilizer = "high"'
+    - set: 'project.statusMessage = "抖动修正：强力平滑 (S12)"'
+  setThemeDark:
+    - set: 'project.theme = "dark"'
+    - set: 'project.statusMessage = "已切换主题：深色创作主题"'
+  setThemeGraphite:
+    - set: 'project.theme = "graphite"'
+    - set: 'project.statusMessage = "已切换主题：石墨灰护眼主题"'
+  setThemeLight:
+    - set: 'project.theme = "light"'
+    - set: 'project.statusMessage = "已切换主题：明亮浅色主题"'
+  resetActiveToolOptions:
+    - fn: syncToolOptions
+    - set: 'project.statusMessage = "已重置当前工具默认参数"'
+  duplicateSelectedLayer:
+    - push:
+        to: layers.items
+        item:
+          id: layers.nextId
+          name: '"复制图层 " + layers.nextId'
+          visible: true
+          locked: false
+    - set: layers.selectedIndex = layers.items.length - 1
+    - set: layers.nextId = layers.nextId + 1
+    - set: 'project.statusMessage = "已复制选中图层"'
+  toggleSelectedLayerLock:
+    - set: layer.locked = not layer.locked
+    - set: layers.items[layers.selectedIndex].locked = layer.locked
+    - set: 'project.statusMessage = layer.locked ? "已锁定当前图层" : "已解锁当前图层"'
+  deleteSelectedLayer:
+    - if: canRemoveLayer
+      then:
+        - remove:
+            from: layers.items
+            index: layers.selectedIndex
+        - if: layers.selectedIndex >= layers.items.length
+          then:
+            - set: layers.selectedIndex = layers.items.length - 1
+        - set: 'project.statusMessage = "已通过右键菜单删除图层"'
+  resetCanvasZoom:
+    - set: project.zoom = 100
+    - set: 'project.statusMessage = "画布缩放已重置为 100%"'
   layerToggleVisible:
     owner: business
     text: 用户请求切换当前图层的显示与隐藏
@@ -144,6 +415,8 @@ actions:
       - set: project.statusMessage = error.message
 
 objects:
+  toolsDock:
+    doc: docs/window.md#tools-dock
   newProjectBtn:
     doc: docs/window.md#tools-dock
     events:
@@ -152,24 +425,94 @@ objects:
   toolBrushBtn:
     props:
       variant: 'isBrush ? "primary" : "secondary"'
+      checked: isBrush
     events:
       click:
         - set: 'project.activeTool = "brush"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：画笔"'
+      toggle:
+        - set: 'project.activeTool = "brush"'
+        - fn: syncToolOptions
         - set: 'project.statusMessage = "切换工具：画笔"'
   toolEraserBtn:
     props:
       variant: 'isEraser ? "primary" : "secondary"'
+      checked: isEraser
     events:
       click:
         - set: 'project.activeTool = "eraser"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：橡皮"'
+      toggle:
+        - set: 'project.activeTool = "eraser"'
+        - fn: syncToolOptions
         - set: 'project.statusMessage = "切换工具：橡皮"'
   toolFillBtn:
     props:
       variant: 'isFill ? "primary" : "secondary"'
+      checked: isFill
     events:
       click:
         - set: 'project.activeTool = "fill"'
+        - fn: syncToolOptions
         - set: 'project.statusMessage = "切换工具：填充"'
+      toggle:
+        - set: 'project.activeTool = "fill"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：填充"'
+  toolShapeBtn:
+    props:
+      variant: 'isShape ? "primary" : "secondary"'
+      checked: isShape
+    events:
+      click:
+        - set: 'project.activeTool = "shape"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：几何"'
+      toggle:
+        - set: 'project.activeTool = "shape"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：几何"'
+  toolSelectBtn:
+    props:
+      variant: 'isSelect ? "primary" : "secondary"'
+      checked: isSelect
+    events:
+      click:
+        - set: 'project.activeTool = "select"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：套索"'
+      toggle:
+        - set: 'project.activeTool = "select"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：套索"'
+  toolMoveBtn:
+    props:
+      variant: 'isMove ? "primary" : "secondary"'
+      checked: isMove
+    events:
+      click:
+        - set: 'project.activeTool = "move"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：移动"'
+      toggle:
+        - set: 'project.activeTool = "move"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：移动"'
+  toolEyedropperBtn:
+    props:
+      variant: 'isEyedropper ? "primary" : "secondary"'
+      checked: isEyedropper
+    events:
+      click:
+        - set: 'project.activeTool = "eyedropper"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：吸管"'
+      toggle:
+        - set: 'project.activeTool = "eyedropper"'
+        - fn: syncToolOptions
+        - set: 'project.statusMessage = "切换工具：吸管"'
   projectSummaryLabel:
     props:
       text: 'project.title + " (" + project.width + "x" + project.height + ")"'
@@ -189,6 +532,22 @@ objects:
         - set: layers.selectedIndex = layers.items.length - 1
         - set: layers.nextId = layers.nextId + 1
         - set: 'project.statusMessage = "已新建图层"'
+  addGroupBtn:
+    events:
+      click:
+        - push:
+            to: layers.treeItems
+            item:
+              id: '"grp_" + layers.nextId'
+              name: '"图层组 " + layers.nextId'
+              kind: '"group"'
+              isGroup: true
+              depth: 0
+              collapsed: false
+              checked: true
+        - set: layers.treeSelectedIndex = layers.treeItems.length - 1
+        - set: layers.nextId = layers.nextId + 1
+        - set: 'project.statusMessage = "已新建图层分组"'
   removeLayerBtn:
     props:
       enabled: canRemoveLayer
@@ -229,11 +588,41 @@ objects:
                 to: layers.selectedIndex + 1
             - set: layers.selectedIndex = layers.selectedIndex + 1
             - set: 'project.statusMessage = "图层已下移"'
+  layerTree:
+    doc: docs/window.md#layers-dock
+    bind: layers.treeSelectedIndex
+    props:
+      items: layers.treeItems
+      value: layers.treeSelectedIndex
+    events:
+      change:
+        - set: 'project.statusMessage = "选中图层树节点：" + value'
+      toggleCheck:
+        - set: layers.treeItems[index].checked = checked
+        - set: 'project.statusMessage = checked ? "图层树节点已显示" : "图层树节点已隐藏"'
+      toggleCollapse:
+        - set: layers.treeItems[index].collapsed = collapsed
+        - set: 'project.statusMessage = collapsed ? "图层组已折叠" : "图层组已展开"'
+      reorder:
+        - move:
+            in: layers.treeItems
+            from: from
+            to: to
+        - set: layers.treeSelectedIndex = to
+        - set: 'project.statusMessage = "图层树已重排：" + from + " → " + to'
   layerList:
     bind: layers.selectedIndex
     props:
       items: layers.items
       value: layers.selectedIndex
+    events:
+      reorder:
+        - move:
+            in: layers.items
+            from: from
+            to: to
+        - set: layers.selectedIndex = to
+        - set: 'project.statusMessage = "图层列表已拖动重排：" + from + " → " + to'
   layerVisibleLabel:
     props:
       text: 'layer.visible ? "当前图层：显示" : "当前图层：隐藏"'
@@ -244,26 +633,99 @@ objects:
     events:
       click:
         - emit: layerToggleVisible
+  addAssetBtn:
+    doc: docs/window.md#assets-panel
+    events:
+      click:
+        - emit: importImageAsset
+  removeAssetBtn:
+    props:
+      enabled: canRemoveAsset
+    events:
+      click:
+        - if: canRemoveAsset
+          then:
+            - remove:
+                from: assets.items
+                index: assets.selectedIndex
+            - if: assets.selectedIndex >= assets.items.length
+              then:
+                - set: assets.selectedIndex = assets.items.length - 1
+            - set: 'project.statusMessage = "已移除选中素材"'
+  assetList:
+    doc: docs/window.md#assets-panel
+    bind: assets.selectedIndex
+    props:
+      items: assets.items
+      value: assets.selectedIndex
+    events:
+      change:
+        - set: 'project.statusMessage = "已切换素材项：" + value'
+      reorder:
+        - move:
+            in: assets.items
+            from: from
+            to: to
+        - set: assets.selectedIndex = to
+        - set: 'project.statusMessage = "素材列表已重排：" + from + " → " + to'
+  assetNoteInput:
+    doc: docs/window.md#assets-panel
+    bind: assets.note
+    events:
+      change:
+        - set: 'project.statusMessage = "已更新素材备注"'
 
   centralArea:
     doc: docs/window.md#central-area
+  workspaceTabBar:
+    doc: docs/window.md#central-area
+    bind: project.workspaceTab
+    events:
+      change:
+        - set: 'project.statusMessage = value == 0 ? "已切换至绘图区 (Drawing)" : "已切换至纹理贴图区 (Texture)"'
   canvasTitleLabel:
     props:
-      text: '"画布：" + project.title'
+      text: '(project.workspaceTab == 0 ? "画布：" : "纹理贴图：") + project.title + " (" + project.zoom + "%)"'
+  zoomSlider:
+    bind: project.zoom
+    events:
+      change:
+        - set: 'project.statusMessage = "画布缩放：" + project.zoom + "%"'
   activeToolLabel:
     props:
-      text: 'isBrush ? "当前工具：画笔" : (isEraser ? "当前工具：橡皮" : "当前工具：填充")'
+      text: 'isBrush ? "当前工具：画笔" : (isEraser ? "当前工具：橡皮" : (isFill ? "当前工具：填充" : (isShape ? "当前工具：几何" : (isSelect ? "当前工具：套索" : (isMove ? "当前工具：移动" : "当前工具：吸管")))))'
   canvasHost:
     doc: docs/window.md#canvas-host
 
   inspectorDock:
     doc: docs/window.md#inspector-dock
+  toolOptionsForm:
+    doc: docs/window.md#tool-options-form
+    props:
+      schema: toolOptions.schema
+      values: toolOptions.values
+    events:
+      change:
+        - fn: applyToolOption
+        - if: 'hook == "openDrawSettings"'
+          then:
+            - openWindow: drawSettingsDialog
+        - fn:
+            name: recordHistory
+            args:
+              label: '"调整工具参数：" + name'
   tabPropsBtn:
     props:
       variant: 'isPropsTab ? "primary" : "secondary"'
     events:
       click:
         - set: inspector.tabIndex = 0
+  tabHistoryBtn:
+    props:
+      variant: 'isHistoryTab ? "primary" : "secondary"'
+    events:
+      click:
+        - set: inspector.tabIndex = 2
   tabExportBtn:
     props:
       variant: 'isExportTab ? "primary" : "secondary"'
@@ -289,9 +751,50 @@ objects:
   exportResultLabel:
     props:
       text: project.exportResult
+  undoBtn:
+    doc: docs/window.md#history-panel
+    events:
+      click:
+        - emit: undoHistory
+  redoBtn:
+    doc: docs/window.md#history-panel
+    events:
+      click:
+        - emit: redoHistory
+  clearHistoryBtn:
+    doc: docs/window.md#history-panel
+    events:
+      click:
+        - fn:
+            name: rewindHistory
+            args:
+              mode: '"clear"'
+  historyList:
+    doc: docs/window.md#history-panel
+    bind: history.selectedIndex
+    props:
+      items: history.items
+      value: history.selectedIndex
+      mutedFrom: history.mutedFrom
+    events:
+      change:
+        - fn:
+            name: rewindHistory
+            args:
+              mode: '"select"'
+              index: value
 
   timelineDock:
     doc: docs/window.md#timeline-dock
+  playToggleBtn:
+    props:
+      checked: project.playing
+      text: 'project.playing ? "暂停" : "播放"'
+      variant: 'project.playing ? "danger" : "primary"'
+    events:
+      toggle:
+        - set: project.playing = value
+        - set: 'project.statusMessage = project.playing ? "开始播放时间轴" : "已暂停时间轴播放"'
   prevFrameBtn:
     props:
       enabled: project.currentFrame > 1
@@ -303,14 +806,80 @@ objects:
   nextFrameBtn:
     events:
       click:
+        - if: project.currentFrame >= project.totalFrames
+          then:
+            - set: project.totalFrames = project.currentFrame + 1
         - set: project.currentFrame = project.currentFrame + 1
+  addFrameBtn:
+    events:
+      click:
+        - set: project.totalFrames = project.totalFrames + 1
+        - set: project.currentFrame = project.totalFrames
+        - set: 'project.statusMessage = "已新增关键帧：第 " + project.currentFrame + " 帧"'
+        - fn:
+            name: recordHistory
+            args:
+              label: '"新增第 " + project.currentFrame + " 帧"'
+  removeFrameBtn:
+    props:
+      enabled: canRemoveFrame
+    events:
+      click:
+        - if: canRemoveFrame
+          then:
+            - set: project.totalFrames = project.totalFrames - 1
+            - if: project.currentFrame > project.totalFrames
+              then:
+                - set: project.currentFrame = project.totalFrames
+            - set: 'project.statusMessage = "已删除末尾帧，当前总帧数：" + project.totalFrames'
+  loopToggleBtn:
+    props:
+      checked: project.loopPlay
+      variant: 'project.loopPlay ? "primary" : "secondary"'
+    events:
+      toggle:
+        - set: project.loopPlay = value
+        - set: 'project.statusMessage = project.loopPlay ? "已开启循环播放" : "已关闭循环播放"'
+  onionToggleBtn:
+    props:
+      checked: project.onionSkin
+      variant: 'project.onionSkin ? "primary" : "secondary"'
+    events:
+      toggle:
+        - set: project.onionSkin = value
+        - set: 'project.statusMessage = project.onionSkin ? "已开启洋葱皮透视" : "已关闭洋葱皮透视"'
+  fpsSelectCombo:
+    bind: project.fpsLabel
+    events:
+      change:
+        - set: 'project.fps = value == "12 fps" ? 12 : (value == "30 fps" ? 30 : 24)'
+        - set: 'project.statusMessage = "帧率已切换为 " + project.fps + " fps"'
+  frameSlider:
+    bind: project.currentFrame
+    props:
+      max: project.totalFrames
+      value: project.currentFrame
+    events:
+      change:
+        - set: 'project.statusMessage = "时间轴定位至第 " + project.currentFrame + " 帧"'
   frameInfoLabel:
     props:
       text: '"当前帧：" + project.currentFrame + " / " + project.fps'
+  timelineScrollBar:
+    bind: project.timelineScroll
+    events:
+      change:
+        - set: 'project.statusMessage = "时间轴视口滚动：" + project.timelineScroll + "%"'
+  timelineOffsetLabel:
+    props:
+      text: '"视口偏移：" + project.timelineScroll + "%"'
 
   statusTextLabel:
     props:
       text: project.statusMessage
+  statusClockLabel:
+    props:
+      text: '"时钟：" + clock + " ms"'
   statusLayerCountLabel:
     props:
       text: '"图层数：" + layers.items.length'
@@ -345,3 +914,26 @@ objects:
         - set: project.transparent = newProject.transparent
         - closeWindow: newProjectDialog
         - set: 'project.statusMessage = "已创建项目：" + project.title'
+
+  drawSettingsDialog:
+    doc: docs/window.md#draw-settings-dialog
+  pressureCurveCombo:
+    bind: drawSettings.pressureCurve
+  minRadiusSpin:
+    bind: drawSettings.minRadius
+  tiltSensitivitySlider:
+    bind: drawSettings.tiltSensitivity
+  antiAliasCheck:
+    bind: drawSettings.antiAlias
+  drawSettingsButtonBox:
+    events:
+      accept:
+        - closeWindow: drawSettingsDialog
+        - set: 'project.statusMessage = "已应用压感设置：" + drawSettings.pressureCurve + "（最小笔尖 " + drawSettings.minRadius + "%）"'
+        - fn:
+            name: recordHistory
+            args:
+              label: '"更新压感曲线：" + drawSettings.pressureCurve'
+      reject:
+        - closeWindow: drawSettingsDialog
+        - set: 'project.statusMessage = "已取消画笔压感设置"'

@@ -6,31 +6,54 @@
 #include "Ui.h"
 
 #include <QAbstractAnimation>
+#include <QAbstractItemModel>
+#include <QAbstractSlider>
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QEvent>
 #include <QFile>
 #include <QFrame>
+#include <QGridLayout>
+#include <QHBoxLayout>
 #include <QHash>
+#include <QHeaderView>
+#include <QIcon>
 #include <QJSEngine>
 #include <QJSValue>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QKeySequence>
 #include <QLabel>
+#include <QLayout>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMetaMethod>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPixmap>
+#include <QPlainTextEdit>
 #include <QPointer>
+#include <QPushButton>
+#include <QScrollBar>
 #include <QSignalBlocker>
+#include <QSizePolicy>
+#include <QSlider>
+#include <QSpinBox>
 #include <QStatusBar>
+#include <QTabBar>
 #include <QTimer>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 #include <QVariant>
 //@VF:includes@
@@ -71,6 +94,368 @@ struct Control
     QLabel *placeholder = nullptr;
     QPointer<QWidget> hosted;
 };
+
+// 与 model.ts 中 computeFlowRows / flowHeightForWidth 完全一致的换行流式布局
+class VfFlowLayout : public QLayout
+{
+public:
+    struct FlowItem
+    {
+        QLayoutItem *item = nullptr;
+        QWidget *widget = nullptr;
+        int prefW = 100;
+        int prefH = 32;
+        int minW = 0;
+        int maxW = 1000000;
+        int stretch = 0;
+    };
+
+    VfFlowLayout(QWidget *parent, int padLeft, int padTop, int padRight, int padBottom,
+                 int colGap, int rowGap, int minContainerH, int maxContainerH, bool autoHeight)
+        : QLayout(parent)
+        , m_padLeft(padLeft)
+        , m_padTop(padTop)
+        , m_padRight(padRight)
+        , m_padBottom(padBottom)
+        , m_colGap(colGap)
+        , m_rowGap(rowGap)
+        , m_minContainerH(minContainerH)
+        , m_maxContainerH(maxContainerH)
+        , m_autoHeight(autoHeight)
+    {
+        setContentsMargins(0, 0, 0, 0);
+    }
+
+    ~VfFlowLayout() override
+    {
+        for (const FlowItem &fi : m_items)
+            delete fi.item;
+    }
+
+    void addFlowWidget(QWidget *w, int prefW, int prefH, int minW, int maxW, int stretch)
+    {
+        addChildWidget(w);
+        m_items.append({ new QWidgetItem(w), w, prefW, prefH, minW, maxW, stretch });
+    }
+
+    void addItem(QLayoutItem *item) override
+    {
+        m_items.append({ item, item->widget(), 100, 32, 0, 1000000, 0 });
+    }
+
+    int count() const override { return int(m_items.size()); }
+    QLayoutItem *itemAt(int index) const override
+    {
+        return (index >= 0 && index < m_items.size()) ? m_items.at(index).item : nullptr;
+    }
+    QLayoutItem *takeAt(int index) override
+    {
+        if (index < 0 || index >= m_items.size())
+            return nullptr;
+        return m_items.takeAt(index).item;
+    }
+
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override
+    {
+        return qBound(m_minContainerH, doLayout(QRect(0, 0, width, 0), false), m_maxContainerH);
+    }
+
+    QSize sizeHint() const override { return minimumSize(); }
+    QSize minimumSize() const override
+    {
+        const int w = parentWidget() && parentWidget()->width() > 0 ? parentWidget()->width() : 400;
+        return QSize(m_padLeft + m_padRight, heightForWidth(w));
+    }
+
+    void setGeometry(const QRect &rect) override
+    {
+        QLayout::setGeometry(rect);
+        const int rawH = doLayout(rect, true);
+        const int targetH = qBound(m_minContainerH, rawH, m_maxContainerH);
+        if (m_autoHeight) {
+            if (QWidget *pw = parentWidget()) {
+                if (pw->height() != targetH) {
+                    pw->setFixedHeight(targetH);
+                    if (pw->parentWidget() && pw->parentWidget()->layout())
+                        pw->parentWidget()->layout()->activate();
+                }
+            }
+        }
+    }
+
+private:
+    int doLayout(const QRect &rect, bool apply) const
+    {
+        const int innerW = qMax(0, rect.width() - m_padLeft - m_padRight);
+        QList<FlowItem> visible;
+        for (const FlowItem &fi : m_items) {
+            if (fi.widget && !fi.widget->isHidden())
+                visible.append(fi);
+        }
+        if (visible.isEmpty())
+            return m_padTop + m_padBottom;
+
+        struct Row
+        {
+            QList<FlowItem> items;
+            int height = 0;
+        };
+        QList<Row> rows;
+        QList<FlowItem> current;
+        int usedW = 0;
+
+        for (const FlowItem &fi : visible) {
+            const int gapBefore = current.isEmpty() ? 0 : m_colGap;
+            if (!current.isEmpty() && usedW + gapBefore + fi.prefW > innerW) {
+                int rh = 0;
+                for (const FlowItem &it : current)
+                    rh = qMax(rh, it.prefH);
+                rows.append({ current, rh });
+                current.clear();
+                current.append(fi);
+                usedW = fi.prefW;
+            } else {
+                current.append(fi);
+                usedW += gapBefore + fi.prefW;
+            }
+        }
+        if (!current.isEmpty()) {
+            int rh = 0;
+            for (const FlowItem &it : current)
+                rh = qMax(rh, it.prefH);
+            rows.append({ current, rh });
+        }
+
+        if (apply) {
+            int cursorY = rect.y() + m_padTop;
+            for (const Row &row : rows) {
+                int totalStretch = 0;
+                int fixedSum = 0;
+                for (const FlowItem &it : row.items) {
+                    if (it.stretch > 0)
+                        totalStretch += it.stretch;
+                    else
+                        fixedSum += it.prefW;
+                }
+                const int totalGaps = m_colGap * qMax(0, int(row.items.size()) - 1);
+                const int leftover = qMax(0, innerW - totalGaps - fixedSum);
+                int cursorX = rect.x() + m_padLeft;
+                for (const FlowItem &it : row.items) {
+                    const int w = (it.stretch > 0 && totalStretch > 0)
+                        ? qBound(it.minW, qRound(double(leftover * it.stretch) / double(totalStretch)), it.maxW)
+                        : it.prefW;
+                    it.widget->setGeometry(cursorX, cursorY, w, it.prefH);
+                    cursorX += w + m_colGap;
+                }
+                cursorY += row.height + m_rowGap;
+            }
+        }
+
+        int totalRowH = 0;
+        for (const Row &row : rows)
+            totalRowH += row.height;
+        return m_padTop + m_padBottom + totalRowH + m_rowGap * qMax(0, int(rows.size()) - 1);
+    }
+
+    QList<FlowItem> m_items;
+    int m_padLeft = 0, m_padTop = 0, m_padRight = 0, m_padBottom = 0;
+    int m_colGap = 0, m_rowGap = 0;
+    int m_minContainerH = 0, m_maxContainerH = 1000000;
+    bool m_autoHeight = true;
+};
+
+QIcon makeVectorIcon(const QString &name)
+{
+    if (name.isEmpty())
+        return QIcon();
+    QPixmap pix(16, 16);
+    pix.fill(Qt::transparent);
+    QPainter p(&pix);
+    p.setRenderHint(QPainter::Antialiasing);
+    QPen pen(QColor(226, 232, 240), 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    p.setPen(pen);
+    if (name == QLatin1String("pen") || name == QLatin1String("brush")) {
+        p.drawLine(QPointF(3, 13), QPointF(12, 4));
+        p.drawEllipse(QPointF(12, 4), 1.5, 1.5);
+    } else if (name == QLatin1String("eraser")) {
+        p.drawRoundedRect(QRectF(3, 5, 10, 6), 1.5, 1.5);
+        p.drawLine(QPointF(2, 13), QPointF(14, 13));
+    } else if (name == QLatin1String("fill") || name == QLatin1String("bucket")) {
+        p.drawEllipse(QPointF(8, 9), 4, 4);
+        p.drawLine(QPointF(8, 3), QPointF(8, 6));
+    } else if (name == QLatin1String("connect") || name == QLatin1String("remap")) {
+        p.drawEllipse(QPointF(4, 8), 2, 2);
+        p.drawEllipse(QPointF(12, 8), 2, 2);
+        p.drawLine(QPointF(6, 8), QPointF(10, 8));
+    } else if (name == QLatin1String("arrow") || name == QLatin1String("transfer")) {
+        p.drawLine(QPointF(3, 8), QPointF(13, 8));
+        p.drawLine(QPointF(9, 4), QPointF(13, 8));
+        p.drawLine(QPointF(9, 12), QPointF(13, 8));
+    } else if (name == QLatin1String("play")) {
+        QPolygonF poly;
+        poly << QPointF(5, 3) << QPointF(13, 8) << QPointF(5, 13);
+        p.setBrush(QColor(226, 232, 240));
+        p.drawPolygon(poly);
+    } else if (name == QLatin1String("pause")) {
+        p.drawLine(QPointF(6, 4), QPointF(6, 12));
+        p.drawLine(QPointF(10, 4), QPointF(10, 12));
+    } else if (name == QLatin1String("prev")) {
+        p.drawLine(QPointF(4, 4), QPointF(4, 12));
+        p.drawLine(QPointF(12, 4), QPointF(6, 8));
+        p.drawLine(QPointF(12, 12), QPointF(6, 8));
+    } else if (name == QLatin1String("next")) {
+        p.drawLine(QPointF(12, 4), QPointF(12, 12));
+        p.drawLine(QPointF(4, 4), QPointF(10, 8));
+        p.drawLine(QPointF(4, 12), QPointF(10, 8));
+    } else if (name == QLatin1String("add")) {
+        p.drawLine(QPointF(8, 3), QPointF(8, 13));
+        p.drawLine(QPointF(3, 8), QPointF(13, 8));
+    } else if (name == QLatin1String("remove")) {
+        p.drawLine(QPointF(3, 8), QPointF(13, 8));
+    } else if (name == QLatin1String("up")) {
+        p.drawLine(QPointF(8, 3), QPointF(8, 13));
+        p.drawLine(QPointF(4, 7), QPointF(8, 3));
+        p.drawLine(QPointF(12, 7), QPointF(8, 3));
+    } else if (name == QLatin1String("down")) {
+        p.drawLine(QPointF(8, 3), QPointF(8, 13));
+        p.drawLine(QPointF(4, 9), QPointF(8, 13));
+        p.drawLine(QPointF(12, 9), QPointF(8, 13));
+    } else {
+        p.drawRoundedRect(QRectF(3, 3, 10, 10), 2, 2);
+    }
+    return QIcon(pix);
+}
+
+bool evalVisibleWhen(const QString &expr, const QVariantMap &values)
+{
+    const QString s = expr.trimmed();
+    if (s.isEmpty())
+        return true;
+    if (s.contains(QStringLiteral("||"))) {
+        for (const QString &part : s.split(QStringLiteral("||"))) {
+            if (evalVisibleWhen(part, values))
+                return true;
+        }
+        return false;
+    }
+    if (s.contains(QStringLiteral("&&"))) {
+        for (const QString &part : s.split(QStringLiteral("&&"))) {
+            if (!evalVisibleWhen(part, values))
+                return false;
+        }
+        return true;
+    }
+    const int neIdx = s.indexOf(QStringLiteral("!="));
+    if (neIdx > 0) {
+        const QString key = s.left(neIdx).trimmed();
+        QString rhs = s.mid(neIdx + 2).trimmed();
+        if ((rhs.startsWith(QLatin1Char('\'')) && rhs.endsWith(QLatin1Char('\''))) ||
+            (rhs.startsWith(QLatin1Char('"')) && rhs.endsWith(QLatin1Char('"')))) {
+            rhs = rhs.mid(1, rhs.size() - 2);
+        }
+        return values.value(key).toString() != rhs;
+    }
+    const int eqIdx = s.indexOf(QStringLiteral("=="));
+    if (eqIdx > 0) {
+        const QString key = s.left(eqIdx).trimmed();
+        QString rhs = s.mid(eqIdx + 2).trimmed();
+        if ((rhs.startsWith(QLatin1Char('\'')) && rhs.endsWith(QLatin1Char('\''))) ||
+            (rhs.startsWith(QLatin1Char('"')) && rhs.endsWith(QLatin1Char('"')))) {
+            rhs = rhs.mid(1, rhs.size() - 2);
+        }
+        return values.value(key).toString() == rhs;
+    }
+    if (s.startsWith(QLatin1Char('!')))
+        return !values.value(s.mid(1).trimmed()).toBool();
+    return values.value(s).toBool();
+}
+
+bool evalVisibleWhenVariant(const QVariant &vw, const QVariantMap &values)
+{
+    if (!vw.isValid() || vw.isNull())
+        return true;
+    if (vw.typeId() == QMetaType::QVariantMap) {
+        const QVariantMap cond = vw.toMap();
+        const QString target = cond.value(QStringLiteral("control")).toString();
+        if (target.isEmpty())
+            return true;
+        const QVariant actual = values.value(target);
+        if (cond.contains(QStringLiteral("equals")))
+            return actual == cond.value(QStringLiteral("equals"));
+        if (cond.contains(QStringLiteral("not_equals")))
+            return actual != cond.value(QStringLiteral("not_equals"));
+        if (cond.contains(QStringLiteral("in")))
+            return cond.value(QStringLiteral("in")).toList().contains(actual);
+        return true;
+    }
+    return evalVisibleWhen(vw.toString(), values);
+}
+
+struct FlatTreeRow
+{
+    int index = 0;
+    QString id;
+    QString name;
+    QString kind;
+    int depth = 0;
+    bool isGroup = false;
+    bool collapsed = false;
+    bool checked = true;
+    bool locked = false;
+    bool hiddenByAncestor = false;
+};
+
+void flattenTreeVariantList(const QVariantList &list, int depth, bool parentCollapsed, QList<FlatTreeRow> &out)
+{
+    for (const QVariant &it : list) {
+        const int idx = int(out.size());
+        if (it.typeId() == QMetaType::QVariantMap) {
+            const QVariantMap map = it.toMap();
+            QString name = map.value(QStringLiteral("name")).toString();
+            if (name.isEmpty()) name = map.value(QStringLiteral("label")).toString();
+            if (name.isEmpty()) name = map.value(QStringLiteral("title")).toString();
+            if (name.isEmpty()) name = map.value(QStringLiteral("text")).toString();
+            if (name.isEmpty()) name = map.value(QStringLiteral("id")).toString();
+            QString id = map.value(QStringLiteral("id")).toString();
+            if (id.isEmpty()) id = map.value(QStringLiteral("name"), idx).toString();
+            const QString kind = map.value(QStringLiteral("kind"), map.value(QStringLiteral("type"))).toString();
+            const QVariantList children = map.value(QStringLiteral("children")).toList();
+            const bool isGroup = map.value(QStringLiteral("isGroup")).toBool() ||
+                                 kind == QLatin1String("group") || !children.isEmpty();
+            const bool collapsed = map.value(QStringLiteral("collapsed")).toBool();
+            const bool checked = map.contains(QStringLiteral("visible"))
+                ? map.value(QStringLiteral("visible")).toBool()
+                : map.value(QStringLiteral("checked"), true).toBool();
+            const bool locked = map.value(QStringLiteral("locked")).toBool();
+            const int d = map.contains(QStringLiteral("depth")) ? map.value(QStringLiteral("depth")).toInt() : depth;
+            out.append({ idx, id, name, kind, d, isGroup, collapsed, checked, locked, parentCollapsed });
+            if (!children.isEmpty())
+                flattenTreeVariantList(children, d + 1, parentCollapsed || collapsed, out);
+        } else {
+            out.append({ idx, QString::number(idx), it.toString(), QString(), depth, false, false, true, false, parentCollapsed });
+        }
+    }
+}
+
+QList<FlatTreeRow> buildFlatTreeRows(const QVariantList &raw)
+{
+    QList<FlatTreeRow> rows;
+    flattenTreeVariantList(raw, 0, false, rows);
+    int collapsedDepth = -1;
+    for (FlatTreeRow &r : rows) {
+        if (collapsedDepth >= 0) {
+            if (r.depth > collapsedDepth) {
+                r.hiddenByAncestor = true;
+                continue;
+            }
+            collapsedDepth = -1;
+        }
+        if (r.isGroup && r.collapsed)
+            collapsedDepth = r.depth;
+    }
+    return rows;
+}
 
 QString readResource(const QString &path)
 {
@@ -125,6 +510,7 @@ struct Ui::Private
     QList<Control> controls;          // 第 0 个是窗口本身
     QList<QWidget *> dialogs;         // 弹出窗口与模态对话框
     QList<QPair<QString, QAction *>> menuActions;
+    QHash<QWidget *, QMenu *> popupMenus;
     QStatusBar *statusBar = nullptr;
     QWidget *statusBarControl = nullptr;
     QHash<QObject *, int> byWidget;
@@ -138,6 +524,8 @@ struct Ui::Private
     int add(const QString &id, QWidget *widget, QList<QPair<QString, QByteArray>> props = {}, int effect = -1);
     int addExternal(const QString &id, QFrame *frame, const QString &text);
     void addMenuAction(const QString &id, QAction *action);
+    void addPopupMenu(QWidget *widget, QMenu *menu);
+    void rebuildDataForm(const QString &id, QFrame *frame, const QJSValue &props);
     int controlAt(const QPoint &globalPos) const;
 
     void dispatch(const QString &control, const QString &event, const QJSValue &value = QJSValue());
@@ -289,6 +677,98 @@ void Ui::setActionSimulation(const QString &name, const QString &mode, int delay
     d->call("setActionSim", { name, mode, delayMs });
 }
 
+void Ui::setClock(int ms)
+{
+    d->drain(d->call("setClock", { ms }));
+}
+
+int Ui::clock() const
+{
+    return d->call("getClock").toInt();
+}
+
+void Ui::reorderControl(const QString &id, int from, int to)
+{
+    if (from == to)
+        return;
+    QJSValue payload = d->engine.newObject();
+    payload.setProperty(QStringLiteral("from"), from);
+    payload.setProperty(QStringLiteral("to"), to);
+    d->dispatch(id, QStringLiteral("reorder"), payload);
+}
+
+void Ui::toggleTreeCheck(const QString &id, int row, bool checked)
+{
+    QString itemId = QString::number(row);
+    for (const Control &c : d->controls) {
+        if (c.id == id) {
+            const QList<FlatTreeRow> rows = buildFlatTreeRows(c.widget->property("vfItems").toList());
+            if (row >= 0 && row < rows.size())
+                itemId = rows.at(row).id;
+            break;
+        }
+    }
+    QJSValue payload = d->engine.newObject();
+    payload.setProperty(QStringLiteral("index"), row);
+    payload.setProperty(QStringLiteral("id"), itemId);
+    payload.setProperty(QStringLiteral("checked"), checked);
+    d->dispatch(id, QStringLiteral("toggleCheck"), payload);
+}
+
+void Ui::toggleTreeCollapse(const QString &id, int row, bool collapsed)
+{
+    QString itemId = QString::number(row);
+    for (const Control &c : d->controls) {
+        if (c.id == id) {
+            const QList<FlatTreeRow> rows = buildFlatTreeRows(c.widget->property("vfItems").toList());
+            if (row >= 0 && row < rows.size())
+                itemId = rows.at(row).id;
+            break;
+        }
+    }
+    QJSValue payload = d->engine.newObject();
+    payload.setProperty(QStringLiteral("index"), row);
+    payload.setProperty(QStringLiteral("id"), itemId);
+    payload.setProperty(QStringLiteral("collapsed"), collapsed);
+    d->dispatch(id, QStringLiteral("toggleCollapse"), payload);
+}
+
+void Ui::setDataFormField(const QString &id, const QString &fieldName, const QString &rawValue)
+{
+    for (const Control &c : d->controls) {
+        if (c.id != id)
+            continue;
+        const QVariantMap schema = c.widget->property("vfSchema").toMap();
+        const QVariantList ctrls = schema.value(QStringLiteral("controls")).toList();
+        for (const QVariant &cv : ctrls) {
+            const QVariantMap cm = cv.toMap();
+            if (cm.value(QStringLiteral("name")).toString() != fieldName)
+                continue;
+            const QString type = cm.value(QStringLiteral("type"), QStringLiteral("slider")).toString();
+            const QString hook = cm.value(QStringLiteral("hook")).toString();
+            QJSValue payload = d->engine.newObject();
+            payload.setProperty(QStringLiteral("name"), fieldName);
+            payload.setProperty(QStringLiteral("hook"), hook);
+            payload.setProperty(QStringLiteral("type"), type);
+            if (type == QLatin1String("slider")) {
+                const int minV = cm.value(QStringLiteral("min"), 0).toInt();
+                const int maxV = cm.value(QStringLiteral("max"), 100).toInt();
+                const int clamped = qBound(minV, rawValue.toInt(), maxV);
+                payload.setProperty(QStringLiteral("value"), clamped);
+            } else if (type == QLatin1String("check")) {
+                const bool b = (rawValue == QLatin1String("true") || rawValue == QLatin1String("1"));
+                payload.setProperty(QStringLiteral("value"), b);
+            } else if (type == QLatin1String("button") || type == QLatin1String("subwindow")) {
+                payload.setProperty(QStringLiteral("value"), true);
+            } else {
+                payload.setProperty(QStringLiteral("value"), rawValue);
+            }
+            d->dispatch(id, QStringLiteral("change"), payload);
+            return;
+        }
+    }
+}
+
 // ---- 鼠标事件 ----
 //
 // 和工具里的规则相同：每个控件都有 click、dblclick、mousedown、mouseup、mouseenter、mouseleave；
@@ -352,6 +832,12 @@ bool Ui::eventFilter(QObject *watched, QEvent *event)
             d->dispatch(QString(), QStringLiteral("window.click"));
             if (doubleClick && index > 0)
                 d->dispatch(id, QStringLiteral("dblclick"));
+            if (index > 0) {
+                if (QMenu *pop = d->popupMenus.value(d->controls.at(index).widget, nullptr)) {
+                    QWidget *w = d->controls.at(index).widget;
+                    pop->popup(w->mapToGlobal(QPoint(0, w->height())));
+                }
+            }
         }
         break;
     }
@@ -384,6 +870,34 @@ int Ui::Private::add(const QString &id, QWidget *widget, QList<QPair<QString, QB
     widget->installEventFilter(q);
     controls.append(control);
     byWidget.insert(widget, int(controls.size()) - 1);
+
+    if (auto *list = qobject_cast<QListWidget *>(widget)) {
+        QObject::connect(list->model(), &QAbstractItemModel::rowsMoved, q,
+                         [this, id](const QModelIndex &, int start, int, const QModelIndex &, int row) {
+                             const int to = row > start ? row - 1 : row;
+                             QJSValue payload = engine.newObject();
+                             payload.setProperty(QStringLiteral("from"), start);
+                             payload.setProperty(QStringLiteral("to"), to);
+                             dispatch(id, QStringLiteral("reorder"), payload);
+                         });
+    } else if (auto *tree = qobject_cast<QTreeWidget *>(widget)) {
+        tree->setHeaderHidden(true);
+        tree->setIndentation(14);
+        QObject::connect(tree, &QTreeWidget::currentItemChanged, q,
+                         [this, id, tree](QTreeWidgetItem *current, QTreeWidgetItem *) {
+                             if (!current)
+                                 return;
+                             const int row = current->data(0, Qt::UserRole).toInt();
+                             if (tree->property("currentRow").toInt() != row)
+                                 tree->setProperty("currentRow", row);
+                             dispatch(id, QStringLiteral("change"), row);
+                             dispatch(id, QStringLiteral("select"), row);
+                         });
+    } else if (auto *tabBar = qobject_cast<QTabBar *>(widget)) {
+        tabBar->setExpanding(false);
+        tabBar->setDrawBase(false);
+    }
+
     return int(controls.size()) - 1;
 }
 
@@ -411,6 +925,130 @@ void Ui::Private::addMenuAction(const QString &id, QAction *action)
         dispatch(id, QStringLiteral("click"));
         dispatch(QString(), QStringLiteral("window.click"));
     });
+}
+
+void Ui::Private::addPopupMenu(QWidget *widget, QMenu *menu)
+{
+    popupMenus.insert(widget, menu);
+}
+
+void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSValue &props)
+{
+    if (!frame)
+        return;
+    auto *grid = qobject_cast<QGridLayout *>(frame->layout());
+    if (!grid) {
+        grid = new QGridLayout(frame);
+        grid->setContentsMargins(6, 6, 6, 6);
+    }
+    while (QLayoutItem *item = grid->takeAt(0)) {
+        if (QWidget *w = item->widget())
+            w->deleteLater();
+        delete item;
+    }
+
+    const QVariantMap schema = props.property(QStringLiteral("schema")).toVariant().toMap();
+    const QVariantMap values = props.property(QStringLiteral("values")).toVariant().toMap();
+    const QVariantList ctrls = schema.value(QStringLiteral("controls")).toList();
+    grid->setHorizontalSpacing(schema.value(QStringLiteral("column_spacing"), 8).toInt());
+    grid->setVerticalSpacing(schema.value(QStringLiteral("row_spacing"), 6).toInt());
+
+    if (ctrls.isEmpty()) {
+        const QString emptyText = props.property(QStringLiteral("emptyText")).toString();
+        auto *lbl = new QLabel(emptyText.isEmpty() ? QStringLiteral("当前工具无可调节参数") : emptyText, frame);
+        grid->addWidget(lbl, 0, 0);
+        return;
+    }
+
+    int autoRow = 0;
+    for (const QVariant &cv : ctrls) {
+        const QVariantMap cm = cv.toMap();
+        if (!evalVisibleWhenVariant(cm.value(QStringLiteral("visible_when")), values))
+            continue;
+        const QString name = cm.value(QStringLiteral("name")).toString();
+        const QString type = cm.value(QStringLiteral("type"), QStringLiteral("slider")).toString();
+        const QString title = cm.value(QStringLiteral("title"), name).toString();
+        const QString hook = cm.value(QStringLiteral("hook")).toString();
+        const int row = cm.contains(QStringLiteral("row")) ? cm.value(QStringLiteral("row")).toInt() : autoRow++;
+        const int startCol = cm.value(QStringLiteral("start_column"), cm.value(QStringLiteral("column"), 0)).toInt();
+        const int endCol = cm.value(QStringLiteral("end_column"), startCol).toInt();
+        const int colSpan = qMax(1, endCol - startCol + 1);
+        const QVariant curVal = values.contains(name) ? values.value(name) : cm.value(QStringLiteral("value"));
+
+        auto *cell = new QWidget(frame);
+        auto *cellLay = new QHBoxLayout(cell);
+        cellLay->setContentsMargins(0, 0, 0, 0);
+        cellLay->setSpacing(6);
+
+        if (type == QLatin1String("slider")) {
+            auto *lbl = new QLabel(title, cell);
+            auto *slider = new QSlider(Qt::Horizontal, cell);
+            slider->setRange(cm.value(QStringLiteral("min"), 0).toInt(), cm.value(QStringLiteral("max"), 100).toInt());
+            slider->setValue(curVal.toInt());
+            auto *valLbl = new QLabel(QString::number(slider->value()), cell);
+            cellLay->addWidget(lbl);
+            cellLay->addWidget(slider, 1);
+            cellLay->addWidget(valLbl);
+            QObject::connect(slider, &QSlider::valueChanged, q, [this, id, name, hook, type, valLbl](int v) {
+                valLbl->setText(QString::number(v));
+                QJSValue payload = engine.newObject();
+                payload.setProperty(QStringLiteral("name"), name);
+                payload.setProperty(QStringLiteral("value"), v);
+                payload.setProperty(QStringLiteral("hook"), hook);
+                payload.setProperty(QStringLiteral("type"), type);
+                dispatch(id, QStringLiteral("change"), payload);
+            });
+        } else if (type == QLatin1String("list")) {
+            auto *lbl = new QLabel(title, cell);
+            auto *combo = new QComboBox(cell);
+            const QVariant rawOpts = cm.value(QStringLiteral("options"));
+            if (rawOpts.typeId() == QMetaType::QVariantList) {
+                for (const QVariant &o : rawOpts.toList())
+                    combo->addItem(o.toString());
+            } else {
+                for (const QString &part : rawOpts.toString().split(QLatin1Char(','), Qt::SkipEmptyParts))
+                    combo->addItem(part.trimmed());
+            }
+            const int idx = combo->findText(curVal.toString());
+            if (idx >= 0)
+                combo->setCurrentIndex(idx);
+            cellLay->addWidget(lbl);
+            cellLay->addWidget(combo, 1);
+            QObject::connect(combo, &QComboBox::currentTextChanged, q, [this, id, name, hook, type](const QString &v) {
+                QJSValue payload = engine.newObject();
+                payload.setProperty(QStringLiteral("name"), name);
+                payload.setProperty(QStringLiteral("value"), v);
+                payload.setProperty(QStringLiteral("hook"), hook);
+                payload.setProperty(QStringLiteral("type"), type);
+                dispatch(id, QStringLiteral("change"), payload);
+            });
+        } else if (type == QLatin1String("check")) {
+            auto *cb = new QCheckBox(title, cell);
+            cb->setChecked(curVal.toBool());
+            cellLay->addWidget(cb);
+            QObject::connect(cb, &QCheckBox::toggled, q, [this, id, name, hook, type](bool v) {
+                QJSValue payload = engine.newObject();
+                payload.setProperty(QStringLiteral("name"), name);
+                payload.setProperty(QStringLiteral("value"), v);
+                payload.setProperty(QStringLiteral("hook"), hook);
+                payload.setProperty(QStringLiteral("type"), type);
+                dispatch(id, QStringLiteral("change"), payload);
+            });
+        } else {
+            auto *btn = new QPushButton(title, cell);
+            cellLay->addWidget(btn);
+            QObject::connect(btn, &QPushButton::clicked, q, [this, id, name, hook, type] {
+                QJSValue payload = engine.newObject();
+                payload.setProperty(QStringLiteral("name"), name);
+                payload.setProperty(QStringLiteral("value"), true);
+                payload.setProperty(QStringLiteral("hook"), hook);
+                payload.setProperty(QStringLiteral("type"), type);
+                dispatch(id, QStringLiteral("change"), payload);
+            });
+        }
+        grid->addWidget(cell, row, startCol, 1, colSpan);
+    }
+    grid->setRowStretch(autoRow + 4, 1);
 }
 
 // 某个位置上最里面的那个控件；不在任何控件上（包括窗口之外）时返回 -1，在窗口空白处返回 0。
@@ -562,37 +1200,85 @@ void Ui::Private::applyView()
                         if (idx >= 0 && combo->currentIndex() != idx)
                             combo->setCurrentIndex(idx);
                     }
-                } else if (link.second == "vfItems") {
+                } else if (link.second == "vfIcon") {
+                    if (auto *btn = qobject_cast<QPushButton *>(control.widget)) {
+                        if (btn->property("vfIcon") != wanted) {
+                            btn->setIcon(makeVectorIcon(wanted.toString()));
+                            btn->setIconSize(QSize(14, 14));
+                        }
+                    }
+                } else if (link.second == "checked") {
+                    if (auto *btn = qobject_cast<QPushButton *>(control.widget)) {
+                        if (props.property(QStringLiteral("checkable")).toBool())
+                            btn->setCheckable(true);
+                    }
+                } else if (link.second == "vfItems" || link.second == "vfMutedFrom" || link.second == "vfDraggable") {
                     if (auto *list = qobject_cast<QListWidget *>(control.widget)) {
-                        if (list->property("vfItems") != wanted) {
+                        if (list->property(link.second.constData()) != wanted) {
                             list->clear();
                             const bool checkable = props.property(QStringLiteral("checkable")).toBool();
-                            const QVariantList items = wanted.toList();
-                            for (const QVariant &it : items) {
+                            const bool draggable = props.property(QStringLiteral("draggable")).toBool();
+                            const QJSValue mfVal = props.property(QStringLiteral("mutedFrom"));
+                            const int mutedFrom = mfVal.isNumber() ? mfVal.toInt() : -1;
+                            list->setDragDropMode(draggable ? QAbstractItemView::InternalMove : QAbstractItemView::NoDragDrop);
+                            list->setDefaultDropAction(Qt::MoveAction);
+                            const QVariantList items = props.property(QStringLiteral("items")).toVariant().toList();
+                            for (int i = 0; i < items.size(); ++i) {
+                                const QVariant &it = items.at(i);
+                                QString text;
                                 if (it.typeId() == QMetaType::QVariantMap) {
                                     const QVariantMap map = it.toMap();
                                     QString name = map.value(QStringLiteral("name")).toString();
-                                    if (name.isEmpty())
-                                        name = map.value(QStringLiteral("label")).toString();
-                                    if (name.isEmpty())
-                                        name = map.value(QStringLiteral("title")).toString();
-                                    if (name.isEmpty())
-                                        name = map.value(QStringLiteral("text")).toString();
-                                    if (name.isEmpty())
-                                        name = map.value(QStringLiteral("id")).toString();
+                                    if (name.isEmpty()) name = map.value(QStringLiteral("label")).toString();
+                                    if (name.isEmpty()) name = map.value(QStringLiteral("title")).toString();
+                                    if (name.isEmpty()) name = map.value(QStringLiteral("text")).toString();
+                                    if (name.isEmpty()) name = map.value(QStringLiteral("id")).toString();
+                                    const QString badge = map.value(QStringLiteral("badge"),
+                                                                    map.value(QStringLiteral("time"),
+                                                                              map.value(QStringLiteral("meta")))).toString();
                                     if (checkable) {
                                         const bool vis = map.value(QStringLiteral("visible"), true).toBool();
-                                        list->addItem((vis ? QStringLiteral("● ") : QStringLiteral("○ ")) + name);
+                                        text = (vis ? QStringLiteral("● ") : QStringLiteral("○ ")) + name;
                                     } else {
-                                        list->addItem(name);
+                                        text = name;
                                     }
+                                    if (!badge.isEmpty())
+                                        text += QStringLiteral("  [") + badge + QStringLiteral("]");
                                 } else {
-                                    list->addItem(it.toString());
+                                    text = it.toString();
                                 }
+                                auto *lwItem = new QListWidgetItem(text);
+                                if (mutedFrom >= 0 && i >= mutedFrom)
+                                    lwItem->setForeground(QColor(100, 116, 139));
+                                list->addItem(lwItem);
                             }
                             const int curRow = props.property(QStringLiteral("value")).toInt();
                             if (curRow >= 0 && curRow < list->count())
                                 list->setCurrentRow(curRow);
+                        }
+                    } else if (auto *tree = qobject_cast<QTreeWidget *>(control.widget)) {
+                        if (tree->property(link.second.constData()) != wanted) {
+                            tree->clear();
+                            const bool checkable = props.property(QStringLiteral("checkable")).toBool();
+                            const QList<FlatTreeRow> rows = buildFlatTreeRows(props.property(QStringLiteral("items")).toVariant().toList());
+                            const int curRow = props.property(QStringLiteral("value")).toInt();
+                            for (const FlatTreeRow &r : rows) {
+                                if (r.hiddenByAncestor)
+                                    continue;
+                                QString prefix = QString(r.depth * 2, QLatin1Char(' '));
+                                if (r.isGroup)
+                                    prefix += r.collapsed ? QStringLiteral("▸ 📁 ") : QStringLiteral("▾ 📂 ");
+                                if (checkable)
+                                    prefix += r.checked ? QStringLiteral("● ") : QStringLiteral("○ ");
+                                QString label = prefix + r.name;
+                                if (!r.kind.isEmpty() && !r.isGroup)
+                                    label += QStringLiteral("  [") + r.kind + QStringLiteral("]");
+                                auto *twItem = new QTreeWidgetItem(tree, QStringList{ label });
+                                twItem->setData(0, Qt::UserRole, r.index);
+                                twItem->setData(0, Qt::UserRole + 1, r.id);
+                                if (r.index == curRow)
+                                    tree->setCurrentItem(twItem);
+                            }
                         }
                     }
                 } else if (link.second == "currentRow") {
@@ -600,10 +1286,81 @@ void Ui::Private::applyView()
                         const int row = wanted.toInt();
                         if (row >= -1 && row < list->count() && list->currentRow() != row)
                             list->setCurrentRow(row);
+                    } else if (auto *tree = qobject_cast<QTreeWidget *>(control.widget)) {
+                        const int row = wanted.toInt();
+                        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                            QTreeWidgetItem *it = tree->topLevelItem(i);
+                            if (it->data(0, Qt::UserRole).toInt() == row) {
+                                if (tree->currentItem() != it)
+                                    tree->setCurrentItem(it);
+                                break;
+                            }
+                        }
+                    }
+                } else if (link.second == "vfTabs") {
+                    if (auto *tabBar = qobject_cast<QTabBar *>(control.widget)) {
+                        if (tabBar->property("vfTabs") != wanted) {
+                            while (tabBar->count() > 0)
+                                tabBar->removeTab(0);
+                            if (wanted.typeId() == QMetaType::QVariantList) {
+                                for (const QVariant &it : wanted.toList())
+                                    tabBar->addTab(it.toString());
+                            } else {
+                                for (const QString &part : wanted.toString().split(QLatin1Char(','), Qt::SkipEmptyParts))
+                                    tabBar->addTab(part.trimmed());
+                            }
+                            const int curIdx = props.property(QStringLiteral("value")).toInt();
+                            if (curIdx >= 0 && curIdx < tabBar->count())
+                                tabBar->setCurrentIndex(curIdx);
+                        }
+                    }
+                } else if (link.second == "currentIndex") {
+                    if (auto *tabBar = qobject_cast<QTabBar *>(control.widget)) {
+                        const int idx = wanted.toInt();
+                        if (idx >= 0 && idx < tabBar->count() && tabBar->currentIndex() != idx)
+                            tabBar->setCurrentIndex(idx);
                     }
                 } else if (link.second == "vfOrientation") {
-                    if (auto *frame = qobject_cast<QFrame *>(control.widget)) {
+                    if (auto *slider = qobject_cast<QAbstractSlider *>(control.widget)) {
+                        slider->setOrientation(wanted.toString() == QLatin1String("vertical") ? Qt::Vertical : Qt::Horizontal);
+                    } else if (auto *frame = qobject_cast<QFrame *>(control.widget)) {
                         frame->setFrameShape(wanted.toString() == QLatin1String("vertical") ? QFrame::VLine : QFrame::HLine);
+                    }
+                } else if (link.second == "vfButtons" || link.second == "vfOkText" || link.second == "vfCancelText") {
+                    if (auto *bb = qobject_cast<QDialogButtonBox *>(control.widget)) {
+                        if (bb->property(link.second.constData()) != wanted) {
+                            const QString rawBtns = props.property(QStringLiteral("buttons")).toString();
+                            const QStringList parts = (rawBtns.isEmpty() ? QStringLiteral("ok,cancel") : rawBtns)
+                                                          .split(QLatin1Char(','), Qt::SkipEmptyParts);
+                            QDialogButtonBox::StandardButtons flags = QDialogButtonBox::NoButton;
+                            for (const QString &p : parts) {
+                                const QString k = p.trimmed().toLower();
+                                if (k == QLatin1String("ok")) flags |= QDialogButtonBox::Ok;
+                                else if (k == QLatin1String("cancel")) flags |= QDialogButtonBox::Cancel;
+                                else if (k == QLatin1String("apply")) flags |= QDialogButtonBox::Apply;
+                                else if (k == QLatin1String("close")) flags |= QDialogButtonBox::Close;
+                            }
+                            bb->setStandardButtons(flags);
+                            if (QPushButton *okBtn = bb->button(QDialogButtonBox::Ok)) {
+                                const QString okT = props.property(QStringLiteral("okText")).toString();
+                                okBtn->setText(okT.isEmpty() ? QStringLiteral("确定") : okT);
+                            }
+                            if (QPushButton *cancelBtn = bb->button(QDialogButtonBox::Cancel)) {
+                                const QString cancelT = props.property(QStringLiteral("cancelText")).toString();
+                                cancelBtn->setText(cancelT.isEmpty() ? QStringLiteral("取消") : cancelT);
+                            }
+                        }
+                    }
+                } else if (link.second == "vfSchema" || link.second == "vfValues" || link.second == "vfEmptyText") {
+                    if (auto *frame = qobject_cast<QFrame *>(control.widget);
+                        frame && !qobject_cast<QAbstractScrollArea *>(control.widget)) {
+                        if (frame->property(link.second.constData()) != wanted)
+                            rebuildDataForm(control.id, frame, props);
+                    }
+                } else if (link.second == "plainText") {
+                    if (auto *edit = qobject_cast<QPlainTextEdit *>(control.widget)) {
+                        if (edit->toPlainText() != wanted.toString())
+                            edit->setPlainText(wanted.toString());
                     }
                 } else if (link.second == "vfAlign") {
                     if (auto *label = qobject_cast<QLabel *>(control.widget)) {
@@ -627,6 +1384,10 @@ void Ui::Private::applyView()
             }
         }
         setShown(index, view.property(QStringLiteral("visible")).toBool());
+        if (control.widget->layout()) {
+            control.widget->layout()->invalidate();
+            control.widget->layout()->activate();
+        }
     }
     QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
 }

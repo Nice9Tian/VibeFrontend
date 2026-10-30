@@ -10,10 +10,18 @@
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   transition: background 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.06s;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.vf-std-button[data-has-icon="true"] {
+  padding: 0 6px;
 }
 
 .vf-std-button[data-variant="primary"],

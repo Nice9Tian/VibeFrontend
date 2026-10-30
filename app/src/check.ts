@@ -318,11 +318,18 @@ export function check(project: Project): Problem[] {
   const hint = (message: string, nodeId?: string) => problems.push({ level: "hint", message, nodeId });
 
   const isKnownPath = (path: string, extraNames: Set<string>): boolean => {
+    if (path === "clock" || path === "clock.ms" || path === "clock.sec") return true;
     if (extraNames.has(path)) return true;
     for (const extra of extraNames) {
       if (path.startsWith(extra + ".")) return true;
     }
     if (findStateLeaf(logic, path) || findCondition(logic, path)) return true;
+    const parts = path.split(".");
+    for (let i = parts.length - 1; i >= 1; i--) {
+      const prefix = parts.slice(0, i).join(".");
+      const leaf = findStateLeaf(logic, prefix);
+      if (leaf && leaf.type === "object") return true;
+    }
     if (path.endsWith(".length")) {
       const base = path.slice(0, -".length".length);
       const leaf = findStateLeaf(logic, base);
@@ -489,7 +496,7 @@ export function check(project: Project): Problem[] {
       }
     }
     if (node.layout) {
-      const validLayouts = ["vbox", "hbox", "grid", "form", "stack"];
+      const validLayouts = ["vbox", "hbox", "grid", "form", "stack", "flow"];
       if (!validLayouts.includes(node.layout.kind)) {
         error(`节点 ${id}：layout.kind 应为 ${validLayouts.join("、")} 之一，现在是“${node.layout.kind}”`, id);
       }
@@ -581,7 +588,8 @@ export function check(project: Project): Problem[] {
   // 全局事件、业务事件与请求事件
   for (const [name, def] of Object.entries(logic.events ?? {})) {
     if (Array.isArray(def)) {
-      checkSteps(def, `全局事件 ${name}`, "normal");
+      const extra = name === "clock.tick" ? new Set(["value", "param", "ms", "prevMs", "deltaMs"]) : new Set<string>();
+      checkSteps(def, `全局事件 ${name}`, "normal", undefined, extra);
     } else if (def && typeof def === "object" && def.owner === "business") {
       const bDef = businessEvent(logic, name)!;
       const paramNames = new Set<string>(["param"]);
@@ -670,7 +678,13 @@ export function check(project: Project): Problem[] {
       } else if (!MOUSE_EVENTS.includes(event) && !decl?.events?.includes(event)) {
         error(`控件 ${id}：当前类型 ${node.type} 不支持事件“${event}”`, id);
       }
-      checkSteps(steps, `控件 ${id} 的 ${event} 事件`, "normal", id, new Set(["value", "param"]));
+      checkSteps(
+        steps,
+        `控件 ${id} 的 ${event} 事件`,
+        "normal",
+        id,
+        new Set(["value", "param", "from", "to", "index", "id", "checked", "collapsed", "name", "hook", "type"]),
+      );
     }
     for (const [prop, effectName] of Object.entries(object.effects ?? {})) {
       if (prop !== "visible") {

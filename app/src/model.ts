@@ -12,11 +12,11 @@ export const LOGIC_PATH = "logic/app.logic.yaml";
 /** 运行层为每个节点自动提供的鼠标事件，不需要控件声明。 */
 export const MOUSE_EVENTS = ["click", "dblclick", "mousedown", "mouseup", "mouseenter", "mouseleave"];
 /** 运行层自动触发的全局事件。 */
-export const BUILTIN_GLOBAL_EVENTS = ["app.start", "window.click"];
+export const BUILTIN_GLOBAL_EVENTS = ["app.start", "window.click", "clock.tick"];
 
 // ---------- 排版与尺寸规则 ----------
 
-export type LayoutKind = "vbox" | "hbox" | "grid" | "form" | "stack";
+export type LayoutKind = "vbox" | "hbox" | "grid" | "form" | "stack" | "flow";
 export type SizeMode = "preferred" | "fixed" | "expanding";
 export type DockArea = "left" | "right" | "top" | "bottom";
 
@@ -28,6 +28,8 @@ export interface LayoutSpec {
   gap?: number;
   rowGap?: number;
   columnGap?: number;
+  /** 水平排列放不下时是否自动换行 */
+  wrap?: boolean;
   /** 网格排版的列数（默认 2） */
   columns?: number;
   /** 网格各列的伸缩因子 */
@@ -56,13 +58,18 @@ export interface SizePolicy {
 export interface MenuItemSpec {
   id: string;
   text: string;
+  kind?: "item" | "separator" | "check" | "radio" | "submenu";
   shortcut?: string;
   checkable?: boolean;
   checked?: boolean;
+  /** 单选互斥组名（同组内只能勾选一项） */
+  group?: string;
   /** 关联的停靠面板 ID：点击时切换该面板的显示和隐藏 */
   dock?: string;
   /** 点击时触发的全局事件名 */
   emit?: string;
+  /** 子菜单项列表 */
+  items?: MenuItemSpec[];
 }
 
 export interface MenuSpec {
@@ -113,6 +120,10 @@ export interface SceneNode {
   statusBar?: string;
   central?: string;
   docks?: string[];
+  /** 控件右键菜单项 */
+  contextMenu?: MenuItemSpec[];
+  /** 按钮或控件点击弹出的菜单项 */
+  popupMenu?: MenuItemSpec[];
 }
 
 export interface Scene {
@@ -126,7 +137,7 @@ export interface Scene {
 // ---------- 控件 ----------
 
 export interface PropDecl {
-  type: "string" | "number" | "boolean" | "array";
+  type: "string" | "number" | "boolean" | "array" | "object";
   default?: Value;
   logic?: boolean;
 }
@@ -235,6 +246,7 @@ export const LAYOUT_TYPE_KINDS: Record<string, LayoutKind> = {
   Grid: "grid",
   Form: "form",
   Stack: "stack",
+  Flow: "flow",
 };
 
 /** 工具自带、不需要 components/ 里有文件夹的类型。 */
@@ -249,6 +261,7 @@ export const BUILTIN_TYPES = [
   "Grid",
   "Form",
   "Stack",
+  "Flow",
   "Shape",
   "Line",
 ];
@@ -394,7 +407,7 @@ export interface Project extends RuntimeProject {
 // ---------- 状态与名字解析 ----------
 
 export interface StateLeaf {
-  type: "string" | "number" | "boolean" | "enum" | "array";
+  type: "string" | "number" | "boolean" | "enum" | "array" | "object";
   initial?: Value;
   values?: string[];
   /** 归谁管：ui（界面自己管，默认）或 business（业务管） */
@@ -507,6 +520,14 @@ export function parentOfNode(scene: Scene, id: string): string | null {
   return null;
 }
 
+export function walkMenuItems(items: MenuItemSpec[] | undefined, cb: (item: MenuItemSpec) => void): void {
+  if (!items) return;
+  for (const item of items) {
+    cb(item);
+    if (item.items && item.items.length > 0) walkMenuItems(item.items, cb);
+  }
+}
+
 /** 从画布所有节点引用（children / docks / central / statusBar / menuBar.dock / windows）中移除一组被删除的节点 ID。 */
 export function removeNodeReferences(scene: Scene, removed: ReadonlySet<string>): void {
   if (scene.windows) {
@@ -519,11 +540,17 @@ export function removeNodeReferences(scene: Scene, removed: ReadonlySet<string>)
     if (n.statusBar && removed.has(n.statusBar)) delete n.statusBar;
     if (n.menuBar?.menus) {
       for (const menu of n.menuBar.menus) {
-        for (const item of menu.items ?? []) {
+        walkMenuItems(menu.items, (item) => {
           if (item.dock && removed.has(item.dock)) delete item.dock;
-        }
+        });
       }
     }
+    walkMenuItems(n.contextMenu, (item) => {
+      if (item.dock && removed.has(item.dock)) delete item.dock;
+    });
+    walkMenuItems(n.popupMenu, (item) => {
+      if (item.dock && removed.has(item.dock)) delete item.dock;
+    });
   }
 }
 
@@ -540,11 +567,17 @@ export function renameNodeReferences(scene: Scene, oldId: string, nextId: string
     if (n.statusBar === oldId) n.statusBar = nextId;
     if (n.menuBar?.menus) {
       for (const menu of n.menuBar.menus) {
-        for (const item of menu.items ?? []) {
+        walkMenuItems(menu.items, (item) => {
           if (item.dock === oldId) item.dock = nextId;
-        }
+        });
       }
     }
+    walkMenuItems(n.contextMenu, (item) => {
+      if (item.dock === oldId) item.dock = nextId;
+    });
+    walkMenuItems(n.popupMenu, (item) => {
+      if (item.dock === oldId) item.dock = nextId;
+    });
     if (n.type === "Line" && n.props) {
       if (n.props.startNode === oldId) n.props.startNode = nextId;
       if (n.props.endNode === oldId) n.props.endNode = nextId;
@@ -589,11 +622,25 @@ export function allWindowIds(scene: Scene): string[] {
 
 export function allMenuItems(scene: Scene): Array<{ windowId: string; menuId: string; item: MenuItemSpec }> {
   const list: Array<{ windowId: string; menuId: string; item: MenuItemSpec }> = [];
+  const seen = new Set<string>();
+  const pushItem = (windowId: string, menuId: string, item: MenuItemSpec) => {
+    if (!item.id || item.kind === "separator" || seen.has(item.id)) return;
+    seen.add(item.id);
+    list.push({ windowId, menuId, item });
+  };
   for (const winId of allWindowIds(scene)) {
     const menuBar = scene.nodes[winId]?.menuBar;
     if (!menuBar) continue;
     for (const menu of menuBar.menus ?? []) {
-      for (const item of menu.items ?? []) list.push({ windowId: winId, menuId: menu.id, item });
+      walkMenuItems(menu.items, (item) => pushItem(winId, menu.id, item));
+    }
+  }
+  for (const [nodeId, n] of Object.entries(scene.nodes)) {
+    if (n.contextMenu) {
+      walkMenuItems(n.contextMenu, (item) => pushItem(scene.root, `context:${nodeId}`, item));
+    }
+    if (n.popupMenu) {
+      walkMenuItems(n.popupMenu, (item) => pushItem(scene.root, `popup:${nodeId}`, item));
     }
   }
   return list;
@@ -753,6 +800,63 @@ export function syncResizedNodeDimensions(node: SceneNode, width: number, height
   if (node.size?.preferredHeight !== undefined) node.size.preferredHeight = nextH;
 }
 
+export function isWrapLayout(layout: LayoutSpec | null | undefined): boolean {
+  if (!layout) return false;
+  return layout.kind === "flow" || (layout.kind === "hbox" && Boolean(layout.wrap));
+}
+
+export interface FlowRow {
+  ids: string[];
+  rowH: number;
+}
+
+export function computeFlowRows(scene: Scene, visChildren: string[], innerW: number, colGap: number): FlowRow[] {
+  const rows: FlowRow[] = [];
+  let curIds: string[] = [];
+  let curUsedW = 0;
+  let curMaxH = 0;
+  for (const cid of visChildren) {
+    const c = scene.nodes[cid];
+    if (!c) continue;
+    const cw = clampWidth(c, prefWidth(c));
+    const ch = clampHeight(c, prefHeight(c));
+    const neededW = curIds.length === 0 ? cw : curUsedW + colGap + cw;
+    if (curIds.length > 0 && neededW > innerW) {
+      rows.push({ ids: curIds, rowH: curMaxH || 28 });
+      curIds = [cid];
+      curUsedW = cw;
+      curMaxH = ch;
+    } else {
+      curIds.push(cid);
+      curUsedW = neededW;
+      curMaxH = Math.max(curMaxH, ch);
+    }
+  }
+  if (curIds.length > 0) {
+    rows.push({ ids: curIds, rowH: curMaxH || 28 });
+  }
+  return rows;
+}
+
+export function flowHeightForWidth(
+  scene: Scene,
+  node: SceneNode,
+  availWidth: number,
+  isVisible: (id: string) => boolean,
+): number {
+  const layout = layoutOf(node);
+  if (!layout || !isWrapLayout(layout)) return prefHeight(node);
+  const [padTop, padRight, padBottom, padLeft] = paddingOf(layout);
+  const colGap = layout.columnGap ?? layout.gap ?? 0;
+  const rowGap = layout.rowGap ?? layout.gap ?? 0;
+  const innerW = Math.max(0, availWidth - padLeft - padRight);
+  const visChildren = (node.children ?? []).filter((cid) => Boolean(scene.nodes[cid]) && isVisible(cid));
+  const rows = computeFlowRows(scene, visChildren, innerW, colGap);
+  if (rows.length === 0) return prefHeight(node);
+  const rowsH = rows.reduce((sum, r) => sum + r.rowH, 0) + Math.max(0, rows.length - 1) * rowGap;
+  return clampHeight(node, padTop + rowsH + padBottom);
+}
+
 /**
  * 计算一个窗口（或全部窗口）内所有节点的位置和尺寸。
  * 规则与 Qt 的 QMainWindow + QDockWidget + QVBoxLayout/QHBoxLayout/QGridLayout/QFormLayout/QStackedLayout 完全一致。
@@ -832,7 +936,14 @@ export function computeSceneLayout(
         const c = scene.nodes[cid]!;
         return c.size?.stretch ?? (c.size?.vertical === "expanding" ? 1 : 0);
       });
-      const baseHeights = visChildren.map((cid, i) => (stretches[i] > 0 ? 0 : clampHeight(scene.nodes[cid]!, prefHeight(scene.nodes[cid]!))));
+      const baseHeights = visChildren.map((cid, i) => {
+        if (stretches[i] > 0) return 0;
+        const c = scene.nodes[cid]!;
+        if (isWrapLayout(layoutOf(c)) && c.size?.fixedHeight === undefined && c.size?.vertical !== "fixed") {
+          return flowHeightForWidth(scene, c, clampWidth(c, innerW), isVisible);
+        }
+        return clampHeight(c, prefHeight(c));
+      });
       const mins = visChildren.map((cid) => Math.round(scene.nodes[cid]!.size?.minHeight ?? 0));
       const maxs = visChildren.map((cid) => {
         const m = scene.nodes[cid]!.size?.maxHeight;
@@ -862,6 +973,70 @@ export function computeSceneLayout(
         layoutSubtree(cid, box);
         curY += ch + gap;
       });
+      return;
+    }
+
+    if (isWrapLayout(layout)) {
+      const colGap = layout.columnGap ?? layout.gap ?? 0;
+      const rowGap = layout.rowGap ?? layout.gap ?? 0;
+      const visChildren: string[] = [];
+      for (const cid of children) {
+        if (isVisible(cid)) visChildren.push(cid);
+        else {
+          const c = scene.nodes[cid]!;
+          const box: ComputedBox = {
+            x: innerX,
+            y: innerY,
+            width: prefWidth(c),
+            height: prefHeight(c),
+            absX: parentBox.absX + innerX,
+            absY: parentBox.absY + innerY,
+            visible: false,
+            windowId: parentBox.windowId,
+          };
+          boxes.set(cid, box);
+          layoutSubtree(cid, box);
+        }
+      }
+      const rows = computeFlowRows(scene, visChildren, innerW, colGap);
+      let curY = innerY;
+      for (const row of rows) {
+        const stretches = row.ids.map((cid) => {
+          const c = scene.nodes[cid]!;
+          return c.size?.stretch ?? (c.size?.horizontal === "expanding" ? 1 : 0);
+        });
+        const baseWidths = row.ids.map((cid, i) => (stretches[i] > 0 ? 0 : clampWidth(scene.nodes[cid]!, prefWidth(scene.nodes[cid]!))));
+        const mins = row.ids.map((cid) => Math.round(scene.nodes[cid]!.size?.minWidth ?? prefWidth(scene.nodes[cid]!)));
+        const maxs = row.ids.map((cid) => {
+          const m = scene.nodes[cid]!.size?.maxWidth;
+          return m !== undefined ? Math.round(m) : Infinity;
+        });
+        const fixedSum = baseWidths.reduce((a, b) => a + b, 0);
+        const totalGap = Math.max(0, row.ids.length - 1) * colGap;
+        const remW = Math.max(0, innerW - fixedSum - totalGap);
+        const extraW = distributeStretch(remW, stretches, mins, maxs);
+
+        let curX = innerX;
+        row.ids.forEach((cid, i) => {
+          const c = scene.nodes[cid]!;
+          const cw = stretches[i] > 0 ? clampWidth(c, extraW[i]) : baseWidths[i];
+          const ch = clampHeight(c, row.rowH);
+          const box: ComputedBox = {
+            x: curX,
+            y: curY,
+            width: cw,
+            height: ch,
+            absX: parentBox.absX + curX,
+            absY: parentBox.absY + curY,
+            visible: parentBox.visible,
+            windowId: parentBox.windowId,
+          };
+          boxes.set(cid, box);
+          layoutSubtree(cid, box);
+          curX += cw + colGap;
+        });
+        curY += row.rowH + rowGap;
+      }
       return;
     }
 

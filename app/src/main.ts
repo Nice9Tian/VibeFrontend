@@ -31,7 +31,9 @@ import {
   sectionOffsets,
   STANDARD_COMPONENTS,
   syncResizedNodeDimensions,
+  walkMenuItems,
   type ComponentInstance,
+  type MenuItemSpec,
   type Project,
   type SceneNode,
 } from "./project";
@@ -507,7 +509,38 @@ function buildNode(id: string, parentEl: HTMLElement): void {
         return;
       }
       previewRuntime.dispatch(id, name);
+      if (name === "click" && n.popupMenu?.length) {
+        const rect = wrapper.getBoundingClientRect();
+        showPreviewPopupMenu(rect.left, rect.bottom + 2, n.popupMenu);
+      }
     });
+  }
+
+  if (n.contextMenu?.length) {
+    wrapper.addEventListener("contextmenu", (e) => {
+      if (mode !== "preview" || !previewRuntime) return;
+      if ((e.target as Element).closest(".vf-node") !== wrapper) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showPreviewPopupMenu(e.clientX, e.clientY, n.contextMenu!);
+    });
+  }
+
+  const extraMenuItems: MenuItemSpec[] = [];
+  if (n.contextMenu?.length) walkMenuItems(n.contextMenu, (it) => extraMenuItems.push(it));
+  if (n.popupMenu?.length) walkMenuItems(n.popupMenu, (it) => extraMenuItems.push(it));
+  if (extraMenuItems.length > 0) {
+    const hiddenMenuHost = document.createElement("div");
+    hiddenMenuHost.style.display = "none";
+    for (const item of extraMenuItems) {
+      if (item.kind === "separator" || item.items?.length) continue;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.dataset.vfMenuItem = item.id;
+      btn.addEventListener("click", () => triggerPreviewMenuItem(item.id));
+      hiddenMenuHost.append(btn);
+    }
+    wrapper.append(hiddenMenuHost);
   }
 
   for (const child of childrenOf(n)) buildNode(child, wrapper);
@@ -600,6 +633,71 @@ function applyViews(): void {
       showNodeError(entry.body, `运行出错：${(e as Error).message}`);
     }
   }
+
+  // 同步菜单项按钮的可见、可用、文本和勾选标记
+  for (const btn of document.querySelectorAll<HTMLButtonElement>("#stage [data-vf-menu-item]")) {
+    const itemId = btn.dataset.vfMenuItem;
+    if (!itemId) continue;
+    const view = runtime.view(itemId);
+    btn.disabled = !view.enabled;
+    if (btn.parentElement?.style.display !== "none") {
+      btn.style.display = view.visible ? "" : "none";
+    }
+    const checkable = btn.dataset.vfMenuCheckable === "1";
+    const isRadio = btn.dataset.vfMenuRadio === "1";
+    const checked = Boolean(view.props.checked);
+    const labelText = String(view.props.text ?? btn.dataset.vfMenuBaseText ?? "");
+    const prefix = checkable ? (checked ? (isRadio ? "● " : "✓ ") : "") : "";
+    btn.textContent = prefix + labelText;
+    if (checkable) {
+      btn.style.borderColor = checked ? "#38bdf8" : "#334155";
+      btn.style.color = checked ? "#f8fafc" : "#e2e8f0";
+    }
+  }
+}
+
+function triggerPreviewMenuItem(itemId: string): void {
+  if (mode === "preview" && previewRuntime) {
+    previewRuntime.dispatch(itemId, "mousedown");
+    previewRuntime.dispatch(itemId, "mouseup");
+    previewRuntime.dispatch(itemId, "click");
+    previewRuntime.dispatch(null, "window.click");
+  }
+}
+
+function flattenMenuSpecsToPopupItems(specs: MenuItemSpec[], prefix = ""): MenuItem[] {
+  const runtime = activeRuntime();
+  const out: MenuItem[] = [];
+  for (const spec of specs) {
+    if (spec.kind === "separator") {
+      out.push("separator");
+      continue;
+    }
+    const view = runtime.view(spec.id);
+    if (!view.visible) continue;
+    const text = String(view.props.text ?? spec.text ?? spec.id);
+    if (spec.items?.length) {
+      out.push(...flattenMenuSpecsToPopupItems(spec.items, `${prefix}${text} ▸ `));
+      continue;
+    }
+    const isRadio = spec.kind === "radio" || Boolean(spec.group);
+    const isCheck = isRadio || spec.kind === "check" || Boolean(spec.checkable) || Boolean(spec.dock);
+    const checked = Boolean(view.props.checked);
+    const mark = isCheck ? (checked ? (isRadio ? "● " : "✓ ") : "   ") : "";
+    const sc = spec.shortcut ? `　(${spec.shortcut})` : "";
+    out.push({
+      label: `${mark}${prefix}${text}${sc}`,
+      action: () => {
+        if (view.enabled) triggerPreviewMenuItem(spec.id);
+      },
+    });
+  }
+  return out;
+}
+
+function showPreviewPopupMenu(x: number, y: number, specs: MenuItemSpec[]): void {
+  const items = flattenMenuSpecsToPopupItems(specs);
+  if (items.length > 0) openMenu(x, y, items);
 }
 
 function renderStage(): void {
@@ -624,30 +722,38 @@ function renderStage(): void {
   if (root.menuBar) {
     const bar = document.createElement("div");
     const mh = root.menuBar.height ?? 28;
-    bar.style.cssText = `position:absolute;left:0;top:0;width:100%;height:${mh}px;display:flex;align-items:center;gap:4px;padding:0 8px;background:#111827;border-bottom:1px solid #263042;box-sizing:border-box;z-index:20;font-size:12px;color:#e2e8f0;`;
+    bar.style.cssText = `position:absolute;left:0;top:0;width:100%;height:${mh}px;display:flex;align-items:center;gap:4px;padding:0 8px;background:#111827;border-bottom:1px solid #263042;box-sizing:border-box;z-index:20;font-size:12px;color:#e2e8f0;overflow:hidden;`;
     for (const menu of root.menuBar.menus ?? []) {
       const group = document.createElement("div");
-      group.style.cssText = "display:flex;align-items:center;gap:2px;margin-right:8px;";
-      const titleSpan = document.createElement("span");
-      titleSpan.style.cssText = "font-weight:600;color:#94a3b8;padding:0 4px;";
+      group.style.cssText = "display:flex;align-items:center;gap:2px;margin-right:6px;flex-shrink:0;";
+      const titleSpan = document.createElement("button");
+      titleSpan.type = "button";
+      titleSpan.dataset.vfMenuTitle = menu.id;
+      titleSpan.style.cssText = "font-weight:600;color:#cbd5e1;background:transparent;border:none;padding:2px 6px;border-radius:4px;font-size:12px;cursor:pointer;";
       titleSpan.textContent = menu.title;
+      titleSpan.addEventListener("click", () => {
+        if (mode === "preview" && menu.items?.length) {
+          const rect = titleSpan.getBoundingClientRect();
+          showPreviewPopupMenu(rect.left, rect.bottom + 2, menu.items);
+        }
+      });
       group.append(titleSpan);
-      for (const item of menu.items ?? []) {
+      walkMenuItems(menu.items, (item) => {
+        if (item.kind === "separator" || item.items?.length) return;
         const btn = document.createElement("button");
         btn.type = "button";
         btn.dataset.vfMenuItem = item.id;
-        btn.style.cssText = "background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;";
+        btn.dataset.vfMenuBaseText = item.text;
+        const isRadio = item.kind === "radio" || Boolean(item.group);
+        const isCheck = isRadio || item.kind === "check" || Boolean(item.checkable) || Boolean(item.dock);
+        if (isCheck) btn.dataset.vfMenuCheckable = "1";
+        if (isRadio) btn.dataset.vfMenuRadio = "1";
+        if (item.shortcut) btn.title = `${item.text} (${item.shortcut})`;
+        btn.style.cssText = "background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:1px 6px;font-size:11px;cursor:pointer;white-space:nowrap;";
         btn.textContent = item.text;
-        btn.addEventListener("click", () => {
-          if (mode === "preview" && previewRuntime) {
-            previewRuntime.dispatch(item.id, "mousedown");
-            previewRuntime.dispatch(item.id, "mouseup");
-            previewRuntime.dispatch(item.id, "click");
-            previewRuntime.dispatch(null, "window.click");
-          }
-        });
+        btn.addEventListener("click", () => triggerPreviewMenuItem(item.id));
         group.append(btn);
-      }
+      });
       bar.append(group);
     }
     stage.append(bar);
@@ -3563,6 +3669,7 @@ function renderPalette(): void {
     make("External", "⧉ 外部容器", EXTERNAL_DECL.description ?? ""),
     make("VBox", "▤ 竖排布局", "子控件从上往下排列"),
     make("HBox", "▥ 横排布局", "子控件从左往右排列"),
+    make("Flow", "⇶ 换行布局", "子控件从左往右排列，放不下时自动换到下一行"),
     make("Grid", "⊞ 网格布局", "子控件按行列网格排列"),
     make("Form", "☰ 表单布局", "左列标签、右列控件的表单排列"),
     make("Stack", "❐ 层叠布局", "多个页面叠放，按 currentIndex 切换"),
@@ -4006,16 +4113,74 @@ function renderLog(): void {
 
 // ---------- 预览 ----------
 
+let previewClockTimer: number | null = null;
+
+function stopPreviewClockTimer(): void {
+  if (previewClockTimer !== null) {
+    window.clearInterval(previewClockTimer);
+    previewClockTimer = null;
+  }
+}
+
 function renderConditions(): void {
-  const chips: HTMLElement[] = (previewRuntime?.conditions() ?? []).map((condition) => {
+  const chips: HTMLElement[] = [];
+  if (previewRuntime) {
+    const clockChip = document.createElement("span");
+    clockChip.className = "condition" + (previewClockTimer !== null ? " on" : "");
+    clockChip.title = "预览时钟（clock / clock.ms / clock.sec），可在条件和函数里直接引用";
+    clockChip.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
+    const clockLabel = document.createElement("span");
+    clockLabel.textContent = "时钟(ms)：";
+    const clockInput = document.createElement("input");
+    clockInput.type = "number";
+    clockInput.dataset.vfClockInput = "1";
+    clockInput.min = "0";
+    clockInput.step = "100";
+    clockInput.value = String(previewRuntime.getClock());
+    clockInput.style.cssText = "width:64px;font-size:11px;padding:1px 4px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:3px;";
+    clockInput.addEventListener("change", () => {
+      previewRuntime?.setClock(Number(clockInput.value) || 0);
+    });
+    const stepBtn = document.createElement("button");
+    stepBtn.type = "button";
+    stepBtn.dataset.vfClockStep = "1";
+    stepBtn.textContent = "+100ms";
+    stepBtn.style.cssText = "font-size:11px;padding:1px 6px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:3px;cursor:pointer;";
+    stepBtn.addEventListener("click", () => {
+      if (previewRuntime) previewRuntime.setClock(previewRuntime.getClock() + 100);
+    });
+    const playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.dataset.vfClockPlay = "1";
+    playBtn.textContent = previewClockTimer !== null ? "⏸" : "▶";
+    playBtn.title = previewClockTimer !== null ? "暂停时钟自动推进" : "自动推进预览时钟（每 100ms +100ms）";
+    playBtn.style.cssText = "font-size:11px;padding:1px 6px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:3px;cursor:pointer;";
+    playBtn.addEventListener("click", () => {
+      if (previewClockTimer !== null) {
+        stopPreviewClockTimer();
+      } else {
+        previewClockTimer = window.setInterval(() => {
+          if (mode === "preview" && previewRuntime) {
+            previewRuntime.setClock(previewRuntime.getClock() + 100);
+          } else {
+            stopPreviewClockTimer();
+          }
+        }, 100);
+      }
+      renderConditions();
+    });
+    clockChip.append(clockLabel, clockInput, stepBtn, playBtn);
+    chips.push(clockChip);
+  }
+  for (const condition of previewRuntime?.conditions() ?? []) {
     const isText = condition.kind === "text";
     const chip = document.createElement(isText ? "button" : "span");
     chip.className = "condition" + (condition.value ? " on" : "");
     chip.textContent = `${condition.text || condition.id}：${condition.value ? "是" : "否"}`;
     chip.title = isText ? `文字条件 ${condition.id}，点击切换` : `符号条件 ${condition.id}，由表达式计算`;
     if (isText) chip.addEventListener("click", () => previewRuntime?.toggleTextCondition(condition.id));
-    return chip;
-  });
+    chips.push(chip);
+  }
   for (const action of previewRuntime?.actions() ?? []) {
     const wrap = document.createElement("label");
     wrap.className = "condition";
@@ -4044,6 +4209,7 @@ function renderConditions(): void {
 }
 
 function startPreviewRuntime(): void {
+  stopPreviewClockTimer();
   previewRuntime = new Runtime(project, {
     onChange: () => {
       applyViews();

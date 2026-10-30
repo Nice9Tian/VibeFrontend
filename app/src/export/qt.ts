@@ -18,6 +18,7 @@ import {
   type DockArea,
   type LayoutSpec,
   type MenuBarSpec,
+  type MenuItemSpec,
   type Problem,
   type Project,
   type QtMapping,
@@ -41,7 +42,7 @@ export interface QtAssets {
 export interface BusinessState {
   /** 状态路径，例如 layer.visible */
   path: string;
-  type: "string" | "number" | "boolean" | "enum" | "array";
+  type: "string" | "number" | "boolean" | "enum" | "array" | "object";
   values?: string[];
   /** 生成的函数名 */
   setter: string;
@@ -176,6 +177,8 @@ export interface ControlPlan {
   modal?: boolean;
   isStatusBar?: boolean;
   isCentral?: boolean;
+  contextMenu?: MenuItemSpec[];
+  popupMenu?: MenuItemSpec[];
 }
 
 export interface WindowPlan {
@@ -197,11 +200,11 @@ const IDENTIFIER = /^[A-Za-z][A-Za-z0-9_]*$/;
 const QT_CLASS = /^Q[A-Za-z0-9]+$/;
 /** QObject 和界面类自己已经有的函数名，生成的名字不能和它们相同。 */
 const RESERVED = new Set([
-  "blockSignals", "children", "connect", "deleteLater", "destroyed", "disconnect", "dumpObjectInfo", "dumpObjectTree",
+  "blockSignals", "children", "clock", "connect", "deleteLater", "destroyed", "disconnect", "dumpObjectInfo", "dumpObjectTree",
   "dynamicPropertyNames", "effects", "event", "eventFilter", "findChild", "findChildren", "inherits", "installEventFilter",
   "isWidgetType", "isWindowType", "killTimer", "layoutDump", "metaObject", "moveToThread", "objectName", "objectNameChanged", "parent",
-  "property", "removeEventFilter", "sender", "setActionSimulation", "setObjectName", "setParent", "setProperty", "show", "signalsBlocked",
-  "start", "startTimer", "stateDump", "thread", "triggerRequest", "widgetDump", "window",
+  "property", "removeEventFilter", "reorderControl", "sender", "setActionSimulation", "setClock", "setDataFormField", "setObjectName", "setParent", "setProperty", "show", "signalsBlocked",
+  "start", "startTimer", "stateDump", "thread", "toggleTreeCheck", "toggleTreeCollapse", "triggerRequest", "widgetDump", "window",
 ]);
 
 function upperFirst(text: string): string {
@@ -402,6 +405,8 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
       columnSpan: node.columnSpan,
       isStatusBar,
       isCentral,
+      contextMenu: node.contextMenu,
+      popupMenu: node.popupMenu,
     };
 
     if (node.type === "External") {
@@ -430,6 +435,7 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
       node.type === "Container" ||
       node.type === "VBox" ||
       node.type === "HBox" ||
+      node.type === "Flow" ||
       node.type === "Grid" ||
       node.type === "Form" ||
       node.type === "Stack"
