@@ -24,16 +24,42 @@ fn project_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("project")
 }
 
-/// 把网页传来的相对路径解析到项目文件夹内，拒绝绝对路径和 `..`。
-fn resolve(rel: &str) -> Result<PathBuf, String> {
+/// 用户收藏素材库所在的文件夹：
+/// 1. 环境变量 VF_LIBRARY；
+/// 2. 应用数据目录下的 VibeFrontend/library/。
+fn library_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("VF_LIBRARY") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(appdata) = std::env::var("APPDATA").or_else(|_| std::env::var("LOCALAPPDATA")) {
+        return PathBuf::from(appdata).join("VibeFrontend").join("library");
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".config").join("VibeFrontend").join("library");
+    }
+    project_dir().join(".designer").join("library")
+}
+
+/// 把网页传来的相对路径解析到指定文件夹内，拒绝绝对路径和 `..`。
+fn resolve_in(base: PathBuf, rel: &str) -> Result<PathBuf, String> {
     let rel_path = Path::new(rel);
     for part in rel_path.components() {
         match part {
             Component::Normal(_) | Component::CurDir => {}
-            _ => return Err(format!("路径不在项目文件夹内：{rel}")),
+            _ => return Err(format!("路径不在文件夹内：{rel}")),
         }
     }
-    Ok(project_dir().join(rel_path))
+    Ok(base.join(rel_path))
+}
+
+/// 把网页传来的相对路径解析到项目文件夹内，拒绝绝对路径和 `..`。
+fn resolve(rel: &str) -> Result<PathBuf, String> {
+    resolve_in(project_dir(), rel)
+}
+
+/// 把网页传来的相对路径解析到用户素材库文件夹内，拒绝绝对路径和 `..`。
+fn resolve_library(rel: &str) -> Result<PathBuf, String> {
+    resolve_in(library_dir(), rel)
 }
 
 #[derive(Serialize)]
@@ -89,6 +115,64 @@ fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(entries)
 }
 
+#[tauri::command]
+fn library_root() -> Result<String, String> {
+    let dir = library_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建素材库目录失败：{e}"))?;
+    let dir = dir.canonicalize().unwrap_or(dir);
+    Ok(dir.to_string_lossy().trim_start_matches(r"\\?\").to_string())
+}
+
+#[tauri::command]
+fn library_read_text(path: String) -> Result<Option<String>, String> {
+    let full = resolve_library(&path)?;
+    match std::fs::read_to_string(&full) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("读取素材库 {path} 失败：{e}")),
+    }
+}
+
+#[tauri::command]
+fn library_write_text(path: String, content: String) -> Result<(), String> {
+    let full = resolve_library(&path)?;
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建素材库目录失败：{e}"))?;
+    }
+    std::fs::write(&full, content).map_err(|e| format!("写入素材库 {path} 失败：{e}"))
+}
+
+#[tauri::command]
+fn library_list_dir(path: String) -> Result<Vec<DirEntry>, String> {
+    let full = resolve_library(&path)?;
+    let read = match std::fs::read_dir(&full) {
+        Ok(read) => read,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("列出素材库 {path} 失败：{e}")),
+    };
+    let mut entries = Vec::new();
+    for entry in read.flatten() {
+        entries.push(DirEntry {
+            name: entry.file_name().to_string_lossy().to_string(),
+            is_dir: entry.file_type().map(|t| t.is_dir()).unwrap_or(false),
+        });
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+#[tauri::command]
+fn library_remove_dir(path: String) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("不能删除素材库根目录".to_string());
+    }
+    let full = resolve_library(&path)?;
+    if full.exists() {
+        std::fs::remove_dir_all(&full).map_err(|e| format!("删除素材库 {path} 失败：{e}"))?;
+    }
+    Ok(())
+}
+
 /// 监听项目文件夹，文件有变化就通知网页重新加载。
 fn start_watcher(app: &tauri::AppHandle) -> notify::Result<RecommendedWatcher> {
     let handle = app.clone();
@@ -118,7 +202,17 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![project_root, read_text, write_text, list_dir])
+        .invoke_handler(tauri::generate_handler![
+            project_root,
+            read_text,
+            write_text,
+            list_dir,
+            library_root,
+            library_read_text,
+            library_write_text,
+            library_list_dir,
+            library_remove_dir,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
