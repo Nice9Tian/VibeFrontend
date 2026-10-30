@@ -3,8 +3,21 @@ import { isMap, parseDocument, type Document } from "yaml";
 import { listDir, readText, removeFile, watchProject, writeText } from "./fs";
 import { initDocView, syncDocView, syncPreviewSelectionToTextarea } from "./docview";
 import { initLibrary, renderLibraryPalette } from "./library";
+import {
+  commitPaletteDropOnStage,
+  hideLayoutDropIndicator,
+  initLayoutEdit,
+  placeNewNodeInScene,
+  previewPaletteDropOnStage,
+  renderLayoutEditPane,
+  tryDropFreeNodeIntoLayoutContainer,
+  tryStartLayoutCanvasDrag,
+} from "./layoutedit";
+import { focusMenuItemInEditor, initMenuEdit, renderMenuEditPane } from "./menuedit";
+import { initStateEdit, renderStateEditPane } from "./stateedit";
 import { initPreviewLauncher, initStandalonePreviewWindow, syncStandalonePreviewTitle } from "./previewwindow";
 import {
+  allSceneMenuIds,
   allWindowIds,
   appendSection,
   BUILTIN_TYPES,
@@ -18,6 +31,7 @@ import {
   getSection,
   isLayoutPositionedNode,
   isPartitionedWindow,
+  isValidIdentifier,
   layoutOf,
   LAYOUT_TYPE_KINDS,
   loadProject,
@@ -83,7 +97,6 @@ import {
   type Side,
 } from "./shapes";
 import {
-  applyAddNodeToScene,
   applyDeleteFromScene,
   applyMoveToScene,
   applyPropsToScene,
@@ -671,6 +684,8 @@ function renderStage(): void {
             previewRuntime.dispatch(item.id, "mouseup");
             previewRuntime.dispatch(item.id, "click");
             previewRuntime.dispatch(null, "window.click");
+          } else if (mode === "edit") {
+            focusMenuItemInEditor(item.id);
           }
         });
         group.append(btn);
@@ -1486,10 +1501,20 @@ function capturePointer(e: PointerEvent): void {
 }
 const MIN_SIZE = 8;
 
-/** 落在哪个能装东西且未锁定的节点里：从鼠标下最里面的节点往外找。 */
-function containerAt(px: number, py: number): string {
+/** 落在哪个能装东西的节点里：从鼠标下最里面的节点往外找（不穿透已锁定的容器，由调用方统一拒绝向锁定容器放入控件）。 */
+function containerAt(px: number, py: number, excludeId?: string): string {
   for (let hit = hitTest(px, py); hit; hit = parentOf(hit)) {
-    if (canHoldChildren(hit) && !isNodeLocked(project.scene, hit)) return hit;
+    if (excludeId) {
+      let insideExcluded = false;
+      for (let p: string | null = hit; p; p = parentOf(p)) {
+        if (p === excludeId) {
+          insideExcluded = true;
+          break;
+        }
+      }
+      if (insideExcluded) continue;
+    }
+    if (canHoldChildren(hit)) return hit;
   }
   return project.scene.root;
 }
@@ -1504,6 +1529,10 @@ overlay.addEventListener("pointerdown", (e) => {
   if (tool.kind === "preset") {
     const preset = tool.preset;
     const parentId = containerAt(pt.x, pt.y);
+    if (isNodeLocked(project.scene, parentId)) {
+      toast("目标容器已锁定，无法放入控件");
+      return;
+    }
     if (preset.type === "Line") {
       gesture = { kind: "line", preset, start: anchorAt(pt, e, null, null), end: null, parentId, rawStart: pt, rawEnd: null };
     } else {
@@ -1515,8 +1544,13 @@ overlay.addEventListener("pointerdown", (e) => {
   }
   if (tool.kind === "node") {
     // 画容器、外部容器或控件：和画图形一样拖出大小
+    const parentId = containerAt(pt.x, pt.y);
+    if (parentId && isNodeLocked(project.scene, parentId)) {
+      toast("目标容器已锁定，无法放入控件");
+      return;
+    }
     const snapped = snapPoint(pt.x, pt.y, snapTargets(null), snapOptions(e));
-    gesture = { kind: "draw", preset: null, nodeType: tool.type, start: { x: snapped.x, y: snapped.y }, rect: null, parentId: containerAt(pt.x, pt.y), targets: snapTargets(null) };
+    gesture = { kind: "draw", preset: null, nodeType: tool.type, start: { x: snapped.x, y: snapped.y }, rect: null, parentId, targets: snapTargets(null) };
     capturePointer(e);
     return;
   }
@@ -1645,6 +1679,9 @@ overlay.addEventListener("pointerdown", (e) => {
   }
   const ids = filterUnlocked(project.scene, topSelection()).filter((each) => !isLayoutPositionedNode(project.scene, each));
   if (ids.length === 0) {
+    if (!toggleOnClick && selectedIds.length === 1 && selectedId && tryStartLayoutCanvasDrag(selectedId, e)) {
+      return;
+    }
     if (toggleOnClick) gesture = { kind: "move", ids: [], origins: [], start: { x: e.clientX, y: e.clientY }, abs: absRect(id), moved: false, targets: [], toggleOnClick };
     return;
   }
@@ -1996,8 +2033,12 @@ overlay.addEventListener("pointerup", (e) => {
   endGesture();
   if (!finished) return;
   if (finished.kind === "move") {
-    if (finished.moved) void saveScene();
-    else if (finished.toggleOnClick) select(finished.toggleOnClick, true);
+    if (finished.moved) {
+      if (finished.ids.length === 1) {
+        tryDropFreeNodeIntoLayoutContainer(finished.ids[0], stagePoint(e));
+      }
+      void saveScene();
+    } else if (finished.toggleOnClick) select(finished.toggleOnClick, true);
     return;
   }
   if (
@@ -2266,11 +2307,12 @@ function newId(type: string, idBase?: string): string {
   const base = idBase || (type === "Container" ? "box" : type === "External" ? "host" : type.charAt(0).toLowerCase() + type.slice(1));
   const taken = new Set([
     ...Object.keys(project.scene.nodes),
+    ...allSceneMenuIds(project.scene),
     ...Object.keys(project.logic.state ?? {}),
     ...Object.keys(project.logic.conditions ?? {}),
   ]);
   for (let i = 1; ; i++) {
-    if (!taken.has(`${base}${i}`)) return `${base}${i}`;
+    if (!taken.has(`${base}${i}`) && isValidIdentifier(`${base}${i}`)) return `${base}${i}`;
   }
 }
 
@@ -2281,35 +2323,38 @@ function idBaseOf(id: string): string {
 
 /** 放一个新节点进画布。rect 是设计窗口里的绝对坐标。 */
 async function createNode(type: string, parentId: string, rect: Rect, props?: Record<string, Value>, idBase?: string): Promise<string> {
-  const decl = declFor(project, type) ?? CONTAINER_DECL;
-  const parentRect = absRect(parentId);
-  const id = newId(type, idBase);
-  const parentNode = node(parentId);
-  const omitCoords =
-    (parentNode ? layoutOf(parentNode) !== null : false) ||
-    (type === "Dock" && parentId === project.scene.root && !!parentNode && isPartitionedWindow(parentNode));
-  const created: SceneNode = {
-    type,
-    width: Math.max(1, Math.round(rect.width)),
-    height: Math.max(1, Math.round(rect.height)),
-  };
-  if (!omitCoords) {
-    created.x = Math.round(rect.x - (parentId === project.scene.root ? 0 : parentRect.x));
-    created.y = Math.round(rect.y - (parentId === project.scene.root ? 0 : parentRect.y));
+  if (isNodeLocked(project.scene, parentId)) {
+    toast("目标容器已锁定，无法放入控件");
+    return "";
   }
-  if (props && Object.keys(props).length > 0) created.props = props;
-  if (decl.children) created.children = [];
-  project.scene = applyAddNodeToScene(project.scene, parentId, id, created);
+  const decl = declFor(project, type) ?? CONTAINER_DECL;
+  const id = newId(type, idBase);
+  const ok = placeNewNodeInScene(
+    project.scene,
+    type,
+    id,
+    rect.x + rect.width / 2,
+    rect.y + rect.height / 2,
+    { width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) },
+    {
+      targetContainerId: parentId,
+      exactTopLeft: { x: rect.x, y: rect.y },
+      props,
+      canHaveChildren: Boolean(decl.children),
+      boxes: currentLayoutBoxes(),
+    },
+  );
+  if (!ok) {
+    toast("目标容器已锁定，无法放入控件");
+    return "";
+  }
   selectedId = id;
   await saveScene();
   return id;
 }
 
 async function addNode(type: string, px: number, py: number): Promise<void> {
-  const decl = declFor(project, type) ?? CONTAINER_DECL;
-  const size = decl.defaultSize ?? CONTAINER_DECL.defaultSize!;
-  // 落点在能放子节点的控件里，就放进去；否则放在窗口里
-  await createNode(type, containerAt(px, py), { x: px - size.width / 2, y: py - size.height / 2, width: size.width, height: size.height });
+  await commitPaletteDropOnStage(type, px, py);
 }
 
 /** 预设的属性，加上上次用过的颜色和线型（工具自带的预设才沿用；文字和用户存的预设保持原样）。 */
@@ -2800,9 +2845,14 @@ async function revertToContainer(id: string): Promise<void> {
 async function renameId(oldId: string, nextId: string): Promise<void> {
   if (nextId === oldId) return;
   if (isNodeLocked(project.scene, oldId)) return toast("控件已锁定，解锁后才能重命名");
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(nextId)) return toast("ID 只能用字母、数字和下划线，且不能以数字开头");
-  if (node(nextId) || project.logic.state?.[nextId] !== undefined || project.logic.conditions?.[nextId]) {
-    return toast(`“${nextId}”已经被别的控件、状态或条件使用`);
+  if (!isValidIdentifier(nextId)) return toast("ID 只能用字母、数字和下划线，不能以数字开头且不能使用保留字");
+  if (
+    node(nextId) ||
+    allSceneMenuIds(project.scene).has(nextId) ||
+    project.logic.state?.[nextId] !== undefined ||
+    project.logic.conditions?.[nextId]
+  ) {
+    return toast(`“${nextId}”已经被别的控件、菜单、状态或条件使用`);
   }
   const doc = parseDocument(project.logicText);
   if (doc.errors.length > 0) return toast("YAML 有语法错误，请先修正再重命名");
@@ -3642,6 +3692,12 @@ function startPaletteDrag(down: PointerEvent, type: string): void {
   const place = (e: PointerEvent) => {
     ghost.style.left = `${e.clientX - size.width / 2}px`;
     ghost.style.top = `${e.clientY - size.height / 2}px`;
+    if (Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) > 4) {
+      const rect = $("stage").getBoundingClientRect();
+      const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+      if (inside) previewPaletteDropOnStage(type, (e.clientX - rect.left) / viewZoom(), (e.clientY - rect.top) / viewZoom());
+      else hideLayoutDropIndicator();
+    }
   };
   place(down);
   document.body.append(ghost);
@@ -3649,6 +3705,7 @@ function startPaletteDrag(down: PointerEvent, type: string): void {
     document.removeEventListener("pointermove", place);
     document.removeEventListener("pointerup", up);
     ghost.remove();
+    hideLayoutDropIndicator();
     // 只点了一下没有拖：把它选为工具，再在设计窗口里拖出大小
     if (Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) <= 4) {
       setTool(tool.kind === "node" && tool.type === type ? { kind: "select" } : { kind: "node", type });
@@ -3780,11 +3837,13 @@ let docTarget: { path: string; section: string | null } | null = null;
 let docTimer: number | undefined;
 let yamlTimer: number | undefined;
 
-function showRightTab(tab: "doc" | "yaml"): void {
-  $("tab-doc").setAttribute("aria-selected", String(tab === "doc"));
-  $("tab-yaml").setAttribute("aria-selected", String(tab === "yaml"));
-  $("pane-doc").hidden = tab !== "doc";
-  $("pane-yaml").hidden = tab !== "yaml";
+function showRightTab(tab: string): void {
+  for (const id of ["doc", "yaml", "layout", "menu", "state"]) {
+    const t = document.getElementById(`tab-${id}`);
+    const p = document.getElementById(`pane-${id}`);
+    if (t) t.setAttribute("aria-selected", String(tab === id));
+    if (p) p.hidden = tab !== id;
+  }
   if (tab === "yaml" && selectedId) scrollYamlTo(`  ${selectedId}:`);
 }
 
@@ -3852,6 +3911,9 @@ function renderRight(): void {
     }
   }
   syncDocView();
+  renderLayoutEditPane();
+  renderMenuEditPane();
+  renderStateEditPane();
 }
 
 /** 把 YAML 编辑器滚动到以 prefix 开头的那一行。 */
@@ -4201,6 +4263,34 @@ async function main(): Promise<void> {
     getSelectedId: () => selectedId,
     onViewFullDoc: () => select(null),
     onCommitDoc: () => void saveDoc(),
+  });
+  initLayoutEdit({
+    getProject: () => project,
+    getMode: () => mode,
+    getSelectedId: () => selectedId,
+    selectNode: (id) => select(id),
+    saveScene,
+    editLogic,
+    newNodeId: newId,
+    containerAtPoint: containerAt,
+    currentBoxes: currentLayoutBoxes,
+    stagePoint,
+    overlay,
+    toast,
+    activateRightTab: showRightTab,
+  });
+  initMenuEdit({
+    getProject: () => project,
+    getMode: () => mode,
+    saveScene,
+    toast,
+    activateRightTab: showRightTab,
+  });
+  initStateEdit({
+    getProject: () => project,
+    editLogic,
+    toast,
+    activateRightTab: showRightTab,
   });
   initPreviewLauncher(
     () => project,
