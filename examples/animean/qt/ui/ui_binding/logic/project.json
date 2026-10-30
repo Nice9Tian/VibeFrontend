@@ -364,7 +364,9 @@
         },
         "children": [
           "inspectorTabs",
-          "inspectorStack"
+          "inspectorStack",
+          "colorPanelToggleBtn",
+          "colorPanel"
         ]
       },
       "inspectorTabs": {
@@ -544,6 +546,49 @@
         "height": 28,
         "props": {
           "text": "尚未导出",
+          "tone": "muted"
+        }
+      },
+      "colorPanelToggleBtn": {
+        "type": "StateButton",
+        "width": 240,
+        "height": 34,
+        "props": {
+          "text": "收起调色盘",
+          "selected": true
+        }
+      },
+      "colorPanel": {
+        "type": "VBox",
+        "width": 240,
+        "height": 154,
+        "layout": {
+          "kind": "vbox",
+          "padding": 6,
+          "gap": 6
+        },
+        "children": [
+          "colorPickerCanvas",
+          "colorHexLabel"
+        ]
+      },
+      "colorPickerCanvas": {
+        "type": "ColorPicker",
+        "width": 228,
+        "height": 112,
+        "props": {
+          "hue": 210,
+          "saturation": 78,
+          "brightness": 92,
+          "hexColor": "#3394eb"
+        }
+      },
+      "colorHexLabel": {
+        "type": "Label",
+        "width": 228,
+        "height": 24,
+        "props": {
+          "text": "当前颜色：#3394eb",
           "tone": "muted"
         }
       },
@@ -940,6 +985,26 @@
         "tabIndex": {
           "type": "number",
           "initial": 0
+        },
+        "colorPanelOpen": {
+          "type": "boolean",
+          "initial": true
+        },
+        "hue": {
+          "type": "number",
+          "initial": 210
+        },
+        "saturation": {
+          "type": "number",
+          "initial": 78
+        },
+        "brightness": {
+          "type": "number",
+          "initial": 92
+        },
+        "hexColor": {
+          "type": "string",
+          "initial": "#3394eb"
         }
       },
       "newProject": {
@@ -1346,6 +1411,54 @@
       "exportResultLabel": {
         "props": {
           "text": "project.exportResult"
+        }
+      },
+      "colorPanelToggleBtn": {
+        "doc": "docs/window.md#color-panel",
+        "props": {
+          "enabled": "not layer.locked",
+          "selected": "inspector.colorPanelOpen",
+          "text": "inspector.colorPanelOpen ? \"收起调色盘\" : \"展开调色盘\""
+        },
+        "events": {
+          "click": [
+            {
+              "set": "inspector.colorPanelOpen = not inspector.colorPanelOpen"
+            }
+          ]
+        }
+      },
+      "colorPanel": {
+        "doc": "docs/window.md#color-panel",
+        "props": {
+          "visible": "inspector.colorPanelOpen"
+        },
+        "effects": {
+          "visible": "PanelExpand"
+        }
+      },
+      "colorPickerCanvas": {
+        "doc": "docs/window.md#color-picker",
+        "props": {
+          "hue": "inspector.hue",
+          "saturation": "inspector.saturation",
+          "brightness": "inspector.brightness",
+          "hexColor": "inspector.hexColor"
+        },
+        "events": {
+          "click": [
+            {
+              "set": "inspector.hue = inspector.hue == 210 ? 32 : 210"
+            },
+            {
+              "set": "inspector.hexColor = inspector.hue == 210 ? \"#3394eb\" : \"#eb8f33\""
+            }
+          ]
+        }
+      },
+      "colorHexLabel": {
+        "props": {
+          "text": "\"当前颜色：\" + inspector.hexColor"
         }
       },
       "timelineDock": {
@@ -1835,6 +1948,90 @@
           "frameShadow": 48
         }
       }
+    },
+    "ColorPicker": {
+      "type": "ColorPicker",
+      "label": "HSV 调色盘",
+      "description": "自绘 HSV 拾色器控件，包含饱和度-明度方块、色相条、当前颜色预览条；其绘制效果 ColorPickerDraw 需要在客户端 ui_effects/ 中翻译",
+      "entry": "index.js",
+      "defaultSize": {
+        "width": 228,
+        "height": 112
+      },
+      "effects": {
+        "paint": "ColorPickerDraw"
+      },
+      "props": {
+        "hue": {
+          "type": "number",
+          "label": "色相 (0-360)",
+          "default": 210,
+          "logic": true
+        },
+        "saturation": {
+          "type": "number",
+          "label": "饱和度 (0-100)",
+          "default": 78,
+          "logic": true
+        },
+        "brightness": {
+          "type": "number",
+          "label": "明度 (0-100)",
+          "default": 92,
+          "logic": true
+        },
+        "hexColor": {
+          "type": "string",
+          "label": "颜色值",
+          "default": "#3394eb",
+          "logic": true
+        }
+      },
+      "events": [
+        "change"
+      ]
+    },
+    "StateButton": {
+      "type": "StateButton",
+      "label": "状态图片按钮",
+      "description": "基于同一套 5 状态 SVG（正常/悬停/按下/选中/不可用）九宫格绘制的按钮，状态切换带透明度过渡，文字由控件另外画在上面",
+      "entry": "index.js",
+      "defaultSize": {
+        "width": 240,
+        "height": 34
+      },
+      "stateImages": {
+        "normal": "normal.svg",
+        "hover": "hover.svg",
+        "pressed": "pressed.svg",
+        "selected": "selected.svg",
+        "disabled": "disabled.svg",
+        "slice": [
+          8,
+          8,
+          8,
+          8
+        ],
+        "transitionMs": 120
+      },
+      "props": {
+        "text": {
+          "type": "string",
+          "label": "文字",
+          "default": "收起调色盘",
+          "logic": true
+        },
+        "selected": {
+          "type": "boolean",
+          "label": "选中",
+          "default": true,
+          "logic": true
+        }
+      },
+      "events": [
+        "click",
+        "change"
+      ]
     }
   },
   "functions": {

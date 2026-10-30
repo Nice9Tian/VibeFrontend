@@ -64,8 +64,8 @@ QStringList compare(Ui &ui)
     for (auto it = widgets.begin(); it != widgets.end(); ++it) {
         const QJsonObject wanted = views.value(it.key()).toObject();
         const QJsonObject actual = it.value().toObject();
-        for (const QString &key : { QStringLiteral("visible"), QStringLiteral("enabled") }) {
-            if (wanted.value(key) != actual.value(key)) {
+        for (const QString &key : { QStringLiteral("visible"), QStringLiteral("enabled"), QStringLiteral("stateImage"), QStringLiteral("visualState") }) {
+            if ((wanted.contains(key) || actual.contains(key)) && wanted.value(key) != actual.value(key)) {
                 lines.append(QStringLiteral("check MISMATCH %1.%2 wanted=%3 actual=%4")
                                  .arg(it.key(), key, toText(wanted.value(key)), toText(actual.value(key))));
             }
@@ -172,6 +172,10 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
         }
         if (verb == QLatin1String("click")) {
             click(widget);
+        } else if (verb == QLatin1String("press")) {
+            sendMouse(widget, QEvent::MouseButtonPress, Qt::LeftButton);
+        } else if (verb == QLatin1String("release")) {
+            sendMouse(widget, QEvent::MouseButtonRelease, Qt::NoButton);
         } else if (verb == QLatin1String("dblclick")) {
             click(widget);
             sendMouse(widget, QEvent::MouseButtonDblClick, Qt::LeftButton);
@@ -199,6 +203,12 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             } else if (auto *edit = qobject_cast<QLineEdit *>(widget)) {
                 edit->setText(rawVal);
                 emit edit->textEdited(rawVal);
+            } else if (rawVal == QLatin1String("pressed")) {
+                sendMouse(widget, QEvent::MouseButtonPress, Qt::LeftButton);
+            } else if (rawVal == QLatin1String("released")) {
+                const QPointF outside(-10.0, -10.0);
+                QMouseEvent event(QEvent::MouseButtonRelease, outside, widget->mapToGlobal(outside), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(widget, &event);
             }
         } else if (verb == QLatin1String("select")) {
             const QString rawVal = step.section(QLatin1Char(':'), 2);

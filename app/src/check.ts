@@ -7,15 +7,19 @@ import {
   childrenOfNode,
   declFor,
   EFFECT_KINDS,
+  ensureComponentSvgFiles,
   findCondition,
   findMenuItem,
   findStateLeaf,
   getSection,
   isBusinessState,
+  isPaintEffect,
+  isTransitionEffect,
   MOUSE_EVENTS,
   parseDocRef,
   requestEvent,
   STANDARD_COMPONENTS,
+  STATE_IMAGE_KEYS,
   type ConditionDef,
   type Problem,
   type Project,
@@ -311,7 +315,40 @@ export function findForbiddenDomUsage(source: string): string | null {
   return null;
 }
 
+/**
+ * 检查 SVG 源码中是否使用了在浏览器能画但 Qt QSvgRenderer 会忽略或表现不一致的写法：
+ * - <feDropShadow>
+ * - <feComponentTransfer>
+ * - clip-path / <clipPath>
+ */
+export function checkSvgCompatibility(svgText: string, fileLabel: string, nodeId?: string): Problem[] {
+  const issues: Problem[] = [];
+  if (/<\s*feDropShadow\b|\bfeDropShadow\b/i.test(svgText)) {
+    issues.push({
+      level: "hint",
+      message: `${fileLabel}：SVG 使用了 Qt QSvgRenderer 不支持的 <feDropShadow>；替代做法：改用 <feGaussianBlur> + <feOffset> + <feMerge>，或者在亮色图形下面垫一层带高斯模糊的深色图形`,
+      ...(nodeId ? { nodeId } : {}),
+    });
+  }
+  if (/<\s*feComponentTransfer\b|\bfeComponentTransfer\b/i.test(svgText)) {
+    issues.push({
+      level: "hint",
+      message: `${fileLabel}：SVG 使用了 Qt QSvgRenderer 不支持的 <feComponentTransfer>；替代做法：直接在图形或阴影层上写 opacity / fill-opacity`,
+      ...(nodeId ? { nodeId } : {}),
+    });
+  }
+  if (/<\s*clipPath\b|\bclip-path\s*[:=]/i.test(svgText)) {
+    issues.push({
+      level: "hint",
+      message: `${fileLabel}：SVG 使用了在 Qt QSvgRenderer 中受限的 clip-path；替代做法：直接把图形画成目标轮廓，或用 <mask>`,
+      ...(nodeId ? { nodeId } : {}),
+    });
+  }
+  return issues;
+}
+
 export function check(project: Project): Problem[] {
+  ensureComponentSvgFiles(project);
   const problems: Problem[] = [];
   const { scene, logic } = project;
   const error = (message: string, nodeId?: string) => problems.push({ level: "error", message, nodeId });
@@ -553,8 +590,59 @@ export function check(project: Project): Problem[] {
     }
   }
 
+  // 状态图片与 SVG 写法检查（components/ 与 effects/）
+  ensureComponentSvgFiles(project);
+  for (const [type, comp] of project.components) {
+    if (comp.error) {
+      error(`控件 ${type}：${comp.error}`);
+    }
+    const folder = comp.folder ?? type;
+    if (comp.decl.stateImages) {
+      if (!comp.decl.stateImages.normal) {
+        error(`控件 ${type}：stateImages 必须至少提供 normal 状态对应的 SVG 文件名`);
+      }
+      if (comp.svgFiles !== undefined) {
+        for (const key of STATE_IMAGE_KEYS) {
+          const fname = comp.decl.stateImages[key];
+          if (fname && !(fname in comp.svgFiles)) {
+            error(`控件 ${type}：stateImages.${key} 引用的 SVG 文件“${fname}”在 components/${folder}/ 中找不到`);
+          }
+        }
+      }
+    }
+    for (const [fileName, svgText] of Object.entries(comp.svgFiles ?? {})) {
+      for (const issue of checkSvgCompatibility(svgText, `components/${folder}/${fileName}`)) {
+        problems.push(issue);
+      }
+    }
+    if (comp.decl.effects) {
+      for (const [slot, effectName] of Object.entries(comp.decl.effects)) {
+        if (!effectName) continue;
+        if (slot !== "visible" && slot !== "paint") {
+          error(`控件 ${type}：effects 只支持 visible（过渡效果）或 paint（绘制效果），不支持“${slot}”`);
+          continue;
+        }
+        const eff = project.effects.get(String(effectName));
+        if (!eff) {
+          error(`控件 ${type}：声明引用的效果“${effectName}”在 effects/ 中找不到`);
+        } else if (slot === "visible" && !isTransitionEffect(eff.decl.kind)) {
+          error(`控件 ${type}：效果 ${effectName} 的种类是 ${eff.decl.kind}，不能用在 visible 过渡效果上`);
+        } else if (slot === "paint" && !isPaintEffect(eff.decl.kind)) {
+          error(`控件 ${type}：效果 ${effectName} 的种类是 ${eff.decl.kind}，不能用在 paint 绘制效果上`);
+        }
+      }
+    }
+  }
+
   // 效果
   for (const [name, effect] of project.effects) {
+    for (const [fileName, content] of Object.entries(effect.files)) {
+      if (fileName.toLowerCase().endsWith(".svg")) {
+        for (const issue of checkSvgCompatibility(content, `effects/${effect.folder}/${fileName}`)) {
+          problems.push(issue);
+        }
+      }
+    }
     if (effect.error) {
       error(`效果 ${name}：${effect.error}`);
       continue;
@@ -562,7 +650,11 @@ export function check(project: Project): Problem[] {
     if (!EFFECT_KINDS.includes(effect.decl.kind)) {
       error(`效果 ${name}：kind 应为 ${EFFECT_KINDS.join("、")} 之一，现在是“${effect.decl.kind}”`);
     }
-    hint(`效果 ${name} 需要翻译：导出成 Qt 后，要在界面效果层为它提供实现（当前哈希 ${effect.hash}）；没有提供时直接切到结束状态`);
+    if (isPaintEffect(effect.decl.kind)) {
+      hint(`效果 ${name}（绘制效果）需要翻译：导出成 Qt 后，要在界面效果层为它提供实现（当前哈希 ${effect.hash}）；没有提供时显示占位框`);
+    } else {
+      hint(`效果 ${name}（过渡效果）需要翻译：导出成 Qt 后，要在界面效果层为它提供实现（当前哈希 ${effect.hash}）；没有提供时直接切到结束状态`);
+    }
   }
 
   // 状态
@@ -675,14 +767,21 @@ export function check(project: Project): Problem[] {
       checkSteps(steps, `控件 ${id} 的 ${event} 事件`, "normal", id, new Set(["value", "param"]));
     }
     for (const [prop, effectName] of Object.entries(object.effects ?? {})) {
-      if (prop !== "visible") {
-        error(`控件 ${id}：effects 目前只支持 visible（显示和隐藏时的过渡），不支持“${prop}”`, id);
+      if (prop !== "visible" && prop !== "paint") {
+        error(`控件 ${id}：effects 目前只支持 visible（显示和隐藏时的过渡）或 paint（自绘绘制效果），不支持“${prop}”`, id);
         continue;
       }
       const effect = project.effects.get(String(effectName));
-      if (!effect) error(`控件 ${id}：效果“${effectName}”在 effects/ 中找不到`, id);
-      else if (effect.decl.kind !== "visibility") error(`控件 ${id}：效果 ${effectName} 的种类是 ${effect.decl.kind}，不能用在 visible 上`, id);
-      if (object.props?.visible === undefined) hint(`控件 ${id}：给 visible 指定了效果，但 visible 没有由逻辑控制，这个效果不会被播放`, id);
+      if (!effect) {
+        error(`控件 ${id}：效果“${effectName}”在 effects/ 中找不到`, id);
+      } else if (prop === "visible" && !isTransitionEffect(effect.decl.kind)) {
+        error(`控件 ${id}：效果 ${effectName} 的种类是 ${effect.decl.kind}，不能用在 visible 上`, id);
+      } else if (prop === "paint" && !isPaintEffect(effect.decl.kind)) {
+        error(`控件 ${id}：效果 ${effectName} 的种类是 ${effect.decl.kind}，不能用在 paint 上`, id);
+      }
+      if (prop === "visible" && object.props?.visible === undefined) {
+        hint(`控件 ${id}：给 visible 指定了效果，但 visible 没有由逻辑控制，这个效果不会被播放`, id);
+      }
     }
     if (object.doc) {
       const { path, section } = parseDocRef(object.doc);

@@ -143,6 +143,34 @@ export interface QtMapping {
   events?: Record<string, { signal: string; type?: "string" | "number" | "boolean" }>;
 }
 
+export const STATE_IMAGE_KEYS = ["normal", "hover", "pressed", "selected", "disabled"] as const;
+export type StateImageKey = (typeof STATE_IMAGE_KEYS)[number];
+
+/**
+ * 状态图片声明（正常、悬停、按下、选中、不可用）。
+ * 不需要翻译，两边渲染同一套 SVG 文件；支持九宫格切线、透明度过渡与文字单独绘制。
+ */
+export interface StateImagesDecl {
+  normal: string;
+  hover?: string;
+  pressed?: string;
+  selected?: string;
+  disabled?: string;
+  /** 九宫格四条切线在 SVG viewBox 坐标系中的边距：[上, 右, 下, 左] */
+  slice?: [number, number, number, number];
+  /** slice 的别名：[上, 右, 下, 左] */
+  ninePatch?: [number, number, number, number];
+  /** 状态切换时的透明度过渡时长（毫秒，默认 120） */
+  transitionMs?: number;
+}
+
+export interface ComponentEffectsDecl {
+  /** 显示与隐藏时的过渡效果名 */
+  visible?: string;
+  /** 自绘控件的绘制效果名 */
+  paint?: string;
+}
+
 export interface ComponentDecl {
   type: string;
   label?: string;
@@ -155,6 +183,10 @@ export interface ComponentDecl {
   entry?: string;
   style?: string;
   qt?: QtMapping;
+  /** 状态图片配置（正常、悬停、按下、选中、不可用，两边渲染同一套 SVG） */
+  stateImages?: StateImagesDecl;
+  /** 控件自带的“需要翻译”的效果（过渡效果或绘制效果） */
+  effects?: ComponentEffectsDecl;
 }
 
 export interface ComponentInstance {
@@ -164,7 +196,13 @@ export interface ComponentInstance {
 
 export type ComponentCreate = (
   el: HTMLElement,
-  ctx: { props: Record<string, Value>; emit: (event: string, value?: Value) => void; mode: "design" | "preview" },
+  ctx: {
+    props: Record<string, Value>;
+    emit: (event: string, value?: Value) => void;
+    mode: "design" | "preview";
+    stateImages?: StateImagesDecl;
+    svgFiles?: Record<string, string>;
+  },
 ) => ComponentInstance;
 
 export interface LoadedComponent {
@@ -173,6 +211,8 @@ export interface LoadedComponent {
   folder?: string;
   /** 实现文件的原文 */
   source?: string;
+  /** 控件文件夹内的 SVG 文件：文件名 → SVG 原文 */
+  svgFiles?: Record<string, string>;
   /** 只在工具界面里有：实现文件加载后得到的创建函数 */
   create?: ComponentCreate;
   error?: string;
@@ -255,8 +295,16 @@ export const BUILTIN_TYPES = [
 
 // ---------- 效果 ----------
 
-/** 效果的种类。目前只有一种：控件显示和隐藏时的过渡。 */
-export const EFFECT_KINDS = ["visibility"];
+/** 效果的种类：过渡效果（visibility / transition，控件显示和隐藏时的过渡）和绘制效果（paint，取色器等自绘内容）。 */
+export const EFFECT_KINDS = ["visibility", "transition", "paint"];
+
+export function isPaintEffect(kind?: string): boolean {
+  return kind === "paint";
+}
+
+export function isTransitionEffect(kind?: string): boolean {
+  return !kind || kind === "visibility" || kind === "transition";
+}
 
 export interface EffectDecl {
   name: string;
@@ -269,6 +317,12 @@ export interface EffectDecl {
 /** 显示隐藏过渡在网页里的实现：播放完成时返回的 Promise 结束。 */
 export type EffectPlay = (el: HTMLElement, ctx: { showing: boolean }) => Promise<unknown> | { finished: Promise<unknown> } | void;
 
+/** 绘制效果在网页里的实现：根据控件矩形尺寸和当前属性参数把画面画进 el。 */
+export type EffectPaint = (
+  el: HTMLElement,
+  ctx: { props: Record<string, Value>; width: number; height: number },
+) => void;
+
 export interface LoadedEffect {
   decl: EffectDecl;
   folder: string;
@@ -276,8 +330,10 @@ export interface LoadedEffect {
   files: Record<string, string>;
   /** 由名字、种类和实现算出的哈希，8 位十六进制。导出到 Qt 时用它对接。 */
   hash: string;
-  /** 只在工具界面里有 */
+  /** 过渡效果在工具界面里的实现 */
   play?: EffectPlay;
+  /** 绘制效果在工具界面里的实现 */
+  paint?: EffectPaint;
   error?: string;
 }
 
@@ -483,6 +539,105 @@ export function declFor(project: RuntimeProject, type: string): ComponentDecl | 
   return project.components.get(type)?.decl ?? STANDARD_COMPONENTS.get(type)?.decl ?? null;
 }
 
+/** 获取某个控件声明自身携带的需要翻译的效果名列表。 */
+export function effectsForComponent(decl: ComponentDecl | null | undefined): string[] {
+  if (!decl?.effects) return [];
+  const names: string[] = [];
+  if (decl.effects.visible) names.push(decl.effects.visible);
+  if (decl.effects.paint && !names.includes(decl.effects.paint)) names.push(decl.effects.paint);
+  return names;
+}
+
+/** 获取某个画布节点关联的过渡效果与绘制效果（合并 logic.objects.<id>.effects 与控件声明 decl.effects）。 */
+export function effectsForNode(project: RuntimeProject, id: string): { visible?: string; paint?: string } {
+  const node = project.scene.nodes[id];
+  const decl = node ? declFor(project, node.type) : null;
+  const objEffects = project.logic.objects?.[id]?.effects;
+  const visible = objEffects?.visible ?? decl?.effects?.visible;
+  const paint = objEffects?.paint ?? decl?.effects?.paint;
+  return {
+    ...(visible ? { visible } : {}),
+    ...(paint ? { paint } : {}),
+  };
+}
+
+export function visibleEffectForNode(project: RuntimeProject, id: string): string | undefined {
+  return effectsForNode(project, id).visible;
+}
+
+export function paintEffectForNode(project: RuntimeProject, id: string): string | undefined {
+  return effectsForNode(project, id).paint;
+}
+
+/** 归一化状态图片的九宫格四条切线 [top, right, bottom, left]。 */
+export function normalizeStateImageSlice(stateImages?: StateImagesDecl): [number, number, number, number] {
+  const raw = stateImages?.slice ?? stateImages?.ninePatch;
+  if (Array.isArray(raw) && raw.length === 4 && raw.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0)) {
+    return [raw[0], raw[1], raw[2], raw[3]];
+  }
+  return [0, 0, 0, 0];
+}
+
+/**
+ * 根据控件当前状态（不可用、按下、悬停、选中、正常）选出应显示的状态与对应的 SVG 文件名。
+ * 如果某状态未单独指定 SVG 文件，则回退到 normal。
+ */
+export function resolveStateImage(
+  decl: ComponentDecl | null | undefined,
+  state: { enabled: boolean; pressed: boolean; hovered: boolean; selected: boolean },
+): { state: StateImageKey; file: string } | null {
+  const si = decl?.stateImages;
+  if (!si || typeof si.normal !== "string" || !si.normal) return null;
+  let key: StateImageKey = "normal";
+  if (!state.enabled) {
+    key = "disabled";
+  } else if (state.pressed) {
+    key = "pressed";
+  } else if (state.hovered) {
+    key = "hover";
+  } else if (state.selected) {
+    key = "selected";
+  }
+  const file = si[key] || (key === "pressed" && si.hover ? si.hover : si.normal);
+  return { state: key, file };
+}
+
+/**
+ * 在 Node 环境下（命令行检查、导出、测试），为项目中的自定义控件补齐文件夹内的 .svg 文件表（component.svgFiles）。
+ * 浏览器模式下由 project.ts 的 loadProject 异步读取。
+ */
+export function ensureComponentSvgFiles(project: Project): void {
+  const g = globalThis as {
+    process?: {
+      versions?: { node?: string };
+      getBuiltinModule?: (id: string) => unknown;
+    };
+  };
+  if (!g.process?.versions?.node || typeof g.process.getBuiltinModule !== "function") return;
+  const fs = g.process.getBuiltinModule("node:fs") as {
+    existsSync(p: string): boolean;
+    readdirSync(p: string, opts: { withFileTypes: true }): Array<{ name: string; isFile(): boolean }>;
+    readFileSync(p: string, enc: "utf8"): string;
+  };
+  const path = g.process.getBuiltinModule("node:path") as {
+    join(...parts: string[]): string;
+  };
+  if (!project.root || !fs.existsSync(project.root)) return;
+  for (const comp of project.components.values()) {
+    if (comp.svgFiles !== undefined) continue;
+    const folder = comp.folder ?? comp.decl.type;
+    if (!folder) continue;
+    comp.svgFiles = {};
+    const compDir = path.join(project.root, "components", folder);
+    if (!fs.existsSync(compDir)) continue;
+    for (const entry of fs.readdirSync(compDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.toLowerCase().endsWith(".svg")) {
+        comp.svgFiles[entry.name] = fs.readFileSync(path.join(compDir, entry.name), "utf8");
+      }
+    }
+  }
+}
+
 /**
  * 统一获取一个画布节点的全部直接子节点 ID（按 docks → central → statusBar → children 顺序去重）。
  */
@@ -604,6 +759,70 @@ export function findMenuItem(scene: Scene, id: string): MenuItemSpec | null {
     if (entry.item.id === id) return entry.item;
   }
   return null;
+}
+
+/** 表达式关键字与上下文内置保留字：不能作为控件 ID、菜单/菜单项 ID、状态路径段或条件代号。 */
+export const RESERVED_IDENTIFIERS = new Set([
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "and",
+  "or",
+  "not",
+  "value",
+  "param",
+  "result",
+  "error",
+]);
+
+/** 判断标识符是否合法且不在保留字列表中。 */
+export function isValidIdentifier(name: string): boolean {
+  const trimmed = name.trim();
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed) && !RESERVED_IDENTIFIERS.has(trimmed);
+}
+
+/** 收集画布中全部窗口的所有菜单 ID 与菜单项 ID。 */
+export function allSceneMenuIds(scene: Scene): Set<string> {
+  const ids = new Set<string>();
+  for (const winId of allWindowIds(scene)) {
+    const menuBar = scene.nodes[winId]?.menuBar;
+    if (!menuBar) continue;
+    for (const menu of menuBar.menus ?? []) {
+      if (menu.id) ids.add(menu.id);
+      for (const item of menu.items ?? []) {
+        if (item.id) ids.add(item.id);
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * 检查标识符是否已在画布节点、菜单/菜单项、状态根名或全局条件名中被占用。
+ * allowStateRoot 为 true 时允许与已有 state 顶层分组同名（用于在同一状态分组下继续添加子状态）。
+ */
+export function isNameTakenAcrossTables(
+  name: string,
+  options: {
+    scene?: Scene;
+    logic?: Logic;
+    ignoreId?: string;
+    allowStateRoot?: boolean;
+    allowCondition?: boolean;
+  } = {},
+): boolean {
+  const id = name.trim();
+  if (!id || id === options.ignoreId) return false;
+  if (options.scene) {
+    if (options.scene.nodes[id]) return true;
+    if (allSceneMenuIds(options.scene).has(id)) return true;
+  }
+  if (options.logic) {
+    if (!options.allowStateRoot && options.logic.state && id in options.logic.state) return true;
+    if (!options.allowCondition && options.logic.conditions && id in options.logic.conditions) return true;
+  }
+  return false;
 }
 
 export function layoutOf(node: SceneNode | undefined): LayoutSpec | null {
@@ -1240,6 +1459,244 @@ export function computeSceneLayout(
   }
 
   return boxes;
+}
+
+export function isSceneNodeLocked(scene: Scene, id: string): boolean {
+  const visited = new Set<string>();
+  for (let cursor: string | null = id; cursor; cursor = parentOfNode(scene, cursor)) {
+    if (visited.has(cursor)) break;
+    visited.add(cursor);
+    if (scene.nodes[cursor]?.locked) return true;
+    if (cursor === scene.root) break;
+  }
+  return false;
+}
+
+export function canNodeHoldChildren(project: RuntimeProject | null, node: SceneNode | undefined): boolean {
+  if (!node) return false;
+  if (
+    node.type === "Window" ||
+    node.type === "Dialog" ||
+    node.type === "Container" ||
+    node.type === "Dock" ||
+    node.type in LAYOUT_TYPE_KINDS
+  ) {
+    return true;
+  }
+  return project ? declFor(project, node.type)?.children === true : false;
+}
+
+export interface LayoutDropTarget {
+  containerId: string;
+  kind: LayoutKind;
+  /** 插入到 container.children 的下标（0..children.length） */
+  insertIndex: number;
+  /** 网格布局（grid）下对应的行与列（0-based） */
+  row?: number;
+  column?: number;
+  /** 相对于所属顶层窗口左上角的插入指示线或指示框 */
+  indicator: { x: number; y: number; width: number; height: number; isLine: boolean };
+}
+
+/**
+ * 计算在布局容器 containerId 内落点 pt（相对于顶层窗口左上角）应插入的子节点下标与指示线位置。
+ */
+export function computeLayoutDropTarget(
+  scene: Scene,
+  containerId: string,
+  pt: { x: number; y: number },
+  boxes?: Map<string, ComputedBox>,
+  excludeId?: string,
+): LayoutDropTarget | null {
+  const container = scene.nodes[containerId];
+  const layout = layoutOf(container);
+  if (!container || !layout) return null;
+  const layoutBoxes = boxes ?? computeSceneLayout(scene);
+  const cBox = layoutBoxes.get(containerId);
+  if (!cBox) return null;
+
+  const [padTop, padRight, padBottom, padLeft] = paddingOf(layout);
+  const headerOffset = container.type === "Dock" ? (container.headerHeight ?? 26) : 0;
+  const innerX = cBox.absX + padLeft;
+  const innerY = cBox.absY + headerOffset + padTop;
+  const innerW = Math.max(8, cBox.width - padLeft - padRight);
+  const innerH = Math.max(8, cBox.height - headerOffset - padTop - padBottom);
+  const children = (container.children ?? []).filter((cid) => cid !== excludeId && Boolean(scene.nodes[cid]));
+
+  if (layout.kind === "vbox" || layout.kind === "form") {
+    let insertIndex = children.length;
+    for (let i = 0; i < children.length; i++) {
+      const b = layoutBoxes.get(children[i]);
+      const midY = b ? b.absY + b.height / 2 : innerY;
+      if (pt.y < midY) {
+        insertIndex = i;
+        break;
+      }
+    }
+    let lineY = innerY + 2;
+    if (children.length === 0) {
+      lineY = innerY + 2;
+    } else if (insertIndex === 0) {
+      const firstBox = layoutBoxes.get(children[0]);
+      lineY = Math.max(cBox.absY + headerOffset + 1, (firstBox?.absY ?? innerY) - 2);
+    } else if (insertIndex >= children.length) {
+      const lastBox = layoutBoxes.get(children[children.length - 1]);
+      lineY = lastBox ? lastBox.absY + lastBox.height + 2 : innerY + innerH - 2;
+    } else {
+      const prevBox = layoutBoxes.get(children[insertIndex - 1]);
+      const nextBox = layoutBoxes.get(children[insertIndex]);
+      lineY = prevBox && nextBox ? Math.round((prevBox.absY + prevBox.height + nextBox.absY) / 2) : innerY;
+    }
+    return {
+      containerId,
+      kind: layout.kind,
+      insertIndex,
+      indicator: { x: innerX, y: Math.round(lineY) - 1, width: innerW, height: 3, isLine: true },
+    };
+  }
+
+  if (layout.kind === "hbox") {
+    let insertIndex = children.length;
+    for (let i = 0; i < children.length; i++) {
+      const b = layoutBoxes.get(children[i]);
+      const midX = b ? b.absX + b.width / 2 : innerX;
+      if (pt.x < midX) {
+        insertIndex = i;
+        break;
+      }
+    }
+    let lineX = innerX + 2;
+    if (children.length === 0) {
+      lineX = innerX + 2;
+    } else if (insertIndex === 0) {
+      const firstBox = layoutBoxes.get(children[0]);
+      lineX = Math.max(cBox.absX + 1, (firstBox?.absX ?? innerX) - 2);
+    } else if (insertIndex >= children.length) {
+      const lastBox = layoutBoxes.get(children[children.length - 1]);
+      lineX = lastBox ? lastBox.absX + lastBox.width + 2 : innerX + innerW - 2;
+    } else {
+      const prevBox = layoutBoxes.get(children[insertIndex - 1]);
+      const nextBox = layoutBoxes.get(children[insertIndex]);
+      lineX = prevBox && nextBox ? Math.round((prevBox.absX + prevBox.width + nextBox.absX) / 2) : innerX;
+    }
+    return {
+      containerId,
+      kind: "hbox",
+      insertIndex,
+      indicator: { x: Math.round(lineX) - 1, y: innerY, width: 3, height: innerH, isLine: true },
+    };
+  }
+
+  if (layout.kind === "grid") {
+    const cols = Math.max(1, layout.columns ?? 2);
+    const numRows = Math.max(1, Math.ceil((children.length + 1) / cols));
+    const cellW = innerW / cols;
+    const cellH = innerH / numRows;
+    const col = Math.max(0, Math.min(cols - 1, Math.floor((pt.x - innerX) / Math.max(1, cellW))));
+    const row = Math.max(0, Math.min(numRows - 1, Math.floor((pt.y - innerY) / Math.max(1, cellH))));
+    const insertIndex = Math.min(children.length, row * cols + col);
+    return {
+      containerId,
+      kind: "grid",
+      insertIndex,
+      row,
+      column: col,
+      indicator: {
+        x: Math.round(innerX + col * cellW),
+        y: Math.round(innerY + row * cellH),
+        width: Math.max(8, Math.round(cellW)),
+        height: Math.max(8, Math.round(cellH)),
+        isLine: false,
+      },
+    };
+  }
+
+  return {
+    containerId,
+    kind: "stack",
+    insertIndex: children.length,
+    indicator: { x: innerX, y: innerY, width: innerW, height: innerH, isLine: false },
+  };
+}
+
+export interface DockDropTarget {
+  windowId: string;
+  dockArea: DockArea;
+  /** 在目标停靠区内的插入位置（0..areaDocks.length） */
+  insertIndex: number;
+  /** 相对于窗口左上角的预览区域框 */
+  indicator: { x: number; y: number; width: number; height: number };
+}
+
+/**
+ * 计算在主窗口内拖动或放置停靠面板（Dock）时对应的四侧停靠区（left / right / top / bottom）与顺序。
+ */
+export function computeDockDropTarget(
+  scene: Scene,
+  pt: { x: number; y: number },
+  boxes?: Map<string, ComputedBox>,
+  excludeDockId?: string,
+): DockDropTarget | null {
+  const winId = scene.root;
+  const winNode = scene.nodes[winId];
+  if (!winNode) return null;
+  const W = Math.max(100, winNode.width);
+  const H = Math.max(100, winNode.height);
+  const menuH = winNode.menuBar ? (winNode.menuBar.height ?? 28) : 0;
+  const statusNode = winNode.statusBar ? scene.nodes[winNode.statusBar] : undefined;
+  const statusH = statusNode ? prefHeight(statusNode) : 0;
+  const midY = menuH;
+  const midH = Math.max(40, H - menuH - statusH);
+
+  const relX = Math.max(0, Math.min(1, pt.x / W));
+  const relY = Math.max(0, Math.min(1, (pt.y - midY) / midH));
+  let dockArea: DockArea = "left";
+  if (relX <= 0.28) dockArea = "left";
+  else if (relX >= 0.72) dockArea = "right";
+  else if (relY <= 0.25) dockArea = "top";
+  else if (relY >= 0.75) dockArea = "bottom";
+  else {
+    const dLeft = relX;
+    const dRight = 1 - relX;
+    const dTop = relY;
+    const dBottom = 1 - relY;
+    const minD = Math.min(dLeft, dRight, dTop, dBottom);
+    if (minD === dLeft) dockArea = "left";
+    else if (minD === dRight) dockArea = "right";
+    else if (minD === dTop) dockArea = "top";
+    else dockArea = "bottom";
+  }
+
+  const layoutBoxes = boxes ?? computeSceneLayout(scene);
+  const allDocks = (winNode.docks ?? []).filter((did) => did !== excludeDockId && Boolean(scene.nodes[did]));
+  const areaDocks = allDocks.filter((did) => (scene.nodes[did]?.dockArea ?? "left") === dockArea);
+  let insertIndex = areaDocks.length;
+  for (let i = 0; i < areaDocks.length; i++) {
+    const b = layoutBoxes.get(areaDocks[i]);
+    if (!b) continue;
+    if (dockArea === "left" || dockArea === "right") {
+      if (pt.x < b.absX + b.width / 2) {
+        insertIndex = i;
+        break;
+      }
+    } else if (pt.y < b.absY + b.height / 2) {
+      insertIndex = i;
+      break;
+    }
+  }
+
+  const sideW = Math.min(240, Math.max(80, Math.round(W * 0.25)));
+  const sideH = Math.min(140, Math.max(60, Math.round(midH * 0.25)));
+  const indicator =
+    dockArea === "left"
+      ? { x: 0, y: midY, width: sideW, height: midH }
+      : dockArea === "right"
+        ? { x: W - sideW, y: midY, width: sideW, height: midH }
+        : dockArea === "top"
+          ? { x: 0, y: midY, width: W, height: sideH }
+          : { x: 0, y: midY + midH - sideH, width: W, height: sideH };
+
+  return { windowId: winId, dockArea, insertIndex, indicator };
 }
 
 // ---------- 说明文档的小节 ----------

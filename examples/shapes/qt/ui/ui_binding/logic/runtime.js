@@ -2316,6 +2316,24 @@ var VF = (function(exports) {
 		return (_ref = (_project$components$g = (_project$components$g2 = project.components.get(type)) === null || _project$components$g2 === void 0 ? void 0 : _project$components$g2.decl) !== null && _project$components$g !== void 0 ? _project$components$g : (_STANDARD_COMPONENTS$ = STANDARD_COMPONENTS.get(type)) === null || _STANDARD_COMPONENTS$ === void 0 ? void 0 : _STANDARD_COMPONENTS$.decl) !== null && _ref !== void 0 ? _ref : null;
 	}
 	/**
+	* 根据控件当前状态（不可用、按下、悬停、选中、正常）选出应显示的状态与对应的 SVG 文件名。
+	* 如果某状态未单独指定 SVG 文件，则回退到 normal。
+	*/
+	function resolveStateImage(decl, state) {
+		const si = decl === null || decl === void 0 ? void 0 : decl.stateImages;
+		if (!si || typeof si.normal !== "string" || !si.normal) return null;
+		let key = "normal";
+		if (!state.enabled) key = "disabled";
+		else if (state.pressed) key = "pressed";
+		else if (state.hovered) key = "hover";
+		else if (state.selected) key = "selected";
+		const file = si[key] || (key === "pressed" && si.hover ? si.hover : si.normal);
+		return {
+			state: key,
+			file
+		};
+	}
+	/**
 	* 统一获取一个画布节点的全部直接子节点 ID（按 docks → central → statusBar → children 顺序去重）。
 	*/
 	function childrenOfNode(n) {
@@ -3532,6 +3550,8 @@ var VF = (function(exports) {
 			_defineProperty(this, "docks", /* @__PURE__ */ new Map());
 			_defineProperty(this, "actionSims", /* @__PURE__ */ new Map());
 			_defineProperty(this, "runningActions", /* @__PURE__ */ new Set());
+			_defineProperty(this, "hoveredControls", /* @__PURE__ */ new Set());
+			_defineProperty(this, "pressedControls", /* @__PURE__ */ new Set());
 			_defineProperty(this, "activePromises", /* @__PURE__ */ new Set());
 			_defineProperty(this, "exprCache", /* @__PURE__ */ new Map());
 			_defineProperty(this, "fnCache", /* @__PURE__ */ new Map());
@@ -3571,6 +3591,8 @@ var VF = (function(exports) {
 				errorMessage: def === null || def === void 0 ? void 0 : def.mockError
 			});
 			this.runningActions.clear();
+			this.hoveredControls.clear();
+			this.pressedControls.clear();
 		}
 		/** 换成新加载的项目；状态结构没变的部分保留当前值。 */
 		adopt(project) {
@@ -3709,7 +3731,7 @@ var VF = (function(exports) {
 		}
 		/** 某个节点（或菜单项）当前应有的样子：静态默认值、scene.json 的值、逻辑计算值依次覆盖。 */
 		view(id) {
-			var _this$project$logic$o2, _decl$props, _node$props, _object$props2;
+			var _this$project$logic$o2, _decl$props, _node$props, _object$props2, _ref3, _props$selected;
 			const menuItem = findMenuItem(this.project.scene, id);
 			if (menuItem && !this.project.scene.nodes[id]) {
 				var _this$project$logic$o, _menuItem$checked, _object$props;
@@ -3774,11 +3796,23 @@ var VF = (function(exports) {
 					break;
 				}
 			}
-			return {
+			const enabled = props.enabled !== false;
+			if (!enabled) this.pressedControls.delete(id);
+			const selected = Boolean((_ref3 = (_props$selected = props.selected) !== null && _props$selected !== void 0 ? _props$selected : props.checked) !== null && _ref3 !== void 0 ? _ref3 : props.variant === "primary");
+			const resolvedState = resolveStateImage(decl, {
+				enabled,
+				pressed: this.pressedControls.has(id) || props.pressed === true,
+				hovered: this.hoveredControls.has(id) || props.hovered === true,
+				selected
+			});
+			return _objectSpread2({
 				visible,
-				enabled: props.enabled !== false,
+				enabled,
 				props
-			};
+			}, resolvedState ? {
+				visualState: resolvedState.state,
+				stateImage: resolvedState.file
+			} : {});
 		}
 		toggleTextCondition(id) {
 			var _this$textConditions$2;
@@ -3792,7 +3826,7 @@ var VF = (function(exports) {
 		}
 		/** nodeId 为 null 表示全局事件。 */
 		dispatch(nodeId, event, value) {
-			var _logic$objects2, _object$events2;
+			var _logic$objects4, _object$events2;
 			const { logic, scene } = this.project;
 			if (nodeId !== null) {
 				const modalWin = this.activeModalWindow();
@@ -3825,7 +3859,36 @@ var VF = (function(exports) {
 				});
 				return;
 			}
-			const object = nodeId ? (_logic$objects2 = logic.objects) === null || _logic$objects2 === void 0 ? void 0 : _logic$objects2[nodeId] : void 0;
+			if (nodeId) {
+				if (event === "mouseleave") {
+					if (this.hoveredControls.delete(nodeId) || this.pressedControls.delete(nodeId)) this.hooks.onChange();
+				} else if (event === "mouseup") {
+					if (this.pressedControls.delete(nodeId)) this.hooks.onChange();
+				} else if (event === "mouseenter" || event === "mousedown") {
+					const winId = this.windowOf(nodeId);
+					const winOpen = winId === scene.root || this.view(winId).visible;
+					const curView = this.view(nodeId);
+					if (winOpen && curView.visible && curView.enabled) {
+						if (event === "mouseenter") this.hoveredControls.add(nodeId);
+						else this.pressedControls.add(nodeId);
+						this.hooks.onChange();
+					}
+				} else if (event === "change" && (value === "pressed" || value === "released")) {
+					const node = scene.nodes[nodeId];
+					const decl = node ? declFor(this.project, node.type) : null;
+					if (decl === null || decl === void 0 ? void 0 : decl.stateImages) {
+						var _logic$objects2, _logic$objects3;
+						const curView = this.view(nodeId);
+						if (curView.visible && curView.enabled) {
+							if (value === "pressed") this.pressedControls.add(nodeId);
+							else this.pressedControls.delete(nodeId);
+							this.hooks.onChange();
+						}
+						if (!((_logic$objects2 = logic.objects) === null || _logic$objects2 === void 0 || (_logic$objects2 = _logic$objects2[nodeId]) === null || _logic$objects2 === void 0 ? void 0 : _logic$objects2.bind) && !((_logic$objects3 = logic.objects) === null || _logic$objects3 === void 0 || (_logic$objects3 = _logic$objects3[nodeId]) === null || _logic$objects3 === void 0 || (_logic$objects3 = _logic$objects3.events) === null || _logic$objects3 === void 0 ? void 0 : _logic$objects3.change)) return;
+					}
+				}
+			}
+			const object = nodeId ? (_logic$objects4 = logic.objects) === null || _logic$objects4 === void 0 ? void 0 : _logic$objects4[nodeId] : void 0;
 			const steps = nodeId ? object === null || object === void 0 || (_object$events2 = object.events) === null || _object$events2 === void 0 ? void 0 : _object$events2[event] : globalSteps(logic, event);
 			const bindTarget = nodeId && event === "change" && value !== void 0 ? object === null || object === void 0 ? void 0 : object.bind : void 0;
 			if (!steps && !bindTarget) return;
@@ -4066,8 +4129,8 @@ var VF = (function(exports) {
 					});
 					this.activePromises.add(cleanup);
 				} else {
-					var _ref3;
-					this.finishActionSuccess(name, (_ref3 = out) !== null && _ref3 !== void 0 ? _ref3 : null);
+					var _ref4;
+					this.finishActionSuccess(name, (_ref4 = out) !== null && _ref4 !== void 0 ? _ref4 : null);
 				}
 			} catch (e) {
 				this.finishActionError(name, e.message);
@@ -4094,8 +4157,8 @@ var VF = (function(exports) {
 			const runNow = () => {
 				var _this$hooks$raiseActi, _this$hooks2;
 				if (sim.mode === "error") {
-					var _ref4, _sim$errorMessage;
-					this.finishActionError(name, (_ref4 = (_sim$errorMessage = sim.errorMessage) !== null && _sim$errorMessage !== void 0 ? _sim$errorMessage : def.mockError) !== null && _ref4 !== void 0 ? _ref4 : "模拟失败");
+					var _ref5, _sim$errorMessage;
+					this.finishActionError(name, (_ref5 = (_sim$errorMessage = sim.errorMessage) !== null && _sim$errorMessage !== void 0 ? _sim$errorMessage : def.mockError) !== null && _ref5 !== void 0 ? _ref5 : "模拟失败");
 					return;
 				}
 				if (sim.mode === "success") {
@@ -4255,8 +4318,8 @@ var VF = (function(exports) {
 					const node = this.project.scene.nodes[spec.id];
 					if (!node) batch.lines.push(`错误：窗口“${spec.id}”不存在`);
 					else {
-						var _ref5, _node$modal, _node$props2;
-						const modal = spec.modal !== void 0 ? Boolean(spec.modal) : Boolean((_ref5 = (_node$modal = node.modal) !== null && _node$modal !== void 0 ? _node$modal : (_node$props2 = node.props) === null || _node$props2 === void 0 ? void 0 : _node$props2.modal) !== null && _ref5 !== void 0 ? _ref5 : node.type === "Dialog");
+						var _ref6, _node$modal, _node$props2;
+						const modal = spec.modal !== void 0 ? Boolean(spec.modal) : Boolean((_ref6 = (_node$modal = node.modal) !== null && _node$modal !== void 0 ? _node$modal : (_node$props2 = node.props) === null || _node$props2 === void 0 ? void 0 : _node$props2.modal) !== null && _ref6 !== void 0 ? _ref6 : node.type === "Dialog");
 						batch.windows.set(spec.id, {
 							open: true,
 							modal
@@ -4386,11 +4449,11 @@ var VF = (function(exports) {
 			if (id === scene.root) continue;
 			const view = runtime.view(id);
 			const props = Object.keys(view.props).map((key) => [key, canonicalValue(view.props[key])]);
-			views.push([id, {
+			const entry = _objectSpread2(_objectSpread2(_objectSpread2({
 				enabled: view.enabled,
-				props: sorted(props),
-				visible: view.visible
-			}]);
+				props: sorted(props)
+			}, view.stateImage ? { stateImage: view.stateImage } : {}), view.visualState ? { visualState: view.visualState } : {}), {}, { visible: view.visible });
+			views.push([id, entry]);
 		}
 		const stateEntries = runtime.stateSnapshot().map(([k, v]) => [k, canonicalValue(v)]);
 		return JSON.stringify({

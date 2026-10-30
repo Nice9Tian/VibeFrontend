@@ -8,7 +8,8 @@
 
 最近一次有变化的导出，变了这些：
 
-- 新增动作 exportClip
+- 效果 ColorPickerDraw：在工具里的实现改了，哈希从 42ac9aaf 变成 ba2779df，需要对照 effects/ColorPickerDraw/index.js 重新翻译
+- 效果 PanelExpand：在工具里的实现改了，哈希从 77a08c49 变成 4c42b870，需要对照 effects/PanelExpand/index.js 重新翻译
 
 ## 业务接口层
 
@@ -48,4 +49,7 @@
 
 头文件：`ui_interface/UiEffects.h`。按“名称 + 哈希”对接：实现要继承带哈希的抽象类。
 
-没有需要翻译的效果。
+| 效果 | 种类 | 要继承的类 | 在设计项目里的实现 | 用在哪些控件上 |
+| --- | --- | --- | --- | --- |
+| `ColorPickerDraw`（调色盘自绘效果） | 控件自绘效果 | `vf::ColorPickerDrawEffect<0xba2779df>` | `effects/ColorPickerDraw/index.js` | `colorPickerCanvas` |
+| `PanelExpand`（面板展开） | 显示和隐藏的过渡 | `vf::PanelExpandEffect<0x4c42b870>` | `effects/PanelExpand/index.js` | `colorPanel` |
