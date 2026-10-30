@@ -11,6 +11,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QVariantMap>
 
 class QWidget;
 
@@ -34,6 +35,12 @@ public:
     // notifyStatus：业务通知界面在状态栏显示一条消息
     virtual void requestNotifyStatus(const QString &message) = 0;
 
+    // ---- 动作回调（业务 → 界面）----
+    // 连接了动作信号的业务完成或失败后，调用这两个函数驱动 onSuccess / onError 步骤。
+    // exportClip
+    virtual void finishExportClipSuccess(const QVariantMap &result) = 0;
+    virtual void finishExportClipError(const QString &message) = 0;
+
     // ---- 外部容器 ----
     // 把业务自己的控件放进界面。传空指针表示拿走，界面重新显示占位的文字。
     // canvasHost
@@ -45,6 +52,8 @@ signals:
     // 没有连接的信号，界面照旧执行模拟步骤。
     // layerToggleVisible：用户请求切换当前图层的显示与隐藏
     void layerToggleVisibleRequested();
+    // 动作 exportClip
+    void actionExportClipRequested(const QVariantMap &input);
 };
 
 } // namespace vf

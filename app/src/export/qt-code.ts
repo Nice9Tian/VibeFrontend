@@ -95,7 +95,9 @@ function paramsSignature(params: EventParam[] | undefined): string {
 export function businessInterfaceHeader(context: Context): string {
   const { states, events, externals } = context.summary;
   const requests = context.summary.requests ?? [];
+  const actions = context.summary.actions ?? [];
   const needVariantList = states.some((s) => s.type === "array");
+  const needVariantMap = actions.length > 0;
   const lines: string[] = [
     `// 业务接口层。${GENERATED_NOTE}`,
     "//",
@@ -112,6 +114,7 @@ export function businessInterfaceHeader(context: Context): string {
     "#include <QString>",
   ];
   if (needVariantList) lines.push("#include <QVariantList>");
+  if (needVariantMap) lines.push("#include <QVariantMap>");
   lines.push(
     "",
     "class QWidget;",
@@ -145,13 +148,23 @@ export function businessInterfaceHeader(context: Context): string {
       );
     }
   }
+  if (actions.length > 0) {
+    lines.push("", "    // ---- 动作回调（业务 → 界面）----", "    // 连接了动作信号的业务完成或失败后，调用这两个函数驱动 onSuccess / onError 步骤。");
+    for (const act of actions) {
+      lines.push(
+        `    // ${act.name}${act.text ? `：${oneLine(act.text)}` : ""}`,
+        `    virtual void ${act.finishSuccess}(const QVariantMap &result) = 0;`,
+        `    virtual void ${act.finishError}(const QString &message) = 0;`,
+      );
+    }
+  }
   if (externals.length > 0) {
     lines.push("", "    // ---- 外部容器 ----", "    // 把业务自己的控件放进界面。传空指针表示拿走，界面重新显示占位的文字。");
     for (const external of externals) {
       lines.push(`    // ${external.id}`, `    virtual void ${external.setter}(QWidget *widget) = 0;`);
     }
   }
-  if (events.length > 0) {
+  if (events.length > 0 || actions.length > 0) {
     lines.push(
       "",
       "signals:",
@@ -163,6 +176,12 @@ export function businessInterfaceHeader(context: Context): string {
       lines.push(
         `    // ${event.name}${event.text ? `：${oneLine(event.text)}` : ""}`,
         `    void ${event.signal}(${paramsSignature(event.params)});`,
+      );
+    }
+    for (const act of actions) {
+      lines.push(
+        `    // 动作 ${act.name}${act.text ? `：${oneLine(act.text)}` : ""}`,
+        `    void ${act.signal}(const QVariantMap &input);`,
       );
     }
   }
@@ -266,6 +285,7 @@ export function uiEffectsHeader(context: Context): string {
 export function businessOverrides(context: Context): string {
   const { states, externals } = context.summary;
   const requests = context.summary.requests ?? [];
+  const actions = context.summary.actions ?? [];
   const lines: string[] = [];
   for (const state of states) {
     const types = stateTypes(state);
@@ -273,6 +293,12 @@ export function businessOverrides(context: Context): string {
   }
   for (const req of requests) {
     lines.push(`    void ${req.method}(${paramsSignature(req.params)}) override;`);
+  }
+  for (const act of actions) {
+    lines.push(
+      `    void ${act.finishSuccess}(const QVariantMap &result) override;`,
+      `    void ${act.finishError}(const QString &message) override;`,
+    );
   }
   for (const external of externals) lines.push(`    void ${external.setter}(QWidget *widget) override;`);
   if (lines.length === 0) lines.push("    // 这个设计项目没有业务管的状态，也没有外部容器");
@@ -453,6 +479,13 @@ function emitLayoutForContainer(
     const colStretches = Array.from({ length: cols }, (_, col) => layout.columnStretch?.[col] ?? 1);
     for (let col = 0; col < cols; col++) {
       lines.push(`    ${layVar}->setColumnStretch(${col}, ${colStretches[col]});`);
+      if (colStretches[col] === 0) {
+        let maxW = 0;
+        for (const it of items) {
+          if (it.col === col && it.colSpan === 1) maxW = Math.max(maxW, clampWidthPlan(it.plan, prefWidthPlan(it.plan)));
+        }
+        lines.push(`    ${layVar}->setColumnMinimumWidth(${col}, ${maxW || 60});`);
+      }
     }
     const rowStretches = Array.from({ length: numRows }, (_, row) => layout.rowStretch?.[row] ?? 0);
     let anyRowStretch = false;
@@ -462,7 +495,7 @@ function emitLayoutForContainer(
       if (rowStretches[row] === 0) {
         let maxH = 0;
         for (const it of items) {
-          if (it.row === row && it.rowSpan === 1) maxH = Math.max(maxH, prefHeightPlan(it.plan));
+          if (it.row === row && it.rowSpan === 1) maxH = Math.max(maxH, clampHeightPlan(it.plan, prefHeightPlan(it.plan)));
         }
         lines.push(`    ${layVar}->setRowMinimumHeight(${row}, ${maxH || 32});`);
       }
@@ -471,10 +504,20 @@ function emitLayoutForContainer(
     for (const it of items) {
       const c = it.plan;
       const cv = c.variable;
-      const hFixed = c.size?.fixedWidth !== undefined || c.size?.horizontal === "fixed";
-      const vFixed = c.size?.fixedHeight !== undefined || c.size?.vertical === "fixed" || rowStretches[it.row] === 0;
-      if (hFixed) lines.push(`    ${cv}->setFixedWidth(${prefWidthPlan(c)});`);
-      if (vFixed) lines.push(`    ${cv}->setFixedHeight(${prefHeightPlan(c)});`);
+      const hFixed = c.size?.fixedWidth !== undefined || c.size?.horizontal === "fixed" || (it.colSpan === 1 && colStretches[it.col] === 0);
+      const vFixed = c.size?.fixedHeight !== undefined || c.size?.vertical === "fixed" || (it.rowSpan === 1 && rowStretches[it.row] === 0);
+      if (hFixed) {
+        lines.push(`    ${cv}->setFixedWidth(${clampWidthPlan(c, prefWidthPlan(c))});`);
+      } else {
+        if (c.size?.minWidth !== undefined) lines.push(`    ${cv}->setMinimumWidth(${Math.round(c.size.minWidth)});`);
+        if (c.size?.maxWidth !== undefined) lines.push(`    ${cv}->setMaximumWidth(${Math.round(c.size.maxWidth)});`);
+      }
+      if (vFixed) {
+        lines.push(`    ${cv}->setFixedHeight(${clampHeightPlan(c, prefHeightPlan(c))});`);
+      } else {
+        if (c.size?.minHeight !== undefined) lines.push(`    ${cv}->setMinimumHeight(${Math.round(c.size.minHeight)});`);
+        if (c.size?.maxHeight !== undefined) lines.push(`    ${cv}->setMaximumHeight(${Math.round(c.size.maxHeight)});`);
+      }
       lines.push(
         `    ${cv}->setSizePolicy(${hFixed ? "QSizePolicy::Fixed" : "QSizePolicy::Ignored"}, ${vFixed ? "QSizePolicy::Fixed" : "QSizePolicy::Ignored"});`,
         `    ${layVar}->addWidget(${cv}, ${it.row}, ${it.col}, ${it.rowSpan}, ${it.colSpan});`,
@@ -701,9 +744,13 @@ function buildFunction(context: Context): string[] {
         lines.push(
           "    auto *qtStatusBar = new QStatusBar(&window);",
           "    qtStatusBar->setSizeGripEnabled(false);",
+          "    qtStatusBar->setContentsMargins(0, 0, 0, 0);",
           `    qtStatusBar->setFixedHeight(${prefHeightPlan(control)});`,
           `    ${v}->setParent(qtStatusBar);`,
           `    ${v}->setGeometry(0, 0, ${window.width}, ${prefHeightPlan(control)});`,
+          "    qtStatusBar->installEventFilter(q);",
+          "    statusBar = qtStatusBar;",
+          `    statusBarControl = ${v};`,
           "    window.setStatusBar(qtStatusBar);",
         );
       }
@@ -730,6 +777,13 @@ function buildFunction(context: Context): string[] {
     if (props || effect) args.push(props ? `{ ${props} }` : "{}");
     if (effect) args.push(effect);
     lines.push(`    add(${args.join(", ")});`);
+    if (control.kind === "dialog") {
+      lines.push(
+        `    QObject::connect(${v}, &QDialog::finished, q, [this] {`,
+        `        onDialogFinished(${qstr(control.id)});`,
+        "    });",
+      );
+    }
     for (const event of control.events) {
       const param = event.type === "string" ? "const QString &value" : event.type === "number" ? "double value" : event.type === "boolean" ? "bool value" : "";
       const value = param ? ", value" : "";
@@ -775,7 +829,8 @@ function buildFunction(context: Context): string[] {
 
 function raiseFunction(context: Context): string[] {
   const { events } = context.summary;
-  const anyParams = events.some((e) => (e.params?.length ?? 0) > 0);
+  const actions = context.summary.actions ?? [];
+  const anyParams = events.some((e) => (e.params?.length ?? 0) > 0) || actions.length > 0;
   const lines: string[] = [
     "// 交给业务的事件：业务连接了对应的信号，就发信号并返回 true；没有连接，返回 false，由调用方执行模拟步骤。",
     "bool Ui::Private::raiseBusinessEvent(const QString &name, const QJSValue &args)",
@@ -799,7 +854,18 @@ function raiseFunction(context: Context): string[] {
       "    }",
     );
   }
-  if (events.length === 0) lines.push("    Q_UNUSED(name);");
+  for (const act of actions) {
+    lines.push(
+      `    if (name == QLatin1String("${act.name}")) {`,
+      `        static const QMetaMethod signal = QMetaMethod::fromSignal(&BusinessInterface::${act.signal});`,
+      "        if (!q->isSignalConnected(signal))",
+      "            return false;",
+      `        emit q->${act.signal}(args.toVariant().toMap());`,
+      "        return true;",
+      "    }",
+    );
+  }
+  if (events.length === 0 && actions.length === 0) lines.push("    Q_UNUSED(name);");
   lines.push("    return false;", "}");
   return lines;
 }
@@ -831,6 +897,7 @@ function effectFunction(context: Context): string[] {
 function businessFunctions(context: Context): string[] {
   const { states, externals } = context.summary;
   const requests = context.summary.requests ?? [];
+  const actions = context.summary.actions ?? [];
   const lines: string[] = ["// 业务接口的实现"];
   for (const state of states) {
     const types = stateTypes(state);
@@ -853,6 +920,20 @@ function businessFunctions(context: Context): string[] {
       lines.push(`    args.setProperty(${qstr(p.name)}, ${p.name});`);
     }
     lines.push(`    d->requestEvent(${qstr(req.name)}, args);`, "}", "");
+  }
+  for (const act of actions) {
+    lines.push(
+      `void Ui::${act.finishSuccess}(const QVariantMap &result)`,
+      "{",
+      `    d->drain(d->call("finishActionSuccess", { ${qstr(act.name)}, d->engine.toScriptValue(result) }));`,
+      "}",
+      "",
+      `void Ui::${act.finishError}(const QString &message)`,
+      "{",
+      `    d->drain(d->call("finishActionError", { ${qstr(act.name)}, message }));`,
+      "}",
+      "",
+    );
   }
   for (const external of externals) {
     lines.push(`void Ui::${external.setter}(QWidget *widget)`, "{", `    d->setExternal(${qstr(external.id)}, widget);`, "}", "");
@@ -905,6 +986,13 @@ export function interfaceDoc(context: Context): string {
     lines.push("", "### 请求事件（业务 → 界面）", "", "| 事件 | 调用函数 | 含义 |", "| --- | --- | --- |");
     for (const req of requests) {
       lines.push(`| \`${req.name}\` | \`${req.method}(${paramsSignature(req.params)})\` | ${oneLine(req.text) || "—"} |`);
+    }
+  }
+  const actions = context.summary.actions ?? [];
+  if (actions.length > 0) {
+    lines.push("", "### 动作（界面 ↔ 业务）", "", "| 动作 | 信号（界面 → 业务） | 成功回调 / 失败回调（业务 → 界面） |", "| --- | --- | --- |");
+    for (const act of actions) {
+      lines.push(`| \`${act.name}\` | \`${act.signal}(const QVariantMap &input)\` | \`${act.finishSuccess}(result)\` / \`${act.finishError}(message)\` |`);
     }
   }
   lines.push("", "### 业务管的状态（业务 → 界面）", "");

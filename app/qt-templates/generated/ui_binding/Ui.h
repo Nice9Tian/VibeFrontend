@@ -37,7 +37,7 @@ public:
 
     // 供自动化测试驱动触发请求事件或切换动作模拟方式
     void triggerRequest(const QString &name, const QString &jsonArgs = QString());
-    void setActionSimulation(const QString &name, const QString &mode);
+    void setActionSimulation(const QString &name, const QString &mode, int delayMs = 0);
 
     // ---- BusinessInterface ----
 //@VF:businessOverrides@

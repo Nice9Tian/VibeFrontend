@@ -138,6 +138,25 @@ function parentOf(id: string): string | null {
 }
 
 /** 节点相对于设计窗口左上角的位置。根窗口在 (0, 0)。 */
+function windowRootOf(id: string): string {
+  let cursor: string | null = id;
+  while (cursor) {
+    const p = parentOf(cursor);
+    if (!p) return cursor;
+    cursor = p;
+  }
+  return project.scene.root;
+}
+
+function isDialogShownInStage(winId: string): boolean {
+  const runtime = activeRuntime();
+  const effectiveVis = runtime.view(winId).visible;
+  if (mode === "preview") return effectiveVis;
+  if (effectiveVis) return true;
+  if (selectedId && windowRootOf(selectedId) === winId) return true;
+  return selectedIds.some((id) => windowRootOf(id) === winId);
+}
+
 function absRect(id: string): { x: number; y: number; width: number; height: number } {
   const runtime = activeRuntime();
   const boxes = computeSceneLayout(project.scene, {
@@ -145,7 +164,17 @@ function absRect(id: string): { x: number; y: number; width: number; height: num
     getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
   });
   const box = boxes.get(id);
-  if (box) return { x: box.absX, y: box.absY, width: box.width, height: box.height };
+  if (box) {
+    const winId = windowRootOf(id);
+    if (winId !== project.scene.root) {
+      const winBox = boxes.get(winId);
+      const rootNode = node(project.scene.root);
+      const dx = rootNode && winBox ? Math.round((rootNode.width - winBox.width) / 2) : 0;
+      const dy = rootNode && winBox ? Math.round((rootNode.height - winBox.height) / 2) : 0;
+      return { x: box.absX + dx, y: box.absY + dy, width: box.width, height: box.height };
+    }
+    return { x: box.absX, y: box.absY, width: box.width, height: box.height };
+  }
   const n = node(id)!;
   let x = 0;
   let y = 0;
@@ -156,10 +185,13 @@ function absRect(id: string): { x: number; y: number; width: number; height: num
   return { x, y, width: n.width, height: n.height };
 }
 
-/** 找出某个点下面最上层、最深的节点；只点到窗口空白处时返回 null。 */
 function hitTest(px: number, py: number): string | null {
+  const runtime = activeRuntime();
   const visit = (id: string): string | null => {
-    const children = node(id)?.children ?? [];
+    const n = node(id);
+    if (!n) return null;
+    if (mode === "preview" && !runtime.view(id).visible) return null;
+    const children = childrenOf(n);
     for (let i = children.length - 1; i >= 0; i--) {
       const hit = visit(children[i]);
       if (hit) return hit;
@@ -167,7 +199,14 @@ function hitTest(px: number, py: number): string | null {
     if (id === project.scene.root) return null;
     return containsPoint(id, px, py) ? id : null;
   };
-  return visit(project.scene.root);
+  const winIds = allWindowIds(project.scene);
+  for (let i = winIds.length - 1; i >= 0; i--) {
+    const winId = winIds[i];
+    if (winId !== project.scene.root && !isDialogShownInStage(winId)) continue;
+    const hit = visit(winId);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 function canHoldChildren(id: string): boolean {
@@ -296,13 +335,12 @@ function buildNode(id: string, parentEl: HTMLElement): void {
     header.textContent = String(activeRuntime().view(id).props.title ?? n.title ?? id);
     wrapper.prepend(header);
     wrapper.style.background = "#111726";
-    wrapper.style.border = "1px solid #263042";
+    wrapper.style.boxShadow = "inset 0 0 0 1px #263042";
     wrapper.style.boxSizing = "border-box";
   } else if (n.type === "Dialog") {
     wrapper.style.background = "#151c2c";
-    wrapper.style.border = "1px solid #334155";
     wrapper.style.borderRadius = "8px";
-    wrapper.style.boxShadow = "0 20px 50px rgba(0,0,0,0.6)";
+    wrapper.style.boxShadow = "inset 0 0 0 1px #334155, 0 20px 50px rgba(0,0,0,0.6)";
     wrapper.style.zIndex = "50";
   } else if (n.type === "Container" || n.type in LAYOUT_TYPE_KINDS) {
     // 未转换的容器或布局容器：没有子节点时显示自己的 ID，作为占位
@@ -416,7 +454,7 @@ function applyViews(): void {
       setShown(id, entry, effectiveVis);
       entry.wrapper.classList.remove("vf-ghost");
     } else {
-      entry.wrapper.style.display = n?.type === "Dialog" && selectedId !== id && !selectedIds.includes(id) && !effectiveVis ? "none" : "";
+      entry.wrapper.style.display = n?.type === "Dialog" && !isDialogShownInStage(id) ? "none" : "";
       entry.wrapper.classList.toggle("vf-ghost", !effectiveVis);
     }
     entry.wrapper.toggleAttribute("data-vf-disabled", !view.enabled);
@@ -2875,6 +2913,7 @@ function topSelection(): string[] {
 }
 
 function afterSelectionChange(): void {
+  applyViews();
   renderLayers();
   renderRight();
   renderShapeBar();

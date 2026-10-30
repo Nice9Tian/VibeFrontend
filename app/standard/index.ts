@@ -75,16 +75,26 @@ const createSpinBox: ComponentCreate = (el, { props, emit }) => {
   suffix.className = "vf-std-spinbox-suffix";
   wrap.append(input, suffix);
   el.append(wrap);
+  let min = 0;
+  let max = 9999;
+  const clamp = (n: number) => Math.max(min, Math.min(max, n));
   input.addEventListener("input", () => {
     const n = Number(input.value);
-    if (Number.isFinite(n)) emit("change", n);
+    if (Number.isFinite(n)) {
+      const clamped = clamp(n);
+      if (input.value !== String(clamped)) input.value = String(clamped);
+      emit("change", clamped);
+    }
   });
   const update = (next: Record<string, Value>) => {
-    input.min = String(next.min ?? 0);
-    input.max = String(next.max ?? 9999);
+    min = Number(next.min ?? 0);
+    max = Number(next.max ?? 9999);
+    input.min = String(min);
+    input.max = String(max);
     input.step = String(next.step ?? 1);
     input.disabled = next.enabled === false;
-    const val = String(next.value ?? 0);
+    const raw = Number(next.value ?? 0);
+    const val = String(Number.isFinite(raw) ? clamp(raw) : min);
     if (input.value !== val) input.value = val;
     const sfx = String(next.suffix ?? "");
     suffix.textContent = sfx;
@@ -143,21 +153,12 @@ const createList: ComponentCreate = (el, { props, emit }) => {
   const container = document.createElement("div");
   container.className = "vf-std-list";
   el.append(container);
-  let dragFrom = -1;
 
   const itemLabel = (item: Value): string => {
     if (item && typeof item === "object" && !Array.isArray(item)) {
       return String(item.name ?? item.label ?? item.title ?? item.text ?? item.id ?? "");
     }
     return String(item ?? "");
-  };
-
-  const itemVisible = (item: Value): boolean => {
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      if ("visible" in item) return Boolean(item.visible);
-      if ("checked" in item) return Boolean(item.checked);
-    }
-    return true;
   };
 
   const update = (next: Record<string, Value>) => {
@@ -176,50 +177,17 @@ const createList: ComponentCreate = (el, { props, emit }) => {
     items.forEach((item, index) => {
       const row = document.createElement("div");
       row.className = "vf-std-list-row" + (index === selected ? " selected" : "");
-      if (next.checkable) {
-        const check = document.createElement("span");
-        const vis = itemVisible(item);
-        check.className = "vf-std-list-check" + (vis ? " on" : "");
-        check.textContent = vis ? "●" : "○";
-        check.title = vis ? "可见" : "隐藏";
-        check.addEventListener("click", (e) => {
-          e.stopPropagation();
-          if (disabled) return;
-          emit("change", index);
-          emit("select", index);
-          emit("toggleItem", index);
-        });
-        row.append(check);
-      }
       const text = document.createElement("span");
       text.className = "vf-std-list-text";
       text.textContent = itemLabel(item);
       row.append(text);
-      if (next.checkable && !itemVisible(item)) {
-        const tag = document.createElement("span");
-        tag.className = "vf-std-list-badge";
-        tag.textContent = "隐藏";
-        row.append(tag);
-      }
       row.addEventListener("click", () => {
         if (disabled) return;
-        emit("change", index);
-        emit("select", index);
+        if (index !== selected) {
+          emit("change", index);
+          emit("select", index);
+        }
       });
-      if (next.reorderable && !disabled) {
-        row.draggable = true;
-        row.addEventListener("dragstart", () => {
-          dragFrom = index;
-        });
-        row.addEventListener("dragover", (e) => e.preventDefault());
-        row.addEventListener("drop", (e) => {
-          e.preventDefault();
-          if (dragFrom >= 0 && dragFrom !== index) {
-            emit("moveItem", `${dragFrom},${index}`);
-          }
-          dragFrom = -1;
-        });
-      }
       container.append(row);
     });
   };

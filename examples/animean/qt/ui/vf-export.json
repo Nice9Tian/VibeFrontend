@@ -51,6 +51,19 @@
         ]
       }
     ],
+    "actions": [
+      {
+        "name": "exportClip",
+        "text": "",
+        "signal": "actionExportClipRequested",
+        "finishSuccess": "finishExportClipSuccess",
+        "finishError": "finishExportClipError",
+        "inputs": [
+          "title",
+          "layerCount"
+        ]
+      }
+    ],
     "externals": [
       {
         "id": "canvasHost",
@@ -59,5 +72,7 @@
     ],
     "effects": []
   },
-  "lastChanges": []
+  "lastChanges": [
+    "新增动作 exportClip"
+  ]
 }

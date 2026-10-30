@@ -69,6 +69,18 @@ export interface RequestEvent {
   params: EventParam[];
 }
 
+export interface ActionSlot {
+  name: string;
+  text: string;
+  /** 触发动作时发出的信号名 */
+  signal: string;
+  /** 业务完成动作时调用的函数名 */
+  finishSuccess: string;
+  /** 业务报告动作失败时调用的函数名 */
+  finishError: string;
+  inputs: string[];
+}
+
 export interface ExternalContainer {
   /** 控件 ID */
   id: string;
@@ -94,6 +106,7 @@ export interface InterfaceSummary {
   states: BusinessState[];
   events: BusinessEvent[];
   requests?: RequestEvent[];
+  actions?: ActionSlot[];
   externals: ExternalContainer[];
   effects: EffectSlot[];
 }
@@ -279,6 +292,25 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
     };
     claim(req.method, `请求事件 ${name}`);
     requests.push(req);
+  }
+
+  const actions: ActionSlot[] = [];
+  for (const [name, def] of Object.entries(logic.actions ?? {})) {
+    if (!def || typeof def !== "object") continue;
+    if (!needIdentifier(name, `动作 ${name}`)) continue;
+    const p = pascal(name);
+    const slot: ActionSlot = {
+      name,
+      text: def.text ?? "",
+      signal: `action${p}Requested`,
+      finishSuccess: `finish${p}Success`,
+      finishError: `finish${p}Error`,
+      inputs: Object.keys(def.input ?? {}),
+    };
+    claim(slot.signal, `动作 ${name}`);
+    claim(slot.finishSuccess, `动作 ${name}`);
+    claim(slot.finishError, `动作 ${name}`);
+    actions.push(slot);
   }
 
   // ---- 界面接口 ----
@@ -482,6 +514,7 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
     states,
     events,
     ...(requests.length > 0 ? { requests } : {}),
+    ...(actions.length > 0 ? { actions } : {}),
     externals,
     effects,
   };
@@ -573,6 +606,7 @@ export function diffInterface(before: InterfaceSummary | null, after: InterfaceS
     (a, b) => (stateType(a) !== stateType(b) ? `类型从 ${stateType(a)} 变成 ${stateType(b)}，业务那边的读写要跟着改` : null));
   compare("业务事件", before.events, after.events, (e) => e.name, (e) => e.name, () => null);
   compare("请求事件", before.requests ?? [], after.requests ?? [], (r) => r.name, (r) => r.name, () => null);
+  compare("动作", before.actions ?? [], after.actions ?? [], (a) => a.name, (a) => a.name, () => null);
   compare("外部容器", before.externals, after.externals, (e) => e.id, (e) => e.id, () => null);
   compare("效果", before.effects, after.effects, (e) => e.name, (e) => `${e.name}（哈希 ${e.hash}）`,
     (a, b) =>

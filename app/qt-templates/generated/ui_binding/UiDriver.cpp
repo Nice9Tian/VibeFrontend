@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
 #include <QEnterEvent>
 #include <QEventLoop>
 #include <QJsonDocument>
@@ -131,8 +132,9 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             continue;
         }
         if (verb == QLatin1String("mock")) {
-            const QString mode = step.section(QLatin1Char(':'), 2);
-            ui.setActionSimulation(id, mode);
+            const QString mode = step.section(QLatin1Char(':'), 2, 2);
+            const int delayMs = step.section(QLatin1Char(':'), 3, 3).toInt();
+            ui.setActionSimulation(id, mode, delayMs);
             QApplication::processEvents();
             continue;
         }
@@ -154,6 +156,14 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                 }
             }
             output.append(QStringLiteral("error 找不到控件 %1（步骤 %2）").arg(id, step));
+            continue;
+        }
+        if (verb == QLatin1String("close") || verb == QLatin1String("reject")) {
+            if (auto *dlg = qobject_cast<QDialog *>(widget))
+                dlg->reject();
+            else
+                widget->close();
+            QApplication::processEvents();
             continue;
         }
         if (verb == QLatin1String("size")) {
@@ -203,7 +213,10 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                 if (idx >= 0)
                     combo->setCurrentIndex(idx);
             } else if (auto *list = qobject_cast<QListWidget *>(widget)) {
-                list->setCurrentRow(rawVal.toInt());
+                bool ok = false;
+                const int row = rawVal.toInt(&ok);
+                if (ok && row >= 0 && row < list->count())
+                    list->setCurrentRow(row);
             }
         } else if (verb == QLatin1String("toggle")) {
             if (auto *cb = qobject_cast<QCheckBox *>(widget)) {

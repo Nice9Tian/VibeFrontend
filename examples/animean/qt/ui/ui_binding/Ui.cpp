@@ -50,6 +50,7 @@ const int kTransitionGraceMs = 300;
 
 struct PendingEvent
 {
+    QString kind;
     QString name;
     QJSValue args;
 };
@@ -92,9 +93,11 @@ QList<PendingEvent> toPendingList(const QJSValue &array)
     for (int i = 0; i < count; ++i) {
         const QJSValue item = array.property(quint32(i));
         if (item.isString()) {
-            list.append({ item.toString(), QJSValue() });
+            list.append({ QStringLiteral("event"), item.toString(), QJSValue() });
         } else if (item.isObject()) {
-            list.append({ item.property(QStringLiteral("name")).toString(), item.property(QStringLiteral("args")) });
+            const QJSValue k = item.property(QStringLiteral("kind"));
+            const QString kind = k.isString() ? k.toString() : QStringLiteral("event");
+            list.append({ kind, item.property(QStringLiteral("name")).toString(), item.property(QStringLiteral("args")) });
         }
     }
     return list;
@@ -128,6 +131,8 @@ struct Ui::Private
     QList<Control> controls;          // 第 0 个是窗口本身
     QList<QWidget *> dialogs;         // 弹出窗口与模态对话框
     QList<QPair<QString, QAction *>> menuActions;
+    QStatusBar *statusBar = nullptr;
+    QWidget *statusBarControl = nullptr;
     QHash<QObject *, int> byWidget;
     int pressed = -1;                 // 鼠标左键是在哪个控件上按下的
     bool doubleClick = false;
@@ -143,6 +148,9 @@ struct Ui::Private
 
     void dispatch(const QString &control, const QString &event, const QJSValue &value = QJSValue());
     void drain(const QJSValue &pending);
+    void scheduleTimers();
+    void syncStatusBar();
+    void onDialogFinished(const QString &id);
     void applyView();
     void setShown(int index, bool shown);
     void clearTransition(int index);
@@ -177,6 +185,8 @@ Ui::Ui(QObject *parent)
 Ui::~Ui()
 {
     *d->alive = false;
+    if (d->statusBar)
+        d->statusBar->removeEventFilter(this);
     for (const Control &control : d->controls) {
         if (control.widget)
             control.widget->removeEventFilter(this);
@@ -185,6 +195,8 @@ Ui::~Ui()
     d->dialogs.clear();
     d->menuActions.clear();
     d->controls.clear();
+    d->statusBar = nullptr;
+    d->statusBarControl = nullptr;
     d->api = QJSValue();
     d->window.hide();
 }
@@ -192,6 +204,7 @@ Ui::~Ui()
 void Ui::show()
 {
     d->window.show();
+    d->syncStatusBar();
     start();
 }
 
@@ -238,23 +251,6 @@ QString Ui::widgetDump() const
 
 QString Ui::layoutDump() const
 {
-    QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
-    if (d->window.layout())
-        d->window.layout()->activate();
-    if (QStatusBar *sb = d->window.findChild<QStatusBar *>(QString(), Qt::FindDirectChildrenOnly)) {
-        for (int index = 1; index < d->controls.size(); ++index) {
-            QWidget *w = d->controls.at(index).widget;
-            if (w && w->parentWidget() == sb) {
-                w->setGeometry(0, 0, sb->width(), sb->height());
-                if (w->layout())
-                    w->layout()->activate();
-            }
-        }
-    }
-    for (QWidget *dlg : d->dialogs) {
-        if (dlg && !dlg->isHidden() && dlg->layout())
-            dlg->layout()->activate();
-    }
     QJsonObject all;
     for (int index = 1; index < d->controls.size(); ++index) {
         const Control &control = d->controls.at(index);
@@ -294,9 +290,9 @@ void Ui::triggerRequest(const QString &name, const QString &jsonArgs)
     d->requestEvent(name, args);
 }
 
-void Ui::setActionSimulation(const QString &name, const QString &mode)
+void Ui::setActionSimulation(const QString &name, const QString &mode, int delayMs)
 {
-    d->call("setActionSim", { name, mode });
+    d->call("setActionSim", { name, mode, delayMs });
 }
 
 // ---- 鼠标事件 ----
@@ -305,12 +301,26 @@ void Ui::setActionSimulation(const QString &name, const QString &mode)
 // 点击类事件只交给鼠标下最里面的那个控件；每次点击之后再触发一次全局事件 window.click。
 bool Ui::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == d->statusBar) {
+        if (event->type() == QEvent::Resize || event->type() == QEvent::Show || event->type() == QEvent::LayoutRequest)
+            d->syncStatusBar();
+        return false;
+    }
+
     const int index = d->byWidget.value(watched, -1);
     if (index < 0)
         return false;
     const QString id = d->controls.at(index).id;
 
     switch (event->type()) {
+    case QEvent::Resize:
+        if (watched == &d->window)
+            d->syncStatusBar();
+        break;
+    case QEvent::Close:
+        if (index > 0 && d->dialogs.contains(d->controls.at(index).widget))
+            d->onDialogFinished(id);
+        break;
     case QEvent::Enter:
         if (index > 0)
             d->dispatch(id, QStringLiteral("mouseenter"));
@@ -449,17 +459,63 @@ void Ui::Private::dispatch(const QString &control, const QString &event, const Q
     drain(call("dispatch", { target, event, value }));
 }
 
-// 处理逻辑交出来的业务事件：业务连接了对应的信号，就发信号，由业务把结果写回来；
-// 没有连接，就执行设计项目里写的模拟步骤。模拟步骤可能再引出别的业务事件，所以是一个队列。
+// 处理逻辑交出来的业务事件与动作请求：业务连接了对应的信号，就发信号，由业务把结果写回来；
+// 没有连接，就执行设计项目里写的模拟步骤或动作脚本。模拟步骤可能再引出别的事件，所以是一个队列。
 void Ui::Private::drain(const QJSValue &pending)
 {
     QList<PendingEvent> queue = toPendingList(pending);
+    QApplication::sendPostedEvents();
+    queue += toPendingList(call("takePending"));
     for (int guard = 0; !queue.isEmpty() && guard < 200; ++guard) {
         const PendingEvent ev = queue.takeFirst();
-        if (!raiseBusinessEvent(ev.name, ev.args))
-            queue += toPendingList(call("simulate", { ev.name, ev.args }));
+        if (!raiseBusinessEvent(ev.name, ev.args)) {
+            const char *fn = (ev.kind == QLatin1String("action")) ? "simulateAction" : "simulate";
+            queue += toPendingList(call(fn, { ev.name, ev.args }));
+            QApplication::sendPostedEvents();
+        }
+        queue += toPendingList(call("takePending"));
     }
+    scheduleTimers();
     applyView();
+}
+
+void Ui::Private::scheduleTimers()
+{
+    const QJSValue timers = call("takeTimers");
+    const int count = timers.property(QStringLiteral("length")).toInt();
+    for (int i = 0; i < count; ++i) {
+        const QJSValue t = timers.property(quint32(i));
+        const int id = t.property(QStringLiteral("id")).toInt();
+        const int delayMs = t.property(QStringLiteral("delayMs")).toInt();
+        QTimer::singleShot(qMax(0, delayMs), q, [this, alive = alive, id] {
+            if (*alive)
+                drain(call("fireTimer", { id }));
+        });
+    }
+}
+
+void Ui::Private::syncStatusBar()
+{
+    if (!statusBar || !statusBarControl)
+        return;
+    const QRect target(0, 0, statusBar->width(), statusBar->height());
+    if (statusBarControl->geometry() != target)
+        statusBarControl->setGeometry(target);
+    if (statusBarControl->layout())
+        statusBarControl->layout()->activate();
+}
+
+void Ui::Private::onDialogFinished(const QString &id)
+{
+    for (int i = 1; i < controls.size(); ++i) {
+        if (controls.at(i).id == id) {
+            if (!controls.at(i).shown)
+                return;
+            controls[i].shown = false;
+            drain(call("closeWindow", { id }));
+            return;
+        }
+    }
 }
 
 // 把逻辑算出的可见、可用和属性写到控件上
@@ -516,13 +572,26 @@ void Ui::Private::applyView()
                     if (auto *list = qobject_cast<QListWidget *>(control.widget)) {
                         if (list->property("vfItems") != wanted) {
                             list->clear();
+                            const bool checkable = props.property(QStringLiteral("checkable")).toBool();
                             const QVariantList items = wanted.toList();
                             for (const QVariant &it : items) {
                                 if (it.typeId() == QMetaType::QVariantMap) {
                                     const QVariantMap map = it.toMap();
-                                    const QString name = map.value(QStringLiteral("name"), map.value(QStringLiteral("label"))).toString();
-                                    const bool vis = map.value(QStringLiteral("visible"), true).toBool();
-                                    list->addItem((vis ? QStringLiteral("● ") : QStringLiteral("○ ")) + name);
+                                    QString name = map.value(QStringLiteral("name")).toString();
+                                    if (name.isEmpty())
+                                        name = map.value(QStringLiteral("label")).toString();
+                                    if (name.isEmpty())
+                                        name = map.value(QStringLiteral("title")).toString();
+                                    if (name.isEmpty())
+                                        name = map.value(QStringLiteral("text")).toString();
+                                    if (name.isEmpty())
+                                        name = map.value(QStringLiteral("id")).toString();
+                                    if (checkable) {
+                                        const bool vis = map.value(QStringLiteral("visible"), true).toBool();
+                                        list->addItem((vis ? QStringLiteral("● ") : QStringLiteral("○ ")) + name);
+                                    } else {
+                                        list->addItem(name);
+                                    }
                                 } else {
                                     list->addItem(it.toString());
                                 }
@@ -822,7 +891,7 @@ void Ui::Private::build()
 
     // layerList：List
     auto *w_layerList = new QListWidget(body_w_layersDock);
-    add(QStringLiteral("layerList"), w_layerList, { { QStringLiteral("items"), "vfItems" }, { QStringLiteral("value"), "currentRow" }, { QStringLiteral("checkable"), "vfCheckable" }, { QStringLiteral("reorderable"), "vfReorderable" }, { QStringLiteral("emptyText"), "vfEmptyText" } });
+    add(QStringLiteral("layerList"), w_layerList, { { QStringLiteral("items"), "vfItems" }, { QStringLiteral("value"), "currentRow" }, { QStringLiteral("emptyText"), "vfEmptyText" } });
     QObject::connect(w_layerList, &QListWidget::currentRowChanged, q, [this](double value) {
         dispatch(QStringLiteral("layerList"), QStringLiteral("change"), value);
     });
@@ -1009,9 +1078,13 @@ void Ui::Private::build()
     auto *w_statusBar = new QFrame(&window);
     auto *qtStatusBar = new QStatusBar(&window);
     qtStatusBar->setSizeGripEnabled(false);
+    qtStatusBar->setContentsMargins(0, 0, 0, 0);
     qtStatusBar->setFixedHeight(28);
     w_statusBar->setParent(qtStatusBar);
     w_statusBar->setGeometry(0, 0, 1280, 28);
+    qtStatusBar->installEventFilter(q);
+    statusBar = qtStatusBar;
+    statusBarControl = w_statusBar;
     window.setStatusBar(qtStatusBar);
     w_statusBar->setFrameShape(QFrame::NoFrame);
     add(QStringLiteral("statusBar"), w_statusBar);
@@ -1033,6 +1106,9 @@ void Ui::Private::build()
     w_newProjectDialog->setModal(true);
     dialogs.append(w_newProjectDialog);
     add(QStringLiteral("newProjectDialog"), w_newProjectDialog);
+    QObject::connect(w_newProjectDialog, &QDialog::finished, q, [this] {
+        onDialogFinished(QStringLiteral("newProjectDialog"));
+    });
 
     // newProjectForm：容器
     auto *w_newProjectForm = new QFrame(w_newProjectDialog);
@@ -1412,12 +1488,18 @@ void Ui::Private::build()
 // 交给业务的事件：业务连接了对应的信号，就发信号并返回 true；没有连接，返回 false，由调用方执行模拟步骤。
 bool Ui::Private::raiseBusinessEvent(const QString &name, const QJSValue &args)
 {
-    Q_UNUSED(args);
     if (name == QLatin1String("layerToggleVisible")) {
         static const QMetaMethod signal = QMetaMethod::fromSignal(&BusinessInterface::layerToggleVisibleRequested);
         if (!q->isSignalConnected(signal))
             return false;
         emit q->layerToggleVisibleRequested();
+        return true;
+    }
+    if (name == QLatin1String("exportClip")) {
+        static const QMetaMethod signal = QMetaMethod::fromSignal(&BusinessInterface::actionExportClipRequested);
+        if (!q->isSignalConnected(signal))
+            return false;
+        emit q->actionExportClipRequested(args.toVariant().toMap());
         return true;
     }
     return false;
@@ -1448,6 +1530,16 @@ void Ui::requestNotifyStatus(const QString &message)
     QJSValue args = d->engine.newObject();
     args.setProperty(QStringLiteral("message"), message);
     d->requestEvent(QStringLiteral("notifyStatus"), args);
+}
+
+void Ui::finishExportClipSuccess(const QVariantMap &result)
+{
+    d->drain(d->call("finishActionSuccess", { QStringLiteral("exportClip"), d->engine.toScriptValue(result) }));
+}
+
+void Ui::finishExportClipError(const QString &message)
+{
+    d->drain(d->call("finishActionError", { QStringLiteral("exportClip"), message }));
 }
 
 void Ui::setCanvasHostWidget(QWidget *widget)

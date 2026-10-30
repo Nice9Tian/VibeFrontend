@@ -27,6 +27,13 @@ type StepPlace = "normal" | "simulate";
 const FORBIDDEN_DOM_IDENTIFIERS = [
   "document",
   "window",
+  "globalThis",
+  "self",
+  "top",
+  "parent",
+  "frames",
+  "Function",
+  "eval",
   "HTMLElement",
   "SVGElement",
   "Element",
@@ -35,23 +42,138 @@ const FORBIDDEN_DOM_IDENTIFIERS = [
   "location",
   "localStorage",
   "sessionStorage",
+  "indexedDB",
   "XMLHttpRequest",
   "fetch",
+  "WebSocket",
+  "Worker",
+  "MutationObserver",
+  "ResizeObserver",
+  "IntersectionObserver",
+  "CustomEvent",
+  "EventTarget",
+  "DOMParser",
+  "Image",
+  "Audio",
+  "alert",
+  "confirm",
+  "prompt",
+  "setInterval",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
   "querySelector",
   "querySelectorAll",
   "getElementById",
+  "getElementsByClassName",
+  "getElementsByTagName",
   "createElement",
+  "createElementNS",
   "innerHTML",
+  "outerHTML",
   "addEventListener",
-  "requestAnimationFrame",
+  "removeEventListener",
 ];
 
-function findForbiddenDomUsage(source: string): string | null {
-  // 去掉注释和字符串字面值后再检查标识符
-  const stripped = source
-    .replace(/\/\/[^\n]*/g, " ")
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g, "''");
+function stripCommentsAndStringText(source: string): string {
+  let out = "";
+  let i = 0;
+  let braceDepth = 0;
+  const templateBraceStack: number[] = [];
+
+  const scanTemplateText = () => {
+    while (i < source.length) {
+      if (source[i] === "\\") {
+        i += 2;
+        continue;
+      }
+      if (source[i] === "`") {
+        i++;
+        out += "''";
+        return;
+      }
+      if (source[i] === "$" && source[i + 1] === "{") {
+        i += 2;
+        templateBraceStack.push(braceDepth);
+        out += " ( ";
+        return;
+      }
+      i++;
+    }
+    out += "''";
+  };
+
+  while (i < source.length) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (ch === "/" && next === "/") {
+      i += 2;
+      while (i < source.length && source[i] !== "\n") i++;
+      out += " ";
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
+      if (i < source.length) i += 2;
+      out += " ";
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      i++;
+      while (i < source.length) {
+        if (source[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (source[i] === quote) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      out += "''";
+      continue;
+    }
+    if (ch === "`") {
+      i++;
+      out += "''";
+      scanTemplateText();
+      continue;
+    }
+    if (ch === "{") {
+      braceDepth++;
+      out += "{";
+      i++;
+      continue;
+    }
+    if (ch === "}") {
+      if (templateBraceStack.length > 0 && braceDepth === templateBraceStack[templateBraceStack.length - 1]) {
+        templateBraceStack.pop();
+        i++;
+        out += " ) ";
+        scanTemplateText();
+        continue;
+      }
+      if (braceDepth > 0) braceDepth--;
+      out += "}";
+      i++;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+export function findForbiddenDomUsage(source: string): string | null {
+  // 单遍词法扫描：保留模板字符串 ${...} 内的表达式，去掉普通字符串与注释，再解码 Unicode 转义后检查禁用标识符
+  const stripped = stripCommentsAndStringText(source)
+    .replace(/\\u\{([0-9a-fA-F]{1,6})\}/g, (_, hex) => {
+      const cp = parseInt(hex, 16);
+      return Number.isFinite(cp) && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+    })
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
   for (const word of FORBIDDEN_DOM_IDENTIFIERS) {
     const re = new RegExp(`\\b${word}\\b`);
     if (re.test(stripped)) return word;

@@ -553,18 +553,50 @@ export function clampHeight(node: SceneNode, h: number): number {
   return Math.round(Math.max(minH, Math.min(maxH, h)));
 }
 
-/** 按与 Qt qGeomCalc 相同的累积舍入规则把 rem 按比例分给各项。 */
-function distributeStretch(rem: number, weights: number[]): number[] {
-  const total = weights.reduce((a, b) => a + b, 0);
-  if (total <= 0 || rem <= 0) return weights.map(() => 0);
-  let acc = 0;
-  return weights.map((w) => {
-    if (w <= 0) return 0;
-    const start = Math.round((acc * rem) / total);
-    acc += w;
-    const end = Math.round((acc * rem) / total);
-    return Math.max(0, end - start);
-  });
+/** 按与 Qt qGeomCalc 相同的累积舍入与最小/最大夹紧重分配规则把 rem 按比例分给各项。 */
+function distributeStretch(rem: number, weights: number[], mins?: number[], maxs?: number[]): number[] {
+  const n = weights.length;
+  const result = new Array<number>(n).fill(0);
+  const active = weights.map((w) => w > 0);
+  let remaining = Math.max(0, rem);
+
+  for (let pass = 0; pass < n; pass++) {
+    const activeWeights = weights.map((w, i) => (active[i] ? w : 0));
+    const total = activeWeights.reduce((a, b) => a + b, 0);
+    if (total <= 0) break;
+
+    let acc = 0;
+    const remSpace = Math.max(0, remaining);
+    const tentative = activeWeights.map((w) => {
+      if (w <= 0) return 0;
+      const start = Math.round((acc * remSpace) / total);
+      acc += w;
+      const end = Math.round((acc * remSpace) / total);
+      return Math.max(0, end - start);
+    });
+
+    let clampedAny = false;
+    for (let i = 0; i < n; i++) {
+      if (!active[i]) continue;
+      const minV = mins?.[i] ?? 0;
+      const maxV = maxs?.[i] ?? Infinity;
+      if (tentative[i] < minV || tentative[i] > maxV) {
+        const clamped = Math.round(Math.max(minV, Math.min(maxV, tentative[i])));
+        result[i] = clamped;
+        active[i] = false;
+        remaining -= clamped;
+        clampedAny = true;
+      }
+    }
+
+    if (!clampedAny) {
+      for (let i = 0; i < n; i++) {
+        if (active[i]) result[i] = tentative[i];
+      }
+      break;
+    }
+  }
+  return result;
 }
 
 export interface ComputedBox {
@@ -665,10 +697,15 @@ export function computeSceneLayout(
         return c.size?.stretch ?? (c.size?.vertical === "expanding" ? 1 : 0);
       });
       const baseHeights = visChildren.map((cid, i) => (stretches[i] > 0 ? 0 : clampHeight(scene.nodes[cid]!, prefHeight(scene.nodes[cid]!))));
+      const mins = visChildren.map((cid) => Math.round(scene.nodes[cid]!.size?.minHeight ?? 0));
+      const maxs = visChildren.map((cid) => {
+        const m = scene.nodes[cid]!.size?.maxHeight;
+        return m !== undefined ? Math.round(m) : Infinity;
+      });
       const fixedSum = baseHeights.reduce((a, b) => a + b, 0);
       const totalGap = Math.max(0, visChildren.length - 1) * gap;
       const remH = Math.max(0, innerH - fixedSum - totalGap);
-      const extraH = distributeStretch(remH, stretches);
+      const extraH = distributeStretch(remH, stretches, mins, maxs);
 
       let curY = innerY;
       visChildren.forEach((cid, i) => {
@@ -718,10 +755,15 @@ export function computeSceneLayout(
         return c.size?.stretch ?? (c.size?.horizontal === "expanding" ? 1 : 0);
       });
       const baseWidths = visChildren.map((cid, i) => (stretches[i] > 0 ? 0 : clampWidth(scene.nodes[cid]!, prefWidth(scene.nodes[cid]!))));
+      const mins = visChildren.map((cid) => Math.round(scene.nodes[cid]!.size?.minWidth ?? 0));
+      const maxs = visChildren.map((cid) => {
+        const m = scene.nodes[cid]!.size?.maxWidth;
+        return m !== undefined ? Math.round(m) : Infinity;
+      });
       const fixedSum = baseWidths.reduce((a, b) => a + b, 0);
       const totalGap = Math.max(0, visChildren.length - 1) * gap;
       const remW = Math.max(0, innerW - fixedSum - totalGap);
-      const extraW = distributeStretch(remW, stretches);
+      const extraW = distributeStretch(remW, stretches, mins, maxs);
 
       let curX = innerX;
       visChildren.forEach((cid, i) => {
@@ -776,12 +818,27 @@ export function computeSceneLayout(
         if (colStretches[col] > 0) return 0;
         let maxW = 0;
         for (const it of items) {
-          if (it.col === col && it.colSpan === 1) maxW = Math.max(maxW, prefWidth(scene.nodes[it.id]!));
+          if (it.col === col && it.colSpan === 1) maxW = Math.max(maxW, clampWidth(scene.nodes[it.id]!, prefWidth(scene.nodes[it.id]!)));
+        }
+        return maxW || 60;
+      });
+      const colMins = Array.from({ length: cols }, (_, col) => {
+        let minW = 0;
+        for (const it of items) {
+          if (it.col === col && it.colSpan === 1) minW = Math.max(minW, Math.round(scene.nodes[it.id]!.size?.minWidth ?? 0));
+        }
+        return minW;
+      });
+      const colMaxs = Array.from({ length: cols }, (_, col) => {
+        let maxW = Infinity;
+        for (const it of items) {
+          const m = scene.nodes[it.id]!.size?.maxWidth;
+          if (it.col === col && it.colSpan === 1 && m !== undefined) maxW = Math.min(maxW, Math.round(m));
         }
         return maxW;
       });
       const availW = Math.max(0, innerW - Math.max(0, cols - 1) * colGap - colBaseW.reduce((a, b) => a + b, 0));
-      const colExtraW = distributeStretch(availW, colStretches);
+      const colExtraW = distributeStretch(availW, colStretches, colMins, colMaxs);
       const colW = colBaseW.map((b, c) => (colStretches[c] > 0 ? colExtraW[c] : b));
       const colX: number[] = [];
       let cx = innerX;
@@ -795,12 +852,27 @@ export function computeSceneLayout(
         if (rowStretches[row] > 0) return 0;
         let maxH = 0;
         for (const it of items) {
-          if (it.row === row && it.rowSpan === 1) maxH = Math.max(maxH, prefHeight(scene.nodes[it.id]!));
+          if (it.row === row && it.rowSpan === 1) maxH = Math.max(maxH, clampHeight(scene.nodes[it.id]!, prefHeight(scene.nodes[it.id]!)));
         }
         return maxH || 32;
       });
+      const rowMins = Array.from({ length: numRows }, (_, row) => {
+        let minH = 0;
+        for (const it of items) {
+          if (it.row === row && it.rowSpan === 1) minH = Math.max(minH, Math.round(scene.nodes[it.id]!.size?.minHeight ?? 0));
+        }
+        return minH;
+      });
+      const rowMaxs = Array.from({ length: numRows }, (_, row) => {
+        let maxH = Infinity;
+        for (const it of items) {
+          const m = scene.nodes[it.id]!.size?.maxHeight;
+          if (it.row === row && it.rowSpan === 1 && m !== undefined) maxH = Math.min(maxH, Math.round(m));
+        }
+        return maxH;
+      });
       const availH = Math.max(0, innerH - Math.max(0, numRows - 1) * rowGap - rowBaseH.reduce((a, b) => a + b, 0));
-      const rowExtraH = distributeStretch(availH, rowStretches);
+      const rowExtraH = distributeStretch(availH, rowStretches, rowMins, rowMaxs);
       const rowH = rowBaseH.map((b, r) => (rowStretches[r] > 0 ? rowExtraH[r] : b));
       const rowY: number[] = [];
       let cy = innerY;

@@ -52,7 +52,42 @@ export interface RuntimeHooks {
    * 没有提供，或者返回 false，就执行这个事件的模拟步骤。
    */
   raiseBusiness?(name: string, args: Record<string, Value>): boolean;
+  /**
+   * 有动作（call）要处理时调用。返回 true 表示外部业务接手了该动作（完成后由业务调 finishActionSuccess / finishActionError）；
+   * 没有提供，或者返回 false，就由运行层执行动作脚本或模拟结果。
+   */
+  raiseAction?(name: string, input: Record<string, Value>): boolean;
 }
+
+const SHADOWED_DOM_GLOBALS = [
+  "window",
+  "document",
+  "globalThis",
+  "self",
+  "top",
+  "parent",
+  "frames",
+  "HTMLElement",
+  "SVGElement",
+  "Element",
+  "Node",
+  "navigator",
+  "location",
+  "history",
+  "localStorage",
+  "sessionStorage",
+  "indexedDB",
+  "XMLHttpRequest",
+  "fetch",
+  "WebSocket",
+  "Worker",
+  "MutationObserver",
+  "ResizeObserver",
+  "IntersectionObserver",
+  "customElements",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
+] as const;
 
 const MAX_EMIT_DEPTH = 20;
 /** 一次操作引出的业务事件最多连锁这么多个，防止模拟步骤互相触发停不下来。 */
@@ -139,6 +174,7 @@ export class Runtime {
   private actionSims = new Map<string, ActionSimConfig>();
   /** 正在进行中的异步动作集合 */
   private runningActions = new Set<string>();
+  private activePromises = new Set<Promise<unknown>>();
   private exprCache = new Map<string, Expr>();
   private fnCache = new Map<string, (state: Record<string, unknown>, args: Record<string, Value>) => unknown>();
   private businessChain = 0;
@@ -422,6 +458,14 @@ export class Runtime {
     if (object?.bind && this.state.has(object.bind)) {
       props.value = cloneValue(this.state.get(object.bind)!);
     }
+    if (node?.type === "SpinBox") {
+      const min = Number(props.min ?? 0);
+      const max = Number(props.max ?? 9999);
+      const val = Number(props.value ?? 0);
+      if (Number.isFinite(val)) {
+        props.value = Math.max(min, Math.min(max, val));
+      }
+    }
     if (visible) {
       for (const [parentId, parentNode] of Object.entries(this.project.scene.nodes)) {
         if (layoutOf(parentNode)?.kind === "stack" && parentNode.children?.includes(id)) {
@@ -505,6 +549,21 @@ export class Runtime {
         }
         return;
       }
+      const node = scene.nodes[nodeId];
+      if (node?.type === "SpinBox" && event === "change" && typeof value === "number" && Number.isFinite(value)) {
+        const min = Number(view.props.min ?? 0);
+        const max = Number(view.props.max ?? 9999);
+        value = Math.max(min, Math.min(max, value));
+      } else if (node?.type === "ComboBox" && event === "change" && typeof value === "string") {
+        const options = String(view.props.options ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (!options.includes(value)) return;
+      } else if (node?.type === "List" && (event === "change" || event === "select") && typeof value === "number") {
+        const items = Array.isArray(view.props.items) ? view.props.items : [];
+        if (!Number.isInteger(value) || value < 0 || value >= items.length) return;
+      }
     }
 
     const scope = this.scopeForValue(value);
@@ -536,6 +595,25 @@ export class Runtime {
     const cur = batch.docks.get(dockId) ?? true;
     batch.docks.set(dockId, !cur);
     batch.lines.push(`停靠面板 ${dockId}: ${cur ? "显示 → 隐藏" : "隐藏 → 显示"}`);
+  }
+
+  /** 外部（如用户按 Esc 或点击窗口标题栏关闭按钮）关闭窗口时，将窗口开关同步回运行层。 */
+  closeWindow(id: string): void {
+    const win = this.windows.get(id);
+    if (!win || !win.open) return;
+    this.runBatch(`关闭窗口 ${id}`, false, false, (batch) => {
+      batch.windows.set(id, { open: false, modal: win.modal });
+      batch.lines.push(`关闭窗口 ${id}`);
+      const steps = this.project.logic.objects?.[id]?.events?.["close"];
+      if (steps) this.runSteps(steps, batch, 0, {});
+    });
+  }
+
+  /** 等待所有正在执行的异步动作或延迟模拟完成。 */
+  async waitForIdle(): Promise<void> {
+    while (this.activePromises.size > 0) {
+      await Promise.all([...this.activePromises]);
+    }
   }
 
   /** 执行一个业务事件的模拟步骤，就像业务没有接上时那样。 */
@@ -642,6 +720,64 @@ export class Runtime {
     }
   }
 
+  finishActionSuccess(name: string, resultVal?: Value): void {
+    const def = this.project.logic.actions?.[name];
+    if (!def) return;
+    this.runningActions.delete(name);
+    const res = resultVal === undefined ? (def.mockResult ?? null) : resultVal;
+    const scope: Record<string, Value> = { result: res };
+    this.runBatch(`动作 ${name} 完成`, false, false, (batch) => {
+      if (def.onSuccess) this.runSteps(def.onSuccess, batch, 0, scope);
+    });
+  }
+
+  finishActionError(name: string, message: string): void {
+    const def = this.project.logic.actions?.[name];
+    if (!def) return;
+    this.runningActions.delete(name);
+    const errObj: Record<string, Value> = { message };
+    const scope: Record<string, Value> = { error: errObj, "error.message": message };
+    this.runBatch(`动作 ${name} 失败`, false, false, (batch) => {
+      batch.lines.push(`失败：${message}`);
+      if (def.onError) this.runSteps(def.onError, batch, 0, scope);
+    });
+  }
+
+  runActionDefault(name: string, input: Record<string, Value>): void {
+    const def = this.project.logic.actions?.[name];
+    if (!def) return;
+    const sim = this.getActionSimulation(name);
+    const source = this.project.actionSources?.[name];
+    if (!source) {
+      this.finishActionSuccess(name, sim.result !== undefined ? sim.result : (def.mockResult ?? null));
+      return;
+    }
+    try {
+      const fn = this.compileFunction(`action:${name}`, source);
+      const out = fn(input as Record<string, unknown>, input);
+      if (out && typeof (out as Promise<unknown>).then === "function") {
+        this.runningActions.add(name);
+        const tracked = (out as Promise<Value>).then(
+          (res) => this.finishActionSuccess(name, res ?? null),
+          (err) => this.finishActionError(name, (err as Error)?.message ?? String(err)),
+        );
+        const cleanup: Promise<void> = tracked.then(
+          () => {
+            this.activePromises.delete(cleanup);
+          },
+          () => {
+            this.activePromises.delete(cleanup);
+          },
+        );
+        this.activePromises.add(cleanup);
+      } else {
+        this.finishActionSuccess(name, (out as Value) ?? null);
+      }
+    } catch (e) {
+      this.finishActionError(name, (e as Error).message);
+    }
+  }
+
   private executeAction(name: string, input: Record<string, Value>): void {
     const def = this.project.logic.actions?.[name];
     if (!def) {
@@ -653,60 +789,44 @@ export class Runtime {
       return;
     }
     const sim = this.getActionSimulation(name);
-    const finishSuccess = (resultVal: Value) => {
-      this.runningActions.delete(name);
-      const res = resultVal === undefined ? (def.mockResult ?? null) : resultVal;
-      const scope: Record<string, Value> = { result: res };
-      this.runBatch(`动作 ${name} 完成`, false, false, (batch) => {
-        if (def.onSuccess) this.runSteps(def.onSuccess, batch, 0, scope);
-      });
-    };
-    const finishError = (message: string) => {
-      this.runningActions.delete(name);
-      const errObj: Record<string, Value> = { message };
-      const scope: Record<string, Value> = { error: errObj, "error.message": message };
-      this.runBatch(`动作 ${name} 失败`, false, false, (batch) => {
-        batch.lines.push(`失败：${message}`);
-        if (def.onError) this.runSteps(def.onError, batch, 0, scope);
-      });
-    };
 
     const runNow = () => {
       if (sim.mode === "error") {
-        finishError(sim.errorMessage ?? def.mockError ?? "模拟失败");
+        this.finishActionError(name, sim.errorMessage ?? def.mockError ?? "模拟失败");
         return;
       }
       if (sim.mode === "success") {
-        finishSuccess(sim.result !== undefined ? sim.result : (def.mockResult ?? null));
+        this.finishActionSuccess(name, sim.result !== undefined ? sim.result : (def.mockResult ?? null));
         return;
       }
-      // real 模式：如果有动作源码则执行，否则按成功模拟
-      const source = this.project.actionSources?.[name];
-      if (!source) {
-        finishSuccess(sim.result !== undefined ? sim.result : (def.mockResult ?? null));
+      if (this.hooks.raiseAction?.(name, input)) {
+        this.runningActions.add(name);
         return;
       }
-      try {
-        const fn = this.compileFunction(`action:${name}`, source);
-        const out = fn(input as Record<string, unknown>, input);
-        if (out && typeof (out as Promise<unknown>).then === "function") {
-          this.runningActions.add(name);
-          (out as Promise<Value>).then(
-            (res) => finishSuccess(res ?? null),
-            (err) => finishError((err as Error)?.message ?? String(err)),
-          );
-        } else {
-          finishSuccess((out as Value) ?? null);
-        }
-      } catch (e) {
-        finishError((e as Error).message);
-      }
+      this.runActionDefault(name, input);
     };
 
     if (sim.delayMs > 0 && typeof setTimeout === "function") {
       this.runningActions.add(name);
       this.hooks.onLog({ title: `动作 ${name}`, lines: [`开始（延迟 ${sim.delayMs} ms）`] });
-      setTimeout(runNow, sim.delayMs);
+      const timerPromise = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          try {
+            runNow();
+          } finally {
+            resolve();
+          }
+        }, sim.delayMs);
+      });
+      const cleanup: Promise<void> = timerPromise.then(
+        () => {
+          this.activePromises.delete(cleanup);
+        },
+        () => {
+          this.activePromises.delete(cleanup);
+        },
+      );
+      this.activePromises.add(cleanup);
     } else {
       runNow();
     }
@@ -718,12 +838,33 @@ export class Runtime {
   ): (state: Record<string, unknown>, args: Record<string, Value>) => unknown {
     let fn = this.fnCache.get(cacheKey);
     if (!fn) {
-      const transformed = source.replace(/^\s*export\s+default\s+/m, "return ");
-      const factory = new Function(transformed) as () => (
-        state: Record<string, unknown>,
-        args: Record<string, Value>,
-      ) => unknown;
-      const exported = factory();
+      const transformed = `"use strict";\n` + source.replace(/^\s*export\s+default\s+/m, "return ");
+      let factory: (...shadowed: undefined[]) => (state: Record<string, unknown>, args: Record<string, Value>) => unknown;
+      try {
+        factory = new Function(...SHADOWED_DOM_GLOBALS, transformed) as typeof factory;
+      } catch (err) {
+        // Qt QJSEngine (QV4) 不支持 async/await 语法糖，将其降级为 Promise.resolve().then(...)
+        if (err instanceof SyntaxError && /\basync\b/.test(transformed)) {
+          const downleveled = transformed
+            .replace(
+              /\breturn\s+async\s+function\s*([A-Za-z0-9_$]*)\s*\(([^)]*)\)\s*\{([\s\S]*)\}\s*$/,
+              "return function $1($2) { return Promise.resolve().then(() => {$3}); }",
+            )
+            .replace(
+              /\breturn\s+async\s*\(([^)]*)\)\s*=>\s*\{([\s\S]*)\}\s*$/,
+              "return ($1) => Promise.resolve().then(() => {$2})",
+            )
+            .replace(
+              /\breturn\s+async\s*\(([^)]*)\)\s*=>\s*([\s\S]*)$/,
+              "return ($1) => Promise.resolve().then(() => ($2))",
+            )
+            .replace(/\bawait\s+/g, "");
+          factory = new Function(...SHADOWED_DOM_GLOBALS, downleveled) as typeof factory;
+        } else {
+          throw err;
+        }
+      }
+      const exported = factory(...SHADOWED_DOM_GLOBALS.map(() => undefined));
       if (typeof exported !== "function") {
         throw new Error(`函数文件没有导出一个函数`);
       }

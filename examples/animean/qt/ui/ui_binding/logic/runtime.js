@@ -443,7 +443,7 @@ var VF = (function(exports) {
 	var component_default$3 = {
 		type: "List",
 		label: "列表",
-		description: "行列表，绑定数组状态 items，支持选中行、勾选显隐和重排",
+		description: "行列表，绑定数组状态 items，支持选中行",
 		defaultSize: {
 			"width": 220,
 			"height": 180
@@ -461,14 +461,6 @@ var VF = (function(exports) {
 				"default": 0,
 				"logic": true
 			},
-			"checkable": {
-				"type": "boolean",
-				"default": false
-			},
-			"reorderable": {
-				"type": "boolean",
-				"default": false
-			},
 			"emptyText": {
 				"type": "string",
 				"default": "暂无内容"
@@ -480,20 +472,13 @@ var VF = (function(exports) {
 			}
 		},
 		bind: "number",
-		events: [
-			"change",
-			"select",
-			"toggleItem",
-			"moveItem"
-		],
+		events: ["change", "select"],
 		children: false,
 		qt: {
 			"widget": "QListWidget",
 			"props": {
 				"items": "vfItems",
 				"value": "currentRow",
-				"checkable": "vfCheckable",
-				"reorderable": "vfReorderable",
 				"emptyText": "vfEmptyText"
 			},
 			"events": {
@@ -707,17 +692,27 @@ var VF = (function(exports) {
 		suffix.className = "vf-std-spinbox-suffix";
 		wrap.append(input, suffix);
 		el.append(wrap);
+		let min = 0;
+		let max = 9999;
+		const clamp = (n) => Math.max(min, Math.min(max, n));
 		input.addEventListener("input", () => {
 			const n = Number(input.value);
-			if (Number.isFinite(n)) emit("change", n);
+			if (Number.isFinite(n)) {
+				const clamped = clamp(n);
+				if (input.value !== String(clamped)) input.value = String(clamped);
+				emit("change", clamped);
+			}
 		});
 		const update = (next) => {
 			var _next$min, _next$max, _next$step, _next$value2, _next$suffix;
-			input.min = String((_next$min = next.min) !== null && _next$min !== void 0 ? _next$min : 0);
-			input.max = String((_next$max = next.max) !== null && _next$max !== void 0 ? _next$max : 9999);
+			min = Number((_next$min = next.min) !== null && _next$min !== void 0 ? _next$min : 0);
+			max = Number((_next$max = next.max) !== null && _next$max !== void 0 ? _next$max : 9999);
+			input.min = String(min);
+			input.max = String(max);
 			input.step = String((_next$step = next.step) !== null && _next$step !== void 0 ? _next$step : 1);
 			input.disabled = next.enabled === false;
-			const val = String((_next$value2 = next.value) !== null && _next$value2 !== void 0 ? _next$value2 : 0);
+			const raw = Number((_next$value2 = next.value) !== null && _next$value2 !== void 0 ? _next$value2 : 0);
+			const val = String(Number.isFinite(raw) ? clamp(raw) : min);
 			if (input.value !== val) input.value = val;
 			const sfx = String((_next$suffix = next.suffix) !== null && _next$suffix !== void 0 ? _next$suffix : "");
 			suffix.textContent = sfx;
@@ -784,20 +779,12 @@ var VF = (function(exports) {
 		const container = document.createElement("div");
 		container.className = "vf-std-list";
 		el.append(container);
-		let dragFrom = -1;
 		const itemLabel = (item) => {
 			if (item && typeof item === "object" && !Array.isArray(item)) {
 				var _ref, _ref2, _ref3, _ref4, _item$name;
 				return String((_ref = (_ref2 = (_ref3 = (_ref4 = (_item$name = item.name) !== null && _item$name !== void 0 ? _item$name : item.label) !== null && _ref4 !== void 0 ? _ref4 : item.title) !== null && _ref3 !== void 0 ? _ref3 : item.text) !== null && _ref2 !== void 0 ? _ref2 : item.id) !== null && _ref !== void 0 ? _ref : "");
 			}
 			return String(item !== null && item !== void 0 ? item : "");
-		};
-		const itemVisible = (item) => {
-			if (item && typeof item === "object" && !Array.isArray(item)) {
-				if ("visible" in item) return Boolean(item.visible);
-				if ("checked" in item) return Boolean(item.checked);
-			}
-			return true;
 		};
 		const update = (next) => {
 			container.replaceChildren();
@@ -816,48 +803,17 @@ var VF = (function(exports) {
 			items.forEach((item, index) => {
 				const row = document.createElement("div");
 				row.className = "vf-std-list-row" + (index === selected ? " selected" : "");
-				if (next.checkable) {
-					const check = document.createElement("span");
-					const vis = itemVisible(item);
-					check.className = "vf-std-list-check" + (vis ? " on" : "");
-					check.textContent = vis ? "●" : "○";
-					check.title = vis ? "可见" : "隐藏";
-					check.addEventListener("click", (e) => {
-						e.stopPropagation();
-						if (disabled) return;
-						emit("change", index);
-						emit("select", index);
-						emit("toggleItem", index);
-					});
-					row.append(check);
-				}
 				const text = document.createElement("span");
 				text.className = "vf-std-list-text";
 				text.textContent = itemLabel(item);
 				row.append(text);
-				if (next.checkable && !itemVisible(item)) {
-					const tag = document.createElement("span");
-					tag.className = "vf-std-list-badge";
-					tag.textContent = "隐藏";
-					row.append(tag);
-				}
 				row.addEventListener("click", () => {
 					if (disabled) return;
-					emit("change", index);
-					emit("select", index);
+					if (index !== selected) {
+						emit("change", index);
+						emit("select", index);
+					}
 				});
-				if (next.reorderable && !disabled) {
-					row.draggable = true;
-					row.addEventListener("dragstart", () => {
-						dragFrom = index;
-					});
-					row.addEventListener("dragover", (e) => e.preventDefault());
-					row.addEventListener("drop", (e) => {
-						e.preventDefault();
-						if (dragFrom >= 0 && dragFrom !== index) emit("moveItem", `${dragFrom},${index}`);
-						dragFrom = -1;
-					});
-				}
 				container.append(row);
 			});
 		};
@@ -1207,18 +1163,45 @@ var VF = (function(exports) {
 		const maxH = (_node$size$maxHeight = (_node$size12 = node.size) === null || _node$size12 === void 0 ? void 0 : _node$size12.maxHeight) !== null && _node$size$maxHeight !== void 0 ? _node$size$maxHeight : Infinity;
 		return Math.round(Math.max(minH, Math.min(maxH, h)));
 	}
-	/** 按与 Qt qGeomCalc 相同的累积舍入规则把 rem 按比例分给各项。 */
-	function distributeStretch(rem, weights) {
-		const total = weights.reduce((a, b) => a + b, 0);
-		if (total <= 0 || rem <= 0) return weights.map(() => 0);
-		let acc = 0;
-		return weights.map((w) => {
-			if (w <= 0) return 0;
-			const start = Math.round(acc * rem / total);
-			acc += w;
-			const end = Math.round(acc * rem / total);
-			return Math.max(0, end - start);
-		});
+	/** 按与 Qt qGeomCalc 相同的累积舍入与最小/最大夹紧重分配规则把 rem 按比例分给各项。 */
+	function distributeStretch(rem, weights, mins, maxs) {
+		const n = weights.length;
+		const result = new Array(n).fill(0);
+		const active = weights.map((w) => w > 0);
+		let remaining = Math.max(0, rem);
+		for (let pass = 0; pass < n; pass++) {
+			const activeWeights = weights.map((w, i) => active[i] ? w : 0);
+			const total = activeWeights.reduce((a, b) => a + b, 0);
+			if (total <= 0) break;
+			let acc = 0;
+			const remSpace = Math.max(0, remaining);
+			const tentative = activeWeights.map((w) => {
+				if (w <= 0) return 0;
+				const start = Math.round(acc * remSpace / total);
+				acc += w;
+				const end = Math.round(acc * remSpace / total);
+				return Math.max(0, end - start);
+			});
+			let clampedAny = false;
+			for (let i = 0; i < n; i++) {
+				var _mins$i, _maxs$i;
+				if (!active[i]) continue;
+				const minV = (_mins$i = mins === null || mins === void 0 ? void 0 : mins[i]) !== null && _mins$i !== void 0 ? _mins$i : 0;
+				const maxV = (_maxs$i = maxs === null || maxs === void 0 ? void 0 : maxs[i]) !== null && _maxs$i !== void 0 ? _maxs$i : Infinity;
+				if (tentative[i] < minV || tentative[i] > maxV) {
+					const clamped = Math.round(Math.max(minV, Math.min(maxV, tentative[i])));
+					result[i] = clamped;
+					active[i] = false;
+					remaining -= clamped;
+					clampedAny = true;
+				}
+			}
+			if (!clampedAny) {
+				for (let i = 0; i < n; i++) if (active[i]) result[i] = tentative[i];
+				break;
+			}
+		}
+		return result;
 	}
 	function isPartitionedWindow(node) {
 		if (!node) return false;
@@ -1296,9 +1279,18 @@ var VF = (function(exports) {
 					return (_c$size$stretch = (_c$size = c.size) === null || _c$size === void 0 ? void 0 : _c$size.stretch) !== null && _c$size$stretch !== void 0 ? _c$size$stretch : ((_c$size2 = c.size) === null || _c$size2 === void 0 ? void 0 : _c$size2.vertical) === "expanding" ? 1 : 0;
 				});
 				const baseHeights = visChildren.map((cid, i) => stretches[i] > 0 ? 0 : clampHeight(scene.nodes[cid], prefHeight(scene.nodes[cid])));
+				const mins = visChildren.map((cid) => {
+					var _size$minHeight, _size;
+					return Math.round((_size$minHeight = (_size = scene.nodes[cid].size) === null || _size === void 0 ? void 0 : _size.minHeight) !== null && _size$minHeight !== void 0 ? _size$minHeight : 0);
+				});
+				const maxs = visChildren.map((cid) => {
+					var _size2;
+					const m = (_size2 = scene.nodes[cid].size) === null || _size2 === void 0 ? void 0 : _size2.maxHeight;
+					return m !== void 0 ? Math.round(m) : Infinity;
+				});
 				const fixedSum = baseHeights.reduce((a, b) => a + b, 0);
 				const totalGap = Math.max(0, visChildren.length - 1) * gap;
-				const extraH = distributeStretch(Math.max(0, innerH - fixedSum - totalGap), stretches);
+				const extraH = distributeStretch(Math.max(0, innerH - fixedSum - totalGap), stretches, mins, maxs);
 				let curY = innerY;
 				visChildren.forEach((cid, i) => {
 					const c = scene.nodes[cid];
@@ -1346,9 +1338,18 @@ var VF = (function(exports) {
 					return (_c$size$stretch2 = (_c$size3 = c.size) === null || _c$size3 === void 0 ? void 0 : _c$size3.stretch) !== null && _c$size$stretch2 !== void 0 ? _c$size$stretch2 : ((_c$size4 = c.size) === null || _c$size4 === void 0 ? void 0 : _c$size4.horizontal) === "expanding" ? 1 : 0;
 				});
 				const baseWidths = visChildren.map((cid, i) => stretches[i] > 0 ? 0 : clampWidth(scene.nodes[cid], prefWidth(scene.nodes[cid])));
+				const mins = visChildren.map((cid) => {
+					var _size$minWidth, _size3;
+					return Math.round((_size$minWidth = (_size3 = scene.nodes[cid].size) === null || _size3 === void 0 ? void 0 : _size3.minWidth) !== null && _size$minWidth !== void 0 ? _size$minWidth : 0);
+				});
+				const maxs = visChildren.map((cid) => {
+					var _size4;
+					const m = (_size4 = scene.nodes[cid].size) === null || _size4 === void 0 ? void 0 : _size4.maxWidth;
+					return m !== void 0 ? Math.round(m) : Infinity;
+				});
 				const fixedSum = baseWidths.reduce((a, b) => a + b, 0);
 				const totalGap = Math.max(0, visChildren.length - 1) * gap;
-				const extraW = distributeStretch(Math.max(0, innerW - fixedSum - totalGap), stretches);
+				const extraW = distributeStretch(Math.max(0, innerW - fixedSum - totalGap), stretches, mins, maxs);
 				let curX = innerX;
 				visChildren.forEach((cid, i) => {
 					const c = scene.nodes[cid];
@@ -1403,10 +1404,27 @@ var VF = (function(exports) {
 				const colBaseW = Array.from({ length: cols }, (_, col) => {
 					if (colStretches[col] > 0) return 0;
 					let maxW = 0;
-					for (const it of items) if (it.col === col && it.colSpan === 1) maxW = Math.max(maxW, prefWidth(scene.nodes[it.id]));
+					for (const it of items) if (it.col === col && it.colSpan === 1) maxW = Math.max(maxW, clampWidth(scene.nodes[it.id], prefWidth(scene.nodes[it.id])));
+					return maxW || 60;
+				});
+				const colMins = Array.from({ length: cols }, (_, col) => {
+					let minW = 0;
+					for (const it of items) {
+						var _size$minWidth2, _size5;
+						if (it.col === col && it.colSpan === 1) minW = Math.max(minW, Math.round((_size$minWidth2 = (_size5 = scene.nodes[it.id].size) === null || _size5 === void 0 ? void 0 : _size5.minWidth) !== null && _size$minWidth2 !== void 0 ? _size$minWidth2 : 0));
+					}
+					return minW;
+				});
+				const colMaxs = Array.from({ length: cols }, (_, col) => {
+					let maxW = Infinity;
+					for (const it of items) {
+						var _size6;
+						const m = (_size6 = scene.nodes[it.id].size) === null || _size6 === void 0 ? void 0 : _size6.maxWidth;
+						if (it.col === col && it.colSpan === 1 && m !== void 0) maxW = Math.min(maxW, Math.round(m));
+					}
 					return maxW;
 				});
-				const colExtraW = distributeStretch(Math.max(0, innerW - Math.max(0, cols - 1) * colGap - colBaseW.reduce((a, b) => a + b, 0)), colStretches);
+				const colExtraW = distributeStretch(Math.max(0, innerW - Math.max(0, cols - 1) * colGap - colBaseW.reduce((a, b) => a + b, 0)), colStretches, colMins, colMaxs);
 				const colW = colBaseW.map((b, c) => colStretches[c] > 0 ? colExtraW[c] : b);
 				const colX = [];
 				let cx = innerX;
@@ -1421,10 +1439,27 @@ var VF = (function(exports) {
 				const rowBaseH = Array.from({ length: numRows }, (_, row) => {
 					if (rowStretches[row] > 0) return 0;
 					let maxH = 0;
-					for (const it of items) if (it.row === row && it.rowSpan === 1) maxH = Math.max(maxH, prefHeight(scene.nodes[it.id]));
+					for (const it of items) if (it.row === row && it.rowSpan === 1) maxH = Math.max(maxH, clampHeight(scene.nodes[it.id], prefHeight(scene.nodes[it.id])));
 					return maxH || 32;
 				});
-				const rowExtraH = distributeStretch(Math.max(0, innerH - Math.max(0, numRows - 1) * rowGap - rowBaseH.reduce((a, b) => a + b, 0)), rowStretches);
+				const rowMins = Array.from({ length: numRows }, (_, row) => {
+					let minH = 0;
+					for (const it of items) {
+						var _size$minHeight2, _size7;
+						if (it.row === row && it.rowSpan === 1) minH = Math.max(minH, Math.round((_size$minHeight2 = (_size7 = scene.nodes[it.id].size) === null || _size7 === void 0 ? void 0 : _size7.minHeight) !== null && _size$minHeight2 !== void 0 ? _size$minHeight2 : 0));
+					}
+					return minH;
+				});
+				const rowMaxs = Array.from({ length: numRows }, (_, row) => {
+					let maxH = Infinity;
+					for (const it of items) {
+						var _size8;
+						const m = (_size8 = scene.nodes[it.id].size) === null || _size8 === void 0 ? void 0 : _size8.maxHeight;
+						if (it.row === row && it.rowSpan === 1 && m !== void 0) maxH = Math.min(maxH, Math.round(m));
+					}
+					return maxH;
+				});
+				const rowExtraH = distributeStretch(Math.max(0, innerH - Math.max(0, numRows - 1) * rowGap - rowBaseH.reduce((a, b) => a + b, 0)), rowStretches, rowMins, rowMaxs);
 				const rowH = rowBaseH.map((b, r) => rowStretches[r] > 0 ? rowExtraH[r] : b);
 				const rowY = [];
 				let cy = innerY;
@@ -1983,7 +2018,62 @@ var VF = (function(exports) {
 		};
 	}
 	//#endregion
+	//#region \0@oxc-project+runtime@0.153.0/helpers/esm/asyncToGenerator.js
+	function asyncGeneratorStep(n, t, e, r, o, a, c) {
+		try {
+			var i = n[a](c), u = i.value;
+		} catch (n) {
+			e(n);
+			return;
+		}
+		i.done ? t(u) : Promise.resolve(u).then(r, o);
+	}
+	function _asyncToGenerator(n) {
+		return function() {
+			var t = this, e = arguments;
+			return new Promise(function(r, o) {
+				var a = n.apply(t, e);
+				function _next(n) {
+					asyncGeneratorStep(a, r, o, _next, _throw, "next", n);
+				}
+				function _throw(n) {
+					asyncGeneratorStep(a, r, o, _next, _throw, "throw", n);
+				}
+				_next(void 0);
+			});
+		};
+	}
+	//#endregion
 	//#region src/runtime.ts
+	const SHADOWED_DOM_GLOBALS = [
+		"window",
+		"document",
+		"globalThis",
+		"self",
+		"top",
+		"parent",
+		"frames",
+		"HTMLElement",
+		"SVGElement",
+		"Element",
+		"Node",
+		"navigator",
+		"location",
+		"history",
+		"localStorage",
+		"sessionStorage",
+		"indexedDB",
+		"XMLHttpRequest",
+		"fetch",
+		"WebSocket",
+		"Worker",
+		"MutationObserver",
+		"ResizeObserver",
+		"IntersectionObserver",
+		"customElements",
+		"requestAnimationFrame",
+		"cancelAnimationFrame"
+	];
 	const MAX_EMIT_DEPTH = 20;
 	/** 一次操作引出的业务事件最多连锁这么多个，防止模拟步骤互相触发停不下来。 */
 	const MAX_BUSINESS_CHAIN = 50;
@@ -2040,6 +2130,7 @@ var VF = (function(exports) {
 			_defineProperty(this, "docks", /* @__PURE__ */ new Map());
 			_defineProperty(this, "actionSims", /* @__PURE__ */ new Map());
 			_defineProperty(this, "runningActions", /* @__PURE__ */ new Set());
+			_defineProperty(this, "activePromises", /* @__PURE__ */ new Set());
 			_defineProperty(this, "exprCache", /* @__PURE__ */ new Map());
 			_defineProperty(this, "fnCache", /* @__PURE__ */ new Map());
 			_defineProperty(this, "businessChain", 0);
@@ -2269,6 +2360,13 @@ var VF = (function(exports) {
 				else props[key] = cloneValue(value);
 			} catch (_unused3) {}
 			if ((object === null || object === void 0 ? void 0 : object.bind) && this.state.has(object.bind)) props.value = cloneValue(this.state.get(object.bind));
+			if ((node === null || node === void 0 ? void 0 : node.type) === "SpinBox") {
+				var _props$min, _props$max, _props$value;
+				const min = Number((_props$min = props.min) !== null && _props$min !== void 0 ? _props$min : 0);
+				const max = Number((_props$max = props.max) !== null && _props$max !== void 0 ? _props$max : 9999);
+				const val = Number((_props$value = props.value) !== null && _props$value !== void 0 ? _props$value : 0);
+				if (Number.isFinite(val)) props.value = Math.max(min, Math.min(max, val));
+			}
 			if (visible) for (const [parentId, parentNode] of Object.entries(this.project.scene.nodes)) {
 				var _layoutOf, _parentNode$children;
 				if (((_layoutOf = layoutOf(parentNode)) === null || _layoutOf === void 0 ? void 0 : _layoutOf.kind) === "stack" && ((_parentNode$children = parentNode.children) === null || _parentNode$children === void 0 ? void 0 : _parentNode$children.includes(id))) {
@@ -2354,6 +2452,19 @@ var VF = (function(exports) {
 					});
 					return;
 				}
+				const node = scene.nodes[nodeId];
+				if ((node === null || node === void 0 ? void 0 : node.type) === "SpinBox" && event === "change" && typeof value === "number" && Number.isFinite(value)) {
+					var _view$props$min, _view$props$max;
+					const min = Number((_view$props$min = view.props.min) !== null && _view$props$min !== void 0 ? _view$props$min : 0);
+					const max = Number((_view$props$max = view.props.max) !== null && _view$props$max !== void 0 ? _view$props$max : 9999);
+					value = Math.max(min, Math.min(max, value));
+				} else if ((node === null || node === void 0 ? void 0 : node.type) === "ComboBox" && event === "change" && typeof value === "string") {
+					var _view$props$options;
+					if (!String((_view$props$options = view.props.options) !== null && _view$props$options !== void 0 ? _view$props$options : "").split(",").map((s) => s.trim()).filter(Boolean).includes(value)) return;
+				} else if ((node === null || node === void 0 ? void 0 : node.type) === "List" && (event === "change" || event === "select") && typeof value === "number") {
+					const items = Array.isArray(view.props.items) ? view.props.items : [];
+					if (!Number.isInteger(value) || value < 0 || value >= items.length) return;
+				}
 			}
 			const scope = this.scopeForValue(value);
 			this.runBatch(title, false, event === "window.click", (batch) => {
@@ -2382,6 +2493,28 @@ var VF = (function(exports) {
 			const cur = (_batch$docks$get = batch.docks.get(dockId)) !== null && _batch$docks$get !== void 0 ? _batch$docks$get : true;
 			batch.docks.set(dockId, !cur);
 			batch.lines.push(`停靠面板 ${dockId}: ${cur ? "显示 → 隐藏" : "隐藏 → 显示"}`);
+		}
+		/** 外部（如用户按 Esc 或点击窗口标题栏关闭按钮）关闭窗口时，将窗口开关同步回运行层。 */
+		closeWindow(id) {
+			const win = this.windows.get(id);
+			if (!win || !win.open) return;
+			this.runBatch(`关闭窗口 ${id}`, false, false, (batch) => {
+				var _this$project$logic$o4;
+				batch.windows.set(id, {
+					open: false,
+					modal: win.modal
+				});
+				batch.lines.push(`关闭窗口 ${id}`);
+				const steps = (_this$project$logic$o4 = this.project.logic.objects) === null || _this$project$logic$o4 === void 0 || (_this$project$logic$o4 = _this$project$logic$o4[id]) === null || _this$project$logic$o4 === void 0 || (_this$project$logic$o4 = _this$project$logic$o4.events) === null || _this$project$logic$o4 === void 0 ? void 0 : _this$project$logic$o4["close"];
+				if (steps) this.runSteps(steps, batch, 0, {});
+			});
+		}
+		/** 等待所有正在执行的异步动作或延迟模拟完成。 */
+		waitForIdle() {
+			var _this = this;
+			return _asyncToGenerator(function* () {
+				while (_this.activePromises.size > 0) yield Promise.all([..._this.activePromises]);
+			})();
 		}
 		/** 执行一个业务事件的模拟步骤，就像业务没有接上时那样。 */
 		simulate(name, args = {}) {
@@ -2489,9 +2622,65 @@ var VF = (function(exports) {
 				this.businessChain--;
 			}
 		}
-		executeAction(name, input) {
-			var _this$project$logic$a4;
+		finishActionSuccess(name, resultVal) {
+			var _this$project$logic$a4, _def$mockResult;
 			const def = (_this$project$logic$a4 = this.project.logic.actions) === null || _this$project$logic$a4 === void 0 ? void 0 : _this$project$logic$a4[name];
+			if (!def) return;
+			this.runningActions.delete(name);
+			const scope = { result: resultVal === void 0 ? (_def$mockResult = def.mockResult) !== null && _def$mockResult !== void 0 ? _def$mockResult : null : resultVal };
+			this.runBatch(`动作 ${name} 完成`, false, false, (batch) => {
+				if (def.onSuccess) this.runSteps(def.onSuccess, batch, 0, scope);
+			});
+		}
+		finishActionError(name, message) {
+			var _this$project$logic$a5;
+			const def = (_this$project$logic$a5 = this.project.logic.actions) === null || _this$project$logic$a5 === void 0 ? void 0 : _this$project$logic$a5[name];
+			if (!def) return;
+			this.runningActions.delete(name);
+			const scope = {
+				error: { message },
+				"error.message": message
+			};
+			this.runBatch(`动作 ${name} 失败`, false, false, (batch) => {
+				batch.lines.push(`失败：${message}`);
+				if (def.onError) this.runSteps(def.onError, batch, 0, scope);
+			});
+		}
+		runActionDefault(name, input) {
+			var _this$project$logic$a6, _this$project$actionS;
+			const def = (_this$project$logic$a6 = this.project.logic.actions) === null || _this$project$logic$a6 === void 0 ? void 0 : _this$project$logic$a6[name];
+			if (!def) return;
+			const sim = this.getActionSimulation(name);
+			const source = (_this$project$actionS = this.project.actionSources) === null || _this$project$actionS === void 0 ? void 0 : _this$project$actionS[name];
+			if (!source) {
+				var _def$mockResult2;
+				this.finishActionSuccess(name, sim.result !== void 0 ? sim.result : (_def$mockResult2 = def.mockResult) !== null && _def$mockResult2 !== void 0 ? _def$mockResult2 : null);
+				return;
+			}
+			try {
+				const out = this.compileFunction(`action:${name}`, source)(input, input);
+				if (out && typeof out.then === "function") {
+					this.runningActions.add(name);
+					const cleanup = out.then((res) => this.finishActionSuccess(name, res !== null && res !== void 0 ? res : null), (err) => {
+						var _message;
+						return this.finishActionError(name, (_message = err === null || err === void 0 ? void 0 : err.message) !== null && _message !== void 0 ? _message : String(err));
+					}).then(() => {
+						this.activePromises.delete(cleanup);
+					}, () => {
+						this.activePromises.delete(cleanup);
+					});
+					this.activePromises.add(cleanup);
+				} else {
+					var _ref3;
+					this.finishActionSuccess(name, (_ref3 = out) !== null && _ref3 !== void 0 ? _ref3 : null);
+				}
+			} catch (e) {
+				this.finishActionError(name, e.message);
+			}
+		}
+		executeAction(name, input) {
+			var _this$project$logic$a7;
+			const def = (_this$project$logic$a7 = this.project.logic.actions) === null || _this$project$logic$a7 === void 0 ? void 0 : _this$project$logic$a7[name];
 			if (!def) {
 				this.hooks.onLog({
 					title: `动作 ${name}`,
@@ -2507,58 +2696,23 @@ var VF = (function(exports) {
 				return;
 			}
 			const sim = this.getActionSimulation(name);
-			const finishSuccess = (resultVal) => {
-				var _def$mockResult;
-				this.runningActions.delete(name);
-				const scope = { result: resultVal === void 0 ? (_def$mockResult = def.mockResult) !== null && _def$mockResult !== void 0 ? _def$mockResult : null : resultVal };
-				this.runBatch(`动作 ${name} 完成`, false, false, (batch) => {
-					if (def.onSuccess) this.runSteps(def.onSuccess, batch, 0, scope);
-				});
-			};
-			const finishError = (message) => {
-				this.runningActions.delete(name);
-				const scope = {
-					error: { message },
-					"error.message": message
-				};
-				this.runBatch(`动作 ${name} 失败`, false, false, (batch) => {
-					batch.lines.push(`失败：${message}`);
-					if (def.onError) this.runSteps(def.onError, batch, 0, scope);
-				});
-			};
 			const runNow = () => {
-				var _this$project$actionS;
+				var _this$hooks$raiseActi, _this$hooks2;
 				if (sim.mode === "error") {
-					var _ref3, _sim$errorMessage;
-					finishError((_ref3 = (_sim$errorMessage = sim.errorMessage) !== null && _sim$errorMessage !== void 0 ? _sim$errorMessage : def.mockError) !== null && _ref3 !== void 0 ? _ref3 : "模拟失败");
+					var _ref4, _sim$errorMessage;
+					this.finishActionError(name, (_ref4 = (_sim$errorMessage = sim.errorMessage) !== null && _sim$errorMessage !== void 0 ? _sim$errorMessage : def.mockError) !== null && _ref4 !== void 0 ? _ref4 : "模拟失败");
 					return;
 				}
 				if (sim.mode === "success") {
-					var _def$mockResult2;
-					finishSuccess(sim.result !== void 0 ? sim.result : (_def$mockResult2 = def.mockResult) !== null && _def$mockResult2 !== void 0 ? _def$mockResult2 : null);
-					return;
-				}
-				const source = (_this$project$actionS = this.project.actionSources) === null || _this$project$actionS === void 0 ? void 0 : _this$project$actionS[name];
-				if (!source) {
 					var _def$mockResult3;
-					finishSuccess(sim.result !== void 0 ? sim.result : (_def$mockResult3 = def.mockResult) !== null && _def$mockResult3 !== void 0 ? _def$mockResult3 : null);
+					this.finishActionSuccess(name, sim.result !== void 0 ? sim.result : (_def$mockResult3 = def.mockResult) !== null && _def$mockResult3 !== void 0 ? _def$mockResult3 : null);
 					return;
 				}
-				try {
-					const out = this.compileFunction(`action:${name}`, source)(input, input);
-					if (out && typeof out.then === "function") {
-						this.runningActions.add(name);
-						out.then((res) => finishSuccess(res !== null && res !== void 0 ? res : null), (err) => {
-							var _message;
-							return finishError((_message = err === null || err === void 0 ? void 0 : err.message) !== null && _message !== void 0 ? _message : String(err));
-						});
-					} else {
-						var _ref4;
-						finishSuccess((_ref4 = out) !== null && _ref4 !== void 0 ? _ref4 : null);
-					}
-				} catch (e) {
-					finishError(e.message);
+				if ((_this$hooks$raiseActi = (_this$hooks2 = this.hooks).raiseAction) === null || _this$hooks$raiseActi === void 0 ? void 0 : _this$hooks$raiseActi.call(_this$hooks2, name, input)) {
+					this.runningActions.add(name);
+					return;
 				}
+				this.runActionDefault(name, input);
 			};
 			if (sim.delayMs > 0 && typeof setTimeout === "function") {
 				this.runningActions.add(name);
@@ -2566,14 +2720,36 @@ var VF = (function(exports) {
 					title: `动作 ${name}`,
 					lines: [`开始（延迟 ${sim.delayMs} ms）`]
 				});
-				setTimeout(runNow, sim.delayMs);
+				const cleanup = new Promise((resolve) => {
+					setTimeout(() => {
+						try {
+							runNow();
+						} finally {
+							resolve();
+						}
+					}, sim.delayMs);
+				}).then(() => {
+					this.activePromises.delete(cleanup);
+				}, () => {
+					this.activePromises.delete(cleanup);
+				});
+				this.activePromises.add(cleanup);
 			} else runNow();
 		}
 		compileFunction(cacheKey, source) {
 			let fn = this.fnCache.get(cacheKey);
 			if (!fn) {
-				const transformed = source.replace(/^\s*export\s+default\s+/m, "return ");
-				const exported = new Function(transformed)();
+				const transformed = `"use strict";\n` + source.replace(/^\s*export\s+default\s+/m, "return ");
+				let factory;
+				try {
+					factory = new Function(...SHADOWED_DOM_GLOBALS, transformed);
+				} catch (err) {
+					if (err instanceof SyntaxError && /\basync\b/.test(transformed)) {
+						const downleveled = transformed.replace(/\breturn\s+async\s+function\s*([A-Za-z0-9_$]*)\s*\(([^)]*)\)\s*\{([\s\S]*)\}\s*$/, "return function $1($2) { return Promise.resolve().then(() => {$3}); }").replace(/\breturn\s+async\s*\(([^)]*)\)\s*=>\s*\{([\s\S]*)\}\s*$/, "return ($1) => Promise.resolve().then(() => {$2})").replace(/\breturn\s+async\s*\(([^)]*)\)\s*=>\s*([\s\S]*)$/, "return ($1) => Promise.resolve().then(() => ($2))").replace(/\bawait\s+/g, "");
+						factory = new Function(...SHADOWED_DOM_GLOBALS, downleveled);
+					} else throw err;
+				}
+				const exported = factory(...SHADOWED_DOM_GLOBALS.map(() => void 0));
 				if (typeof exported !== "function") throw new Error(`函数文件没有导出一个函数`);
 				fn = exported;
 				this.fnCache.set(cacheKey, fn);
@@ -2705,9 +2881,9 @@ var VF = (function(exports) {
 						batch.lines.push(`关闭窗口 ${id}`);
 					}
 				} else if ("call" in step) {
-					var _this$project$logic$a5;
+					var _this$project$logic$a8;
 					const name = step.call;
-					const def = (_this$project$logic$a5 = this.project.logic.actions) === null || _this$project$logic$a5 === void 0 ? void 0 : _this$project$logic$a5[name];
+					const def = (_this$project$logic$a8 = this.project.logic.actions) === null || _this$project$logic$a8 === void 0 ? void 0 : _this$project$logic$a8[name];
 					if (!def) batch.lines.push(`错误：动作“${name}”没有在 actions 中定义`);
 					else {
 						var _def$input;
@@ -2831,16 +3007,57 @@ var VF = (function(exports) {
 	//#region src/export/qt-runtime.ts
 	let runtime;
 	let scene;
-	/** 等界面绑定层处理的业务事件 */
+	/** 等界面绑定层处理的业务事件与动作请求 */
 	let outgoing = [];
+	let nextTimerId = 1;
+	let pendingTimers = [];
+	const timerCallbacks = /* @__PURE__ */ new Map();
+	const g = Function("return this")();
+	if (typeof g.setTimeout !== "function") {
+		g.setTimeout = (cb, ms) => {
+			const id = nextTimerId++;
+			const delayMs = Math.max(0, Math.round(Number(ms !== null && ms !== void 0 ? ms : 0)));
+			timerCallbacks.set(id, cb);
+			pendingTimers.push({
+				id,
+				delayMs
+			});
+			return id;
+		};
+		g.clearTimeout = (id) => {
+			if (id !== void 0) {
+				timerCallbacks.delete(id);
+				pendingTimers = pendingTimers.filter((t) => t.id !== id);
+			}
+		};
+	}
 	function take() {
 		const list = outgoing;
 		outgoing = [];
 		return list;
 	}
+	function takePending() {
+		return take();
+	}
+	function takeTimers() {
+		const list = pendingTimers;
+		pendingTimers = [];
+		return list;
+	}
+	function fireTimer(id) {
+		const cb = timerCallbacks.get(id);
+		if (cb) {
+			timerCallbacks.delete(id);
+			cb();
+		}
+		return take();
+	}
 	function init(json) {
 		const data = JSON.parse(json);
 		scene = data.scene;
+		outgoing = [];
+		pendingTimers = [];
+		timerCallbacks.clear();
 		const components = /* @__PURE__ */ new Map();
 		for (const type of Object.keys(data.components)) components.set(type, { decl: data.components[type] });
 		runtime = new Runtime({
@@ -2854,8 +3071,17 @@ var VF = (function(exports) {
 			onLog() {},
 			raiseBusiness(name, args) {
 				outgoing.push({
+					kind: "event",
 					name,
 					args
+				});
+				return true;
+			},
+			raiseAction(name, input) {
+				outgoing.push({
+					kind: "action",
+					name,
+					args: input
 				});
 				return true;
 			}
@@ -2874,12 +3100,28 @@ var VF = (function(exports) {
 		runtime.simulate(name, args !== null && args !== void 0 ? args : {});
 		return take();
 	}
+	function simulateAction(name, input) {
+		runtime.runActionDefault(name, input !== null && input !== void 0 ? input : {});
+		return take();
+	}
+	function finishActionSuccess(name, result) {
+		runtime.finishActionSuccess(name, result === null ? void 0 : result);
+		return take();
+	}
+	function finishActionError(name, message) {
+		runtime.finishActionError(name, message);
+		return take();
+	}
 	function request(name, args) {
 		runtime.request(name, args !== null && args !== void 0 ? args : {});
 		return take();
 	}
-	function setActionSim(name, mode) {
-		runtime.setActionSimulation(name, { mode });
+	function closeWindow(id) {
+		runtime.closeWindow(id);
+		return take();
+	}
+	function setActionSim(name, mode, delayMs) {
+		runtime.setActionSimulation(name, _objectSpread2({ mode }, delayMs !== void 0 && Number.isFinite(delayMs) ? { delayMs: Math.max(0, delayMs) } : {}));
 	}
 	/** 业务把自己管的状态写回来。成功返回 null，否则返回原因。 */
 	function setState(path, value) {
@@ -2916,16 +3158,23 @@ var VF = (function(exports) {
 		return dumpRuntime(runtime, scene);
 	}
 	//#endregion
+	exports.closeWindow = closeWindow;
 	exports.computeLayout = computeLayout;
 	exports.dispatch = dispatch;
 	exports.dump = dump;
+	exports.finishActionError = finishActionError;
+	exports.finishActionSuccess = finishActionSuccess;
+	exports.fireTimer = fireTimer;
 	exports.getState = getState;
 	exports.init = init;
 	exports.request = request;
 	exports.setActionSim = setActionSim;
 	exports.setState = setState;
 	exports.simulate = simulate;
+	exports.simulateAction = simulateAction;
 	exports.start = start;
+	exports.takePending = takePending;
+	exports.takeTimers = takeTimers;
 	exports.views = views;
 	return exports;
 })({});

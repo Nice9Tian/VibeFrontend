@@ -684,7 +684,7 @@ objects:
 | `SpinBox` | 数字框 | `QSpinBox` | `min`、`max`、`step`、`suffix`、`value*`、`enabled*` | `bind: number`，事件 `change` |
 | `ComboBox` | 下拉框 | `QComboBox` | `options*`（逗号分隔的选项字符串，如 `"1080p,720p,Square"`）、`value*`、`enabled*` | `bind: string`，事件 `change` |
 | `CheckBox` | 复选框 | `QCheckBox` | `text*`、`value*`、`enabled*` | `bind: boolean`，事件 `change` |
-| `List` | 列表 | `QListWidget` | `items*`（数组状态）、`value*`（当前选中行下标，从 0 开始）、`emptyText`、`enabled*` | `bind: number`，事件 `change` / `select` |
+| `List` | 列表 | `QListWidget` | `items*`（数组状态）、`value*`（当前选中行下标，从 0 开始）、`checkable`（是否在行首显示圆点指示）、`emptyText`、`enabled*` | `bind: number`，事件 `change` / `select` |
 | `Separator` | 分隔线 | `QFrame` | `orientation`（`horizontal` / `vertical`） | — |
 
 ### 11.4 数组状态与增删移动
@@ -753,7 +753,9 @@ export default function syncPresetDimensions(state, param) {
 ```
 
 - 函数接收当前状态的只读快照 `state` 和事件参数 `param`，返回一个 `{ "状态路径": 新值 }` 对象，运行层会把返回的新值批量写入对应的界面状态。
-- **禁止使用网页元素**：因为逻辑函数在导出后会原样放进 Qt 的 JS 引擎（`QJSEngine`）运行，检查器会检查 `functions/*.js`，禁止出现 `document`、`window`、`HTMLElement`、`localStorage`、`fetch` 等浏览器专属对象。
+- **禁止使用网页元素（静态检查 + 运行时隔离）**：因为逻辑函数在导出后会原样放进 Qt 的无 DOM JS 引擎（`QJSEngine`）运行：
+  1. **静态检查**：检查器通过单遍词法扫描检查 `functions/*.js`（包括模板字符串 `${...}` 内的表达式与 `\uXXXX` / `\u{...}` Unicode 转义解码），禁止出现 `document`、`window`、`globalThis`、`self`、`top`、`parent`、`frames`、`Function`、`eval`、`HTMLElement`、`localStorage`、`fetch` 等浏览器专属对象或动态逃逸入口。
+  2. **运行时全局隔离**：在网页端运行层（`Runtime`）编译执行逻辑函数时，函数以 `"use strict"` 严格模式运行，并将 `window`、`document`、`globalThis`、`self`、`top`、`parent`、`frames`、`navigator`、`location`、`localStorage`、`sessionStorage`、`fetch`、`XMLHttpRequest`、`HTMLElement` 等浏览器全局名字全部遮蔽为 `undefined`（未绑定 `this` 也为 `undefined`），即使绕过静态检查也无法在运行时访问宿主 DOM。
 
 ### 11.6 多窗口与模态对话框
 
@@ -778,8 +780,8 @@ export default function syncPresetDimensions(state, param) {
 - closeWindow: newProjectDialog
 ```
 
-- `modal: true`（默认）表示模态对话框：它打开期间，背后的主窗口不能点击，直到它被 `closeWindow` 关闭。
-- 导出成 Qt 时，`Dialog` 节点生成对应的 `QDialog`（设好 `setModal`）。
+- `modal: true`（默认）表示模态对话框：它打开期间，背后的主窗口不能点击，直到它被关闭。
+- 导出成 Qt 时，`Dialog` 节点生成对应的 `QDialog`（设好 `setModal`），并且对话框被用户通过 `Esc` 键或标题栏 `×` 按钮关闭（`QDialog::finished` / `QEvent::Close`）时会自动同步回运行层，把该对话框的打开状态置为 `false`，立即解除对主窗口的模态锁定。
 
 ### 11.7 带参数的事件与请求事件（业务 → 界面）
 
@@ -820,7 +822,8 @@ actions:
       - set: project.statusMessage = error.message
 ```
 
-- 在工具的预览栏（以及命令行测试步骤 `mock:<动作名>:real|success|error`）中，可以把每个动作切换为三种模式之一：
-  1. **真跑（`real`）**：执行 `actions/<动作名>.js` 默认导出的函数，把返回值作为 `result` 传给 `onSuccess`（抛出异常则把错误消息传给 `onError`）。
-  2. **模拟成功（`success`）**：不执行实现文件，直接把 `mockResult` 作为 `result` 执行 `onSuccess`。
-  3. **模拟失败（`error`）**：不执行实现文件，直接把 `mockError` 作为 `error.message` 执行 `onError`。
+- 在工具的预览栏（以及命令行测试步骤 `mock:<动作名>:real|success|error[:delayMs]`）中，可以把每个动作切换为三种模式之一，并可指定模拟延迟毫秒数 `delayMs`（也可以在动作定义里写 `delayMs`）：
+  1. **真跑（`real`）**：执行 `actions/<动作名>.js` 默认导出的函数（支持同步返回或异步返回 `Promise`），把返回值作为 `result` 传给 `onSuccess`（抛出异常或 `Promise` reject 则把错误消息传给 `onError`）。
+  2. **模拟成功（`success`）**：不执行实现文件，把 `mockResult` 作为 `result` 执行 `onSuccess`。
+  3. **模拟失败（`error`）**：不执行实现文件，把 `mockError` 作为 `error.message` 执行 `onError`。
+- 导出成 Qt 后，每个动作都会在 `vf::BusinessInterface` 上暴露信号 `action<Name>Requested(const QVariantMap &input)` 以及完成回调 `finish<Name>Success(const QVariant &result)` 和 `finish<Name>Error(const QString &message)`：业务连接该信号即可接管动作并在完成后回调成功或失败；若业务未连接该信号，则自动回退到内置的 `actions/<动作名>.js` 或模拟模式。

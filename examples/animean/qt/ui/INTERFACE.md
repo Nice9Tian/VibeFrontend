@@ -6,7 +6,9 @@
 
 ## 和上一次导出相比
 
-没有变化的记录（这是第一次导出，或者接口一直没有变过）。
+最近一次有变化的导出，变了这些：
+
+- 新增动作 exportClip
 
 ## 业务接口层
 
@@ -23,6 +25,12 @@
 | 事件 | 调用函数 | 含义 |
 | --- | --- | --- |
 | `notifyStatus` | `requestNotifyStatus(const QString &message)` | 业务通知界面在状态栏显示一条消息 |
+
+### 动作（界面 ↔ 业务）
+
+| 动作 | 信号（界面 → 业务） | 成功回调 / 失败回调（业务 → 界面） |
+| --- | --- | --- |
+| `exportClip` | `actionExportClipRequested(const QVariantMap &input)` | `finishExportClipSuccess(result)` / `finishExportClipError(message)` |
 
 ### 业务管的状态（业务 → 界面）
 
