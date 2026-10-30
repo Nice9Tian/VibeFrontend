@@ -14,6 +14,7 @@
 
 #include "selectionattention.h"
 
+class AnimeanBusiness;
 class AssetPanel;
 class CentralPaintArea;
 class ForcePadPanel;
@@ -47,6 +48,7 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
     void setStatusText(const QString &text);
+    AnimeanBusiness *business() const;
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -249,8 +251,10 @@ private:
     void refreshAssetList(int selectedRow);
     void setPythonUiFrozen(bool frozen);
     ParentWindow *parentWindowNamed(const QString &name) const;
+    void bindPaintViewToBusiness(PaintOpenGLWidget *view);
 
     Ui::MainWindow *ui;
+    AnimeanBusiness *m_business = nullptr;
     PaintOpenGLWidget *m_paintWidget = nullptr;
     PaintOpenGLWidget *m_childPaintWidget = nullptr;
     PaintOpenGLWidget *m_activePaintWidget = nullptr;
