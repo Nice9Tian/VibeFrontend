@@ -20,10 +20,14 @@ interface Box {
   height: number;
 }
 
-const SIZES: Array<{ width: number; height: number }> = [
+const SIZES: Array<{ width: number; height: number; note?: string }> = [
   { width: 1280, height: 800 },
   { width: 1440, height: 900 },
   { width: 1024, height: 720 },
+  { width: 800, height: 600 },
+  { width: 1280, height: 800, note: "从 800x600 恢复到 1280x800" },
+  { width: 800, height: 600, note: "从 1280x800 直接缩放到 800x600" },
+  { width: 1280, height: 800, note: "再次从 800x600 恢复到 1280x800" },
 ];
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,30 +64,122 @@ function buildHtmlPage(): string {
       position: relative;
       overflow: hidden;
       user-select: none;
+      --color-text: #e2e8f0;
+      --color-heading: #f8fafc;
+      --color-muted: #94a3b8;
+      --color-surface: #1e293b;
+      --color-border: #334155;
     }
   </style>
 </head>
 <body class="preview">
   <div id="stage"></div>
+  <script>
+    window.addEventListener("error", (e) => {
+      fetch("/report", { method: "POST", body: JSON.stringify({ error: String(e.message || e.error || e) }) });
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      fetch("/report", { method: "POST", body: JSON.stringify({ error: String(e.reason?.stack || e.reason || e) }) });
+    });
+  </script>
   <script type="module">
+    import { graphics as computeQtGraphics, init as initQtRuntime } from "/src/export/qt-runtime.ts";
     import {
       allWindowIds,
       childrenOfNode,
       computeSceneLayout,
+      isPaintEffect,
       LAYOUT_TYPE_KINDS,
       MOUSE_EVENTS,
+      paintEffectForNode,
       STANDARD_COMPONENTS,
     } from "/src/model.ts";
+    import { mountStateImageControl, STANDARD_COMPONENT_LIST } from "/standard/index.ts";
     import { Runtime } from "/src/runtime.ts";
 
     const projectRes = await fetch("/project-data.json");
     const projectData = await projectRes.json();
     const project = {
       ...projectData,
-      components: new Map(),
-      effects: new Map(),
+      components: new Map(projectData.components ?? []),
+      effects: new Map(projectData.effects ?? []),
       docs: new Map(),
     };
+    initQtRuntime(JSON.stringify({
+      scene: project.scene,
+      logic: project.logic,
+      components: {},
+      functions: project.functions,
+      actionSources: project.actionSources,
+    }));
+
+    async function importCode(code) {
+      const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+      try {
+        return await import(url);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    for (const [, comp] of project.components) {
+      if (!comp.source) continue;
+      const mod = await importCode(comp.source);
+      const rawCreate = mod.default;
+      const stateImages = comp.decl.stateImages;
+      const svgFiles = comp.svgFiles ?? {};
+      if (stateImages) {
+        comp.create = (el, ctx) => {
+          const userInst = rawCreate(el, { ...ctx, stateImages, svgFiles });
+          const stateInst = mountStateImageControl(el, {
+            props: ctx.props,
+            emit: ctx.emit,
+            mode: ctx.mode,
+            stateImages,
+            svgFiles,
+          });
+          return {
+            update(next) {
+              userInst?.update?.(next);
+              stateInst.update(next);
+            },
+            destroy() {
+              userInst?.destroy?.();
+              stateInst.destroy();
+            },
+          };
+        };
+      } else {
+        comp.create = rawCreate;
+      }
+    }
+
+    for (const [, eff] of project.effects) {
+      const entry = eff.decl.entry ?? "index.js";
+      const src = eff.files?.[entry];
+      if (!src) continue;
+      const mod = await importCode(src);
+      if (isPaintEffect(eff.decl.kind)) {
+        eff.paint = mod.default;
+      } else {
+        eff.play = mod.default;
+      }
+    }
+
+    for (const std of STANDARD_COMPONENT_LIST) {
+      if (std.styleText) {
+        const styleEl = document.createElement("style");
+        styleEl.textContent = \`@scope ([data-vf-type="\${std.decl.type}"]) { \${std.styleText} }\`;
+        document.head.append(styleEl);
+      }
+    }
+    for (const comp of project.components.values()) {
+      if (comp.styleText) {
+        const styleEl = document.createElement("style");
+        styleEl.textContent = \`@scope ([data-vf-type="\${comp.decl.type}"]) { \${comp.styleText} }\`;
+        document.head.append(styleEl);
+      }
+    }
 
     const runtime = new Runtime(project);
     runtime.start();
@@ -138,7 +234,7 @@ function buildHtmlPage(): string {
       } else if (n.type === "External") {
         body.textContent = \`外部容器 \${id}\`;
       } else {
-        const component = STANDARD_COMPONENTS.get(n.type);
+        const component = project.components.get(n.type) ?? STANDARD_COMPONENTS.get(n.type);
         if (component?.create) {
           entry.instance = component.create(body, {
             props: runtime.view(id).props,
@@ -173,7 +269,13 @@ function buildHtmlPage(): string {
       if (root.menuBar) {
         const bar = document.createElement("div");
         const mh = root.menuBar.height ?? 28;
-        bar.style.cssText = \`position:absolute;left:0;top:0;width:100%;height:\${mh}px;display:flex;align-items:center;gap:4px;padding:0 8px;background:#111827;border-bottom:1px solid #263042;box-sizing:border-box;z-index:20;font-size:12px;color:#e2e8f0;\`;
+        bar.style.cssText = \`position:absolute;left:0;top:0;width:100%;height:\${mh}px;display:flex;align-items:center;gap:12px;padding:0 10px;background:#111827;border-bottom:1px solid #263042;box-sizing:border-box;z-index:20;font-size:12px;color:#e2e8f0;\`;
+        for (const m of root.menuBar.menus ?? []) {
+          const item = document.createElement("span");
+          item.style.cssText = "font-weight:600;color:#cbd5e1;padding:2px 6px;border-radius:4px;background:#1e293b;";
+          item.textContent = m.title;
+          bar.append(item);
+        }
         stage.append(bar);
       }
 
@@ -192,9 +294,23 @@ function buildHtmlPage(): string {
         getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
         getDockLayout: (wid) => runtime.getDockLayout(wid),
       });
+      const gfxObj = computeQtGraphics(rootSize.width, rootSize.height);
       for (const [id, entry] of mounted) {
         const view = runtime.view(id);
         const n = node(id);
+        const gfx = gfxObj[id];
+        if (gfx) {
+          Object.assign(entry.wrapper.style, {
+            left: \`\${gfx.x}px\`,
+            top: \`\${gfx.y}px\`,
+            width: \`\${gfx.width}px\`,
+            height: \`\${gfx.height}px\`,
+          });
+          const effectiveVis = boxes.get(id) ? boxes.get(id).visible : view.visible;
+          entry.wrapper.style.display = effectiveVis ? "" : "none";
+          entry.wrapper.toggleAttribute("data-vf-disabled", !view.enabled);
+          continue;
+        }
         const box = boxes.get(id);
         if (box && n?.type !== "Line") {
           if (n?.type === "Dialog" && id !== project.scene.root) {
@@ -234,6 +350,13 @@ function buildHtmlPage(): string {
           if (header) header.textContent = String(view.props.title ?? n?.title ?? id);
         }
         entry.instance?.update?.(view.props);
+        const paintName = paintEffectForNode(project, id);
+        if (paintName) {
+          const paintEff = project.effects.get(paintName);
+          const w = Math.max(1, box?.width ?? n?.width ?? 100);
+          const h = Math.max(1, box?.height ?? n?.height ?? 100);
+          paintEff?.paint?.(entry.body, { props: view.props, width: w, height: h });
+        }
       }
     }
 
@@ -284,40 +407,50 @@ function buildHtmlPage(): string {
 
     const sizes = ${JSON.stringify(SIZES)};
     renderStage(sizes[0]);
-
-    const measuredScenarios = [];
-    for (const size of sizes) {
-      applyViews(size);
+    if (new URLSearchParams(window.location.search).get("shot") === "1") {
+      applyViews(sizes[0]);
       await nextFrame();
-      measuredScenarios.push(measureDomBoxes());
-    }
-
-    // 第 4 个场景：在 1024x720 下真实点击 DOM 中的 newProjectBtn 打开新建项目对话框后量取 DOM
-    const lastSize = sizes[sizes.length - 1];
-    const btnEl = stage.querySelector('[data-vf-id="newProjectBtn"] button') || stage.querySelector('[data-vf-id="newProjectBtn"]');
-    if (btnEl) {
-      btnEl.click();
     } else {
-      runtime.dispatch("newProjectBtn", "click");
-    }
-    applyViews(lastSize);
-    await nextFrame();
-    measuredScenarios.push(measureDomBoxes());
+      const measuredScenarios = [];
+      for (const size of sizes) {
+        applyViews(size);
+        await nextFrame();
+        measuredScenarios.push(measureDomBoxes());
+      }
 
-    await fetch("/report", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userAgent: navigator.userAgent,
-        scenarios: measuredScenarios,
-      }),
-    });
+      if (project.scene.nodes["newProjectBtn"]) {
+        // 第 5 个场景：在最后一个尺寸下真实点击 DOM 中的 newProjectBtn 打开新建项目对话框后量取 DOM
+        const lastSize = sizes[sizes.length - 1];
+        const btnEl = stage.querySelector('[data-vf-id="newProjectBtn"] button') || stage.querySelector('[data-vf-id="newProjectBtn"]');
+        if (btnEl) {
+          btnEl.click();
+        } else {
+          runtime.dispatch("newProjectBtn", "click");
+        }
+        applyViews(lastSize);
+        await nextFrame();
+        measuredScenarios.push(measureDomBoxes());
+      }
+
+      await fetch("/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userAgent: navigator.userAgent,
+          scenarios: measuredScenarios,
+        }),
+      });
+    }
   </script>
 </body>
 </html>`;
 }
 
-async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadProjectFiles>>): Promise<{
+async function measureInHeadlessBrowser(
+  project: Awaited<ReturnType<typeof loadProjectFiles>>,
+  projectDir: string,
+  webShotOutPath?: string,
+): Promise<{
   userAgent: string;
   scenarios: Array<Record<string, Box>>;
 }> {
@@ -341,7 +474,9 @@ async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadP
           res.writeHead(200, { "Content-Type": "text/plain" });
           res.end("ok");
           try {
-            resolveReport(JSON.parse(body));
+            const parsed = JSON.parse(body);
+            if (parsed.error) rejectReport(new Error("Browser error: " + parsed.error));
+            else resolveReport(parsed);
           } catch (e) {
             rejectReport(e as Error);
           }
@@ -354,6 +489,14 @@ async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadP
         return;
       }
       if (urlPath === "/project-data.json") {
+        const serializedComponents = Array.from(project.components.entries()).map(([k, comp]) => {
+          let styleText: string | undefined;
+          if (comp.folder) {
+            const sp = path.join(projectDir, "components", comp.folder, comp.decl.style ?? "style.css");
+            if (fs.existsSync(sp)) styleText = fs.readFileSync(sp, "utf8");
+          }
+          return [k, { ...comp, styleText }];
+        });
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
         res.end(
           JSON.stringify({
@@ -363,6 +506,8 @@ async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadP
             logic: project.logic,
             functions: project.functions,
             actionSources: project.actionSources,
+            components: serializedComponents,
+            effects: Array.from(project.effects.entries()),
           }),
         );
         return;
@@ -374,8 +519,14 @@ async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadP
         return;
       }
       if (filePath.endsWith(".json")) {
-        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-        res.end(fs.readFileSync(filePath, "utf8"));
+        const rawJson = fs.readFileSync(filePath, "utf8");
+        if (req.headers["sec-fetch-dest"] === "script" || (req.headers.accept ?? "").includes("javascript")) {
+          res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8" });
+          res.end(`export default ${rawJson};`);
+        } else {
+          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+          res.end(rawJson);
+        }
         return;
       }
       if (filePath.endsWith(".css")) {
@@ -384,7 +535,7 @@ async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadP
         return;
       }
       if (filePath.endsWith(".ts") || filePath.endsWith(".js")) {
-        const raw = fs.readFileSync(filePath, "utf8");
+        const raw = fs.readFileSync(filePath, "utf8").replace(/\s+with\s*\{\s*type:\s*["']json["']\s*\}/g, "");
         const js = filePath.endsWith(".ts")
           ? ts.transpileModule(raw, {
               compilerOptions: {
@@ -428,7 +579,36 @@ async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadP
   }, 15000);
 
   try {
-    return await reportPromise;
+    const res = await reportPromise;
+    if (webShotOutPath) {
+      const shotProfileDir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-shot-chrome-"));
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const shotProc = spawn(
+            browserExe,
+            [
+              "--headless=new",
+              "--disable-gpu",
+              "--hide-scrollbars",
+              "--no-first-run",
+              "--no-default-browser-check",
+              "--window-size=1280,800",
+              `--user-data-dir=${shotProfileDir}`,
+              `--screenshot=${webShotOutPath}`,
+              `${url}?shot=1`,
+            ],
+            { stdio: "ignore" },
+          );
+          shotProc.on("exit", () => resolve());
+          shotProc.on("error", reject);
+        });
+      } finally {
+        try {
+          fs.rmSync(shotProfileDir, { recursive: true, force: true });
+        } catch {}
+      }
+    }
+    return res;
   } finally {
     clearTimeout(timeout);
     try {
@@ -442,33 +622,46 @@ async function measureInHeadlessBrowser(project: Awaited<ReturnType<typeof loadP
 }
 
 async function main(): Promise<number> {
-  const [projectArg, qtExeArg] = process.argv.slice(2);
+  const [projectArg, qtExeArg, webShotArg] = process.argv.slice(2);
   if (!projectArg || !qtExeArg) {
-    console.log("用法：node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>");
+    console.log("用法：node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径> [Web截图输出路径]");
     return 2;
   }
   const projectDir = path.resolve(projectArg);
   const qtExe = path.resolve(qtExeArg);
+  const webShotOutPath = webShotArg ? path.resolve(webShotArg) : undefined;
   const project = await loadProjectFiles(nodeIO(projectDir), null);
+  const hasNewProjectBtn = Boolean(project.scene.nodes["newProjectBtn"]);
 
   // 1. 启动无头浏览器渲染真实 DOM 并通过 getBoundingClientRect() 量取各场景下每个可见控件的屏幕坐标
-  const domMeasured = await measureInHeadlessBrowser(project);
+  const domMeasured = await measureInHeadlessBrowser(project, projectDir, webShotOutPath);
   console.log(`DOM 实测浏览器：${domMeasured.userAgent}`);
 
   // 2. 启动 Qt 可执行文件量取相同场景下的真实 QWidget 几何
+  const qtEnv = { ...process.env };
+  if (process.platform === "win32") {
+    const extraDirs = ["C:\\Qt\\6.9.1\\mingw_64\\bin", "C:\\Qt\\Tools\\mingw1310_64\\bin"].filter((d) =>
+      fs.existsSync(d),
+    );
+    if (extraDirs.length > 0) {
+      const pathKey = Object.keys(qtEnv).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+      qtEnv[pathKey] = [...extraDirs, qtEnv[pathKey] ?? ""].join(";");
+    }
+  }
   const steps = [
     ...SIZES.map((s) => `resize:${s.width}x${s.height};layout`),
-    "click:newProjectBtn;layout",
+    ...(hasNewProjectBtn ? ["click:newProjectBtn;layout"] : []),
   ].join(";");
-  const rawOut = execFileSync(qtExe, ["--steps", steps], { encoding: "utf8" });
+  const rawOut = execFileSync(qtExe, ["--steps", steps], { encoding: "utf8", env: qtEnv });
   const layoutLines = rawOut
     .split(/\r?\n/)
     .filter((line) => line.startsWith("layout "))
     .map((line) => JSON.parse(line.slice("layout ".length)) as Record<string, Box>);
 
-  if (layoutLines.length !== SIZES.length + 1 || domMeasured.scenarios.length !== SIZES.length + 1) {
+  const expectedCount = SIZES.length + (hasNewProjectBtn ? 1 : 0);
+  if (layoutLines.length !== expectedCount || domMeasured.scenarios.length !== expectedCount) {
     console.log(
-      `错误：期望收到 ${SIZES.length + 1} 个场景的布局数据，实际 DOM=${domMeasured.scenarios.length}，Qt=${layoutLines.length}`,
+      `错误：期望收到 ${expectedCount} 个场景的布局数据，实际 DOM=${domMeasured.scenarios.length}，Qt=${layoutLines.length}`,
     );
     return 1;
   }
@@ -477,8 +670,8 @@ async function main(): Promise<number> {
   let failed = false;
 
   const labels = [
-    ...SIZES.map((size) => `窗口尺寸 ${size.width}x${size.height}`),
-    `窗口尺寸 ${SIZES[SIZES.length - 1].width}x${SIZES[SIZES.length - 1].height}（打开新建项目对话框）`,
+    ...SIZES.map((size) => `窗口尺寸 ${size.width}x${size.height}${size.note ? `（${size.note}）` : ""}`),
+    ...(hasNewProjectBtn ? [`窗口尺寸 ${SIZES[SIZES.length - 1].width}x${SIZES[SIZES.length - 1].height}（打开新建项目对话框）`] : []),
   ];
 
   for (let i = 0; i < labels.length; i++) {
@@ -530,7 +723,7 @@ async function main(): Promise<number> {
     for (const msg of mismatches) console.log(msg);
   }
 
-  console.log(`总结：四个实测场景下 DOM 与 Qt 最大偏差 = ${globalMaxDiff}px（阈值 3px），结果：${failed ? "未通过" : "全部通过"}`);
+  console.log(`总结：${labels.length} 个实测场景下 DOM 与 Qt 最大偏差 = ${globalMaxDiff}px（阈值 3px），结果：${failed ? "未通过" : "全部通过"}`);
   return failed ? 1 : 0;
 }
 

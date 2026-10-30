@@ -650,11 +650,11 @@ export default function paint(el, { props, emit, mode }) {
 
 ## 11. 排版、标准控件、窗口分区与扩展逻辑
 
-本节列出在基础规则之上新增的语言规格：五种排版与尺寸规则、主窗口分区与停靠面板、8 种自带标准控件、数组状态、逻辑 JS 函数、多窗口与模态对话框、带参事件与请求事件、以及动作调用与模拟。这些写法在工具预览和导出成 Qt 时具有一致的行为。
+本节列出在基础规则之上新增的语言规格：六种排版与尺寸规则（含换行 `Flow` / `wrap`）、主窗口分区、停靠面板与菜单全部形态、16 种自带标准控件（含由数据生成的表单 `DataForm` 与列表/树拖拽重排）、数组状态、逻辑 JS 函数、多窗口与模态对话框、带参事件与请求事件、动作调用与模拟、以及预览时钟（`clock`）。这些写法在工具预览和导出成 Qt 时具有一致的行为。
 
-### 11.1 五种排版与控件尺寸规则
+### 11.1 六种排版与控件尺寸规则
 
-容器除了自由摆放子控件外，还可以用 `VBox`、`HBox`、`Grid`、`Form`、`Stack` 五种类型（或在节点上写 `layout` 字段）按规则自动计算子控件的位置和大小，导出成 Qt 时对应 `QVBoxLayout`、`QHBoxLayout`、`QGridLayout` 和层叠容器：
+容器除了自由摆放子控件外，还可以用 `VBox`、`HBox`、`Flow`、`Grid`、`Form`、`Stack` 六种类型（或在节点上写 `layout` 字段）按规则自动计算子控件的位置和大小，导出成 Qt 时对应 `QVBoxLayout`、`QHBoxLayout`、`VfFlowLayout`、`QGridLayout` 和层叠容器：
 
 ```json
 "inspectorDock": {
@@ -669,7 +669,8 @@ export default function paint(el, { props, emit, mode }) {
 | 排版类型 / `layout.kind` | 含义 | 常用字段 |
 | --- | --- | --- |
 | `VBox` / `"vbox"` | 竖排：子控件从上到下依次排列 | `padding`（数字或 `[上, 右, 下, 左]`）、`gap` |
-| `HBox` / `"hbox"` | 横排：子控件从左到右依次排列 | `padding`、`gap` |
+| `HBox` / `"hbox"` | 横排：子控件从左到右依次排列；写 `wrap: true` 时与 `Flow` 相同 | `padding`、`gap`、`wrap` |
+| `Flow` / `"flow"` | 换行横排：子控件从左到右排列，一行放不下时自动折到下一行 | `padding`、`gap`、`rowGap`、`columnGap` |
 | `Grid` / `"grid"` | 网格：按行列排列，子控件可写 `row`、`column`、`rowSpan`、`columnSpan` | `columns`、`gap`、`rowGap`、`columnGap`、`columnStretch`、`rowStretch` |
 | `Form` / `"form"` | 表单：子控件两两成对（左列标签、右列输入控件），左列宽度固定为 `labelWidth`（默认 96），右列自动撑满 | `labelWidth`、`padding`、`gap`、`rowGap`、`columnGap` |
 | `Stack` / `"stack"` | 层叠：同一时间只显示 `props.currentIndex`（或 `props.currentPage`）指向的那一页子容器 | `padding`；在 YAML `props` 中控制 `currentIndex` 或 `currentPage` |
@@ -697,7 +698,7 @@ export default function paint(el, { props, emit, mode }) {
 | `fixedWidth`、`fixedHeight` | 固定尺寸（也可以写 `horizontal: "fixed"` 或 `vertical: "fixed"`） |
 | `stretch` | 在主轴方向分配剩余空间的权重（正整数按比例分配，`0` 或不写表示不伸缩；也可以写 `horizontal: "expanding"` 或 `vertical: "expanding"`） |
 
-### 11.2 主窗口分区与停靠面板
+### 11.2 主窗口分区、停靠面板与菜单全部形态
 
 根窗口 `Window` 可以配置菜单栏（`menuBar`）、状态栏（`statusBar`）、中央区（`central`）和四个方向的停靠面板（`docks`，对应 `left`、`right`、`top`、`bottom` 四个停靠区），并可用 `dockLayout` 描述停靠区的厚度、并排分栏（`groups`）、叠页签（`tabs` + `active`）和独立浮窗（`floating`）。导出成 Qt 时对应 `QMainWindow` 的 `QMenuBar`、`QStatusBar`、`centralWidget` 和 `QDockWidget`：
 
@@ -711,11 +712,19 @@ export default function paint(el, { props, emit, mode }) {
     "menus": [
       {
         "id": "fileMenu", "title": "文件",
-        "items": [{ "id": "menuNewProject", "text": "新建项目...", "emit": "openNewProject" }]
+        "items": [
+          { "id": "menuNewProject", "text": "新建项目...", "shortcut": "Ctrl+N", "emit": "openNewProject" },
+          { "id": "menuExportSub", "text": "导出", "items": [{ "id": "menuExportClip", "text": "导出片段..." }] }
+        ]
       },
       {
         "id": "viewMenu", "title": "视图",
-        "items": [{ "id": "menuToggleLayers", "text": "图层面板", "dock": "layersDock", "checkable": true, "checked": true }]
+        "items": [
+          { "id": "menuToggleLayers", "text": "图层面板", "dock": "layersDock", "checkable": true, "checked": true },
+          { "id": "menuSep1", "separator": true },
+          { "id": "menuFps24", "text": "24 fps", "kind": "radio", "group": "fpsGroup", "checked": true },
+          { "id": "menuFps30", "text": "30 fps", "kind": "radio", "group": "fpsGroup", "checked": false }
+        ]
       }
     ]
   },
@@ -743,21 +752,38 @@ export default function paint(el, { props, emit, mode }) {
   4. **拖出成浮窗与恢复（`float` / `restore`）**：点击标题栏上的 `⧉` 按钮（或双击标题栏、或拖到空白处）将面板浮出为独立浮窗，浮窗右下角可拖拽缩放大小；点击 `↙` 按钮（或再次双击标题栏）恢复回原停靠区。
   5. **拖动分隔条改大小（`resize` / `resizeSplit`）**：拖动停靠区与中央区之间的分隔条调整停靠区宽度/高度，或拖动并排面板之间的分隔条调整各分栏尺寸。
   6. **关闭与从菜单重新打开（`close` / `open`）**：点击标题栏上的 `×` 按钮关闭面板；菜单项如果写了 `"dock": "<停靠面板ID>"`，点击该菜单项会自动切换对应停靠面板的显示和隐藏，并同步菜单项的勾选状态。
-- 菜单项如果写了 `"emit": "<全局事件名>"`（也可以在 YAML `objects.<菜单项ID>.events.click` 中写步骤），点击时触发对应事件。
+- **菜单的全部形态**：
+  1. **子菜单**：菜单项写 `items` 数组即可递归嵌套多层子菜单。
+  2. **分隔线**：写 `"separator": true` 或 `"kind": "separator"`。
+  3. **快捷键**：写 `"shortcut": "Ctrl+N"` 等，在菜单项右侧显示快捷键提示，在预览模式与导出后的 `QAction` 中均可按键触发。
+  4. **可勾选菜单项**：写 `"checkable": true`（或 `"kind": "check"`）与初始 `"checked"`，也可在 YAML `objects.<菜单项ID>.props.checked` 中由表达式驱动，或在 `events.toggle` / `events.click` 中响应。
+  5. **互斥单选组**：写 `"kind": "radio"` 与 `"group": "<组名>"`，同组菜单项互斥单选（导出成 Qt 时生成 `QActionGroup`）。
+  6. **停靠面板开关**：菜单项如果写了 `"dock": "<停靠面板ID>"`，点击该菜单项会自动切换对应停靠面板的显示和隐藏，并同步菜单项的勾选状态；面板隐藏后，中央区自动扩大填满空出的位置。
+  7. **右键菜单（`contextMenu`）**：任何控件节点上可以写 `"contextMenu": [ ...菜单项... ]`，在预览模式右键点击该控件（或导出成 Qt 后触发 `customContextMenuRequested`）时弹出。
+  8. **控件弹出菜单（`popupMenu`）**：按钮或控件节点上可以写 `"popupMenu": [ ...菜单项... ]`，点击该按钮时弹出菜单（导出成 Qt 时挂载到 `QPushButton::setMenu`）。
+  9. **触发全局事件**：菜单项如果写了 `"emit": "<全局事件名>"`（也可以在 YAML `objects.<菜单项ID>.events.click` 中写步骤），点击时触发对应事件。
 
-### 11.3 9 种工具自带标准控件（含浮动嵌入框 `FloatBox`）
+### 11.3 17 种工具自带标准控件（含浮动嵌入框 `FloatBox`）
 
-工具在 `app/standard/` 中内置了 9 种常用控件与容器，不需要在设计项目的 `components/` 下创建文件夹即可直接在 `scene.json` 中使用（如果 `components/` 下有同名控件，以项目自己的为准）：
+工具在 `app/standard/` 中内置了 17 种常用控件与容器，不需要在设计项目的 `components/` 下创建文件夹即可直接在 `scene.json` 中使用（如果 `components/` 下有同名控件，以项目自己的为准）：
 
 | 类型名 | 中文名 | 对应 Qt 类 | 主要属性（标 `*` 的支持在 YAML `props` 中由表达式控制） | 双向绑定 `bind` 与事件 |
 | --- | --- | --- | --- | --- |
 | `Label` | 文字 | `QLabel` | `text*`、`tone*`（`normal` / `title` / `muted` / `error` / `accent`）、`align`（`left` / `center` / `right`） | — |
-| `Button` | 按钮 | `QPushButton` | `text*`、`variant*`（`primary` / `secondary` / `danger` / `ghost`）、`checkable`、`checked*`、`enabled*` | 事件 `toggle`（带布尔值） |
+| `Button` | 按钮 | `QPushButton` | `text*`、`icon*`（内置矢量图标名，如 `play`、`pause`、`plus`、`minus`、`pen`、`brush` 等）、`variant*`（`primary` / `secondary` / `danger` / `ghost`）、`checkable`、`checked*`、`enabled*` | 事件 `toggle`（带布尔值） |
 | `TextInput` | 输入框 | `QLineEdit` | `placeholder*`、`value*`、`enabled*` | `bind: string`，事件 `change` |
-| `SpinBox` | 数字框 | `QSpinBox` | `min`、`max`、`step`、`suffix`、`value*`、`enabled*` | `bind: number`，事件 `change` |
+| `TextArea` | 多行文本 | `QPlainTextEdit` | `placeholder*`、`value*`、`readOnly*`、`enabled*` | `bind: string`，事件 `change` |
+| `SpinBox` | 数字框 | `QSpinBox` | `min*`、`max*`、`step`、`suffix`、`value*`、`enabled*` | `bind: number`，事件 `change` |
+| `Slider` | 滑块 | `QSlider` | `min*`、`max*`、`step`、`orientation`（`horizontal` / `vertical`）、`value*`、`enabled*` | `bind: number`，事件 `change` |
+| `ScrollBar` | 滚动条 | `QScrollBar` | `min*`、`max*`、`pageStep*`、`orientation`（`horizontal` / `vertical`）、`value*`、`enabled*` | `bind: number`，事件 `change` |
 | `ComboBox` | 下拉框 | `QComboBox` | `options*`（逗号分隔的选项字符串，如 `"1080p,720p,Square"`）、`value*`、`enabled*` | `bind: string`，事件 `change` |
 | `CheckBox` | 复选框 | `QCheckBox` | `text*`、`value*`、`enabled*` | `bind: boolean`，事件 `change` |
-| `List` | 列表 | `QListWidget` | `items*`（数组状态）、`value*`（当前选中行下标，从 0 开始）、`checkable`（是否在行首显示圆点指示）、`emptyText`、`enabled*` | `bind: number`，事件 `change` / `select` |
+| `TabBar` | 页签栏 | `QTabBar` | `tabs*`（逗号分隔的页签名，如 `"画布,画笔"`）、`value*`（当前页签下标，从 0 开始）、`enabled*` | `bind: number`，事件 `change` |
+| `List` | 列表 | `QListWidget` | `items*`（数组状态）、`value*`（当前选中行下标）、`checkable`、`draggable`（允许拖拽调整行顺序）、`mutedFrom*`（从该下标起置灰显示）、`emptyText`、`enabled*` | `bind: number`，事件 `change` / `select`、`reorder`（`{ from, to }`） |
+| `Tree` | 树 | `QTreeWidget` | `items*`（节点数组，每项含 `id`、`name`、`type`、`depth` / `parentId`、`expanded` 等）、`value*`（当前选中行下标）、`draggable`、`emptyText`、`enabled*` | `bind: number`，事件 `change` / `select`、`reorder`（`{ from, to }`） |
+| `DataForm` | 数据生成表单 | `QFrame` | `schema*`（含 `row_spacing`、`column_spacing`、`controls` 数组的表单描述对象或 JSON）、`values*`（各字段当前值）、`emptyText*`、`enabled*` | 事件 `change`（`{ name, value, hook, type }`） |
+| `DialogButtonBox` | 对话框按钮栏 | `QDialogButtonBox` | `buttons`（如 `"ok,cancel"`）、`okText*`、`cancelText*`、`enabled*` | 事件 `accept`、`reject` |
+| `Spacer` | 弹簧空白 | `QWidget` | `orientation`（`horizontal` / `vertical`） | — |
 | `Separator` | 分隔线 | `QFrame` | `orientation`（`horizontal` / `vertical`） | — |
 | `FloatBox` | 浮动嵌入框 | `QFrame`（含标题栏与切换按钮） | `title*`、`floating*`（默认 `false` 嵌入父容器排版，为 `true` 时脱离原排版成为窗口内浮动框）、`floatX*`、`floatY*`、`floatWidth*`、`floatHeight*`、`headerHeight`（默认 24）、`enabled*`；支持包含子节点（`children: true`）与 `layout` | `bind: boolean`，事件 `toggle` / `change` / `move` |
 
@@ -902,12 +928,32 @@ actions:
   3. **模拟失败（`error`）**：不执行实现文件，把 `mockError` 作为 `error.message` 执行 `onError`。
 - 导出成 Qt 后，每个动作都会在 `vf::BusinessInterface` 上暴露信号 `action<Name>Requested(const QVariantMap &input)` 以及完成回调 `finish<Name>Success(const QVariant &result)` 和 `finish<Name>Error(const QString &message)`：业务连接该信号即可接管动作并在完成后回调成功或失败；若业务未连接该信号，则自动回退到内置的 `actions/<动作名>.js` 或模拟模式。
 
-### 11.9 编辑模式下的布局、停靠、菜单与状态归属操作
+### 11.9 预览时钟（`clock`）与列表/树拖拽重排
+
+- **内置只读时钟状态 `clock`**：
+  - 在任何表达式中都可以直接读取 `clock`（或 `clock.ms`，当前毫秒数，预览开始时为 `0`）以及 `clock.sec`（当前秒数，`Math.floor(clock / 1000)`），无需在 `state` 中声明。
+  - 如果在顶层 `events` 下定义了全局事件 `clock.tick`，每次预览时钟推进时会自动触发该事件（参数 `param` 含 `{ ms, sec }`），适合用来驱动动画时间轴播放等随时间推进的界面逻辑。
+  - 在工具预览栏中可以直接查看、输入毫秒数、单步推进（`+100ms`）或开启/暂停自动走表；在命令行测试步骤中可用 `clock:<毫秒数>` 直接拨到指定时刻。
+- **列表与树的拖拽调整行顺序（`reorder`）**：
+  - 在 `List` 或 `Tree` 的 `props` 中设置 `"draggable": true`，用户在预览模式（或导出后的 Qt `QListWidget` / `QTreeWidget`）中即可上下拖拽行项调整顺序。
+  - 拖拽放下后控件发出 `reorder` 事件，参数为 `{ from: 原下标, to: 新下标 }`，可在 YAML `events.reorder` 中用 `move` 步骤或逻辑 JS 函数同步更新数组状态：
+    ```yaml
+    events:
+      reorder:
+        - move:
+            in: layers.items
+            from: param.from
+            to: param.to
+        - set: layers.selectedIndex = param.to
+    ```
+  - 在命令行测试步骤中可用 `drag:<控件ID>:<from>:<to>`（或 `reorder:<控件ID>:<from>:<to>`）触发同样的重排路径。
+
+### 11.10 编辑模式下的布局、停靠、菜单与状态归属操作
 
 以上所有布局、停靠、菜单和状态归属除了写入 `ui/scene.json` 和 `logic/app.logic.yaml` 外，都可以直接在工具界面里通过可视面板和画布拖拽完成：
 
-- **往布局容器里拖与重排**：从左侧素材栏把控件拖到 `VBox`、`HBox`、`Grid`、`Form`、`Stack` 或开启了 `layout` 的 `Container` / `Dock` / `Dialog` 上时，画布会高亮显示插入线或网格目标格，松开鼠标即按对应位置插入；在画布上拖动已排版的子控件可调整它在父容器里的顺序。
-- **右侧“布局”页签**：选中容器可切换排版方式（自由定位 / 竖排 / 横排 / 网格 / 表单 / 层叠）、调整内边距 `padding` 与间距 `gap`、重排子控件并修改每个子控件的主轴伸缩 `stretch`；选中任意子控件可设置尺寸规则 `SizePolicy`（`horizontal`、`vertical`、`stretch`、`preferredWidth/Height`、`minWidth/Height`、`maxWidth/Height`、`fixedWidth/Height`）与网格单元格（`row`、`column`、`rowSpan`、`columnSpan`）；选中 `Dock` 停靠面板可切换停靠方向（`dockArea`: `left` / `right` / `top` / `bottom`）并调整在 `window.docks` 中的顺序；选中 `Window` 可指定中央区 `central` 与状态栏 `statusBar`。
+- **往布局容器里拖与重排**：从左侧素材栏把控件拖到 `VBox`、`HBox`、`Flow`、`Grid`、`Form`、`Stack` 或开启了 `layout` 的 `Container` / `Dock` / `Dialog` 上时，画布会高亮显示插入线或网格目标格，松开鼠标即按对应位置插入；在画布上拖动已排版的子控件可调整它在父容器里的顺序。
+- **右侧“布局”页签**：选中容器可切换排版方式（自由定位 / 竖排 / 横排 / 换行 / 网格 / 表单 / 层叠）、调整内边距 `padding` 与间距 `gap`、重排子控件并修改每个子控件的主轴伸缩 `stretch`；选中任意子控件可设置尺寸规则 `SizePolicy`（`horizontal`、`vertical`、`stretch`、`preferredWidth/Height`、`minWidth/Height`、`maxWidth/Height`、`fixedWidth/Height`）与网格单元格（`row`、`column`、`rowSpan`、`columnSpan`）；选中 `Dock` 停靠面板可切换停靠方向（`dockArea`: `left` / `right` / `top` / `bottom`）并调整在 `window.docks` 中的顺序；选中 `Window` 可指定中央区 `central` 与状态栏 `statusBar`。
 - **右侧“菜单”页签**：可直接增删改排主窗口顶部菜单栏（`window.menuBar`）与各菜单项（设置 `id`、`text`、`shortcut`、`checkable`、`checked`、关联停靠面板 `dock` 或触发全局事件 `emit`），也可一键把窗口中的 `Dock` 绑定到“视图”菜单。
 - **右侧“状态”页签**：可新增或删除状态变量，一键把任一状态标注为“界面自管（`owner: ui`）”或“业务管（`owner: business`）”，并可添加业务事件与全局条件。
 - **锁定与撤销/重做**：被锁定的节点（含继承了锁定父容器的子节点）禁止一切布局、尺寸、停靠、属性或菜单修改；所有通过面板和画布拖拽执行的修改均自动记入撤销/重做历史（`Ctrl+Z` / `Ctrl+Y`）。

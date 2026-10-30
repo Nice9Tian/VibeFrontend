@@ -53,6 +53,7 @@ import {
 const LAYOUT_KIND_TO_TYPE: Record<LayoutKind, string> = {
   vbox: "VBox",
   hbox: "HBox",
+  flow: "Flow",
   grid: "Grid",
   form: "Form",
   stack: "Stack",

@@ -66,7 +66,24 @@ import { nodeIO } from "./node-io.ts";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..");
 const ANIMEAN_DIR = path.resolve(APP_ROOT, "../examples/animean/design");
-const ANIMEAN_QT_EXE = path.resolve(APP_ROOT, "../examples/animean/qt/build/app/vf_animean.exe");
+const ANIMEAN_QT_EXE = [
+  path.join(os.tmpdir(), "vf-build-animean/app/vf_animean.exe"),
+  path.resolve(APP_ROOT, "../examples/animean/qt/build/app/vf_animean.exe"),
+].find((p) => fs.existsSync(p)) ?? path.join(os.tmpdir(), "vf-build-animean/app/vf_animean.exe");
+
+function buildQtEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (process.platform === "win32") {
+    const extraDirs = ["C:\\Qt\\6.9.1\\mingw_64\\bin", "C:\\Qt\\Tools\\mingw1310_64\\bin"].filter((d) =>
+      fs.existsSync(d),
+    );
+    if (extraDirs.length > 0) {
+      const pathKey = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+      env[pathKey] = [...extraDirs, env[pathKey] ?? ""].join(";");
+    }
+  }
+  return env;
+}
 
 function findBrowserExecutable(): string {
   const candidates = [
@@ -177,10 +194,10 @@ async function testDockModelAndReferences(): Promise<void> {
   assert.equal(layout3.areas.left.groups[2].size, g2Before, "第 2 组大小在拖动第 0/1 组间分隔条时不应改变");
   assert.equal(
     layout3.areas.left.groups[0].size! + layout3.areas.left.groups[1].size! + layout3.areas.left.groups[2].size!,
-    580,
-    "3 组分栏参考跨度之和应等于 580px",
+    550,
+    "3 组分栏参考跨度之和应等于 550px",
   );
-  // 窗口高度从 800 放大到 1000（左侧停靠区高度从 580 变 780），分栏各组高度应按比例伸缩
+  // 窗口高度从 800 放大到 1000（左侧停靠区高度从 550 变 750），分栏各组高度应按比例伸缩
   const winResized = computeDockWindowLayout(
     scene3,
     scene3.root,
@@ -195,7 +212,7 @@ async function testDockModelAndReferences(): Promise<void> {
   const b0 = winResized.dockBoxes.get("layersDock")!;
   const b1 = winResized.dockBoxes.get("inspectorDock")!;
   const b2 = winResized.dockBoxes.get("extraDock")!;
-  assert.equal(b0.height + b1.height + b2.height, 780, "窗口缩放后分栏组总高度应填满 780px");
+  assert.equal(b0.height + b1.height + b2.height, 750, "窗口缩放后分栏组总高度应填满 750px");
   assert.ok(b0.height > 150, "窗口高度增大后第 0 组高度也应按比例放大");
 
   // 10) [审核问题 6] 关闭叠页签组中的当前激活页签，自动切换到同组剩余可见页签
@@ -394,7 +411,16 @@ function buildInteractiveHtmlPage(): string {
       MOUSE_EVENTS,
       STANDARD_COMPONENTS,
     } from "/src/model.ts";
+    import { STANDARD_COMPONENT_LIST } from "/standard/index.ts";
     import { Runtime } from "/src/runtime.ts";
+
+    for (const std of STANDARD_COMPONENT_LIST) {
+      if (std.styleText) {
+        const styleEl = document.createElement("style");
+        styleEl.textContent = \`@scope ([data-vf-type="\${std.decl.type}"]) { \${std.styleText} }\`;
+        document.head.append(styleEl);
+      }
+    }
 
     const projectRes = await fetch("/project-data.json");
     const projectData = await projectRes.json();
@@ -749,7 +775,7 @@ function buildInteractiveHtmlPage(): string {
       const areaSplitter = stage.querySelector('.dock-splitter[data-splitter-kind="area"][data-splitter-area="left"]');
       const hasAreaClass = areaSplitter.classList.contains("dock-splitter-vertical");
       const asRect = areaSplitter.getBoundingClientRect();
-      simulateDrag(areaSplitter, asRect.left + 2, asRect.top + 100, asRect.left + 22, asRect.top + 100);
+      simulateDrag(areaSplitter, asRect.left + 2, asRect.top + 100, asRect.left + 26, asRect.top + 100);
       await nextFrame();
 
       const dl = runtime.getDockLayout();
@@ -1061,6 +1087,7 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     try {
       proc.kill();
     } catch {}
+    server.closeAllConnections?.();
     server.close();
     try {
       fs.rmSync(tmpProfileDir, { recursive: true, force: true });
@@ -1136,9 +1163,10 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
 
   // 对照 Qt 可执行文件在相同停靠编排 + FloatBox 浮出移位后的 layoutDump
   if (fs.existsSync(ANIMEAN_QT_EXE)) {
+    const qtEnv = buildQtEnv();
     const qtSteps =
       "resize:1280x800;dock:tabify:layersDock:inspectorDock;dock:tab:inspectorDock;dock:resize:left:260;toggle:onionSkinBox;floatbox:move:onionSkinBox:420,180;check;layout";
-    const qtOut = execFileSync(ANIMEAN_QT_EXE, ["--steps", qtSteps], { encoding: "utf8" });
+    const qtOut = execFileSync(ANIMEAN_QT_EXE, ["--steps", qtSteps], { encoding: "utf8", env: qtEnv });
     const qtLines = qtOut.split(/\r?\n/).filter(Boolean);
     assert.ok(qtLines.includes("check ok"), `Qt check 应通过，实际输出：${qtOut}`);
     const layoutLine = qtLines.find((l) => l.startsWith("layout "));
@@ -1170,7 +1198,7 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     // 验证 Qt 侧在关闭原父停靠面板 inspectorDock 后，浮出的 onionSkinBox 仍在 layoutDump 中可见，且 check 通过（激活页签切回 layersDock）
     const qtCloseParentSteps =
       "resize:1280x800;dock:tabify:layersDock:inspectorDock;dock:tab:inspectorDock;toggle:onionSkinBox;floatbox:move:onionSkinBox:420,180;dock:close:inspectorDock;check;layout";
-    const qtCloseOut = execFileSync(ANIMEAN_QT_EXE, ["--steps", qtCloseParentSteps], { encoding: "utf8" });
+    const qtCloseOut = execFileSync(ANIMEAN_QT_EXE, ["--steps", qtCloseParentSteps], { encoding: "utf8", env: qtEnv });
     const qtCloseLines = qtCloseOut.split(/\r?\n/).filter(Boolean);
     assert.ok(qtCloseLines.includes("check ok"), `关闭激活页签后 Qt check 应通过，实际输出：${qtCloseOut}`);
     const qtCloseLayout = JSON.parse(qtCloseLines.find((l) => l.startsWith("layout "))!.slice("layout ".length));
@@ -1195,7 +1223,7 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
       "check",
       "docks",
     ].join(";");
-    const qtMouseOut = execFileSync(ANIMEAN_QT_EXE, ["--steps", qtRealMouseSteps], { encoding: "utf8" });
+    const qtMouseOut = execFileSync(ANIMEAN_QT_EXE, ["--steps", qtRealMouseSteps], { encoding: "utf8", env: qtEnv });
     const qtMouseLines = qtMouseOut.split(/\r?\n/).filter(Boolean);
     const checkLines = qtMouseLines.filter((l) => l.startsWith("check "));
     assert.equal(checkLines.length, 6, `应有 6 处 check 输出，实际：${qtMouseOut}`);
@@ -1210,7 +1238,7 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     const qtSplitThenTabify = execFileSync(
       ANIMEAN_QT_EXE,
       ["--steps", "resize:1280x800;dock:split:layersDock:inspectorDock:after;dock:tabify:layersDock:timelineDock;check;docks"],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: qtEnv },
     );
     const qtStLines = qtSplitThenTabify.split(/\r?\n/).filter(Boolean);
     assert.ok(qtStLines.includes("check ok"), `先 split 再 tabify 后 Qt check 应通过，实际：${qtSplitThenTabify}`);
@@ -1227,7 +1255,7 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     const qtTabifyThenSplit = execFileSync(
       ANIMEAN_QT_EXE,
       ["--steps", "resize:1280x800;dock:tabify:layersDock:inspectorDock;dock:split:layersDock:inspectorDock:after;check;docks"],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: qtEnv },
     );
     const qtTsLines = qtTabifyThenSplit.split(/\r?\n/).filter(Boolean);
     assert.ok(qtTsLines.includes("check ok"), `先 tabify 再同组拖出 split 后 Qt check 应通过，实际：${qtTabifyThenSplit}`);
@@ -1238,13 +1266,13 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     const qtHorizSplit = execFileSync(
       ANIMEAN_QT_EXE,
       ["--steps", "resize:1280x800;dock:split:layersDock:inspectorDock:after:horizontal;check;docks"],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: qtEnv },
     );
     const qtHsLines = qtHorizSplit.split(/\r?\n/).filter(Boolean);
     assert.ok(qtHsLines.includes("check ok"), `左侧水平分栏后 Qt check 应通过，实际：${qtHorizSplit}`);
     const qtHsDocks = JSON.parse(qtHsLines.find((l) => l.startsWith("docks "))!.slice("docks ".length));
     assert.equal(qtHsDocks.areas.left.splitOrientation, "horizontal", "左侧停靠区应记录为 horizontal 分栏");
-    assert.equal(qtHsDocks.areas.left.size, 240, "左侧水平分栏联合总宽度应为 240px");
+    assert.equal(qtHsDocks.areas.left.size, 236, "左侧水平分栏联合总宽度应为 236px");
 
     console.log(
       `PASS 3. 停靠编排 + FloatBox 浮出移位后无头 Chrome DOM 与 Qt 实测几何对比：共 ${count} 个可见控件，最大偏差 ${maxDiff}px（<= 3px），父 Dock 关闭后 FloatBox 独立显隐、真实 QTest 鼠标拖拽及复审组合场景验证通过`,

@@ -21,6 +21,7 @@ import {
   requestEvent,
   STANDARD_COMPONENTS,
   STATE_IMAGE_KEYS,
+  walkMenuItems,
   type ConditionDef,
   type Problem,
   type Project,
@@ -29,6 +30,24 @@ import {
 
 /** 步骤出现在哪里：普通事件里，还是业务事件的模拟步骤里。两处的规则不同。 */
 type StepPlace = "normal" | "simulate";
+
+/** 系统保留名称（内置只读状态、事件临时变量、表达式关键字、内置节点类型）：不能用作控件 ID、状态根名、全局条件名或菜单项 ID。 */
+export const RESERVED_IDENTIFIER_NAMES = new Set<string>([
+  "clock",
+  "value",
+  "param",
+  "result",
+  "error",
+  "self",
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "and",
+  "or",
+  "not",
+  ...BUILTIN_TYPES,
+]);
 
 const FORBIDDEN_DOM_IDENTIFIERS = [
   "document",
@@ -356,11 +375,18 @@ export function check(project: Project): Problem[] {
   const hint = (message: string, nodeId?: string) => problems.push({ level: "hint", message, nodeId });
 
   const isKnownPath = (path: string, extraNames: Set<string>): boolean => {
+    if (path === "clock" || path === "clock.ms" || path === "clock.sec") return true;
     if (extraNames.has(path)) return true;
     for (const extra of extraNames) {
       if (path.startsWith(extra + ".")) return true;
     }
     if (findStateLeaf(logic, path) || findCondition(logic, path)) return true;
+    const parts = path.split(".");
+    for (let i = parts.length - 1; i >= 1; i--) {
+      const prefix = parts.slice(0, i).join(".");
+      const leaf = findStateLeaf(logic, prefix);
+      if (leaf && leaf.type === "object") return true;
+    }
     if (path.endsWith(".length")) {
       const base = path.slice(0, -".length".length);
       const leaf = findStateLeaf(logic, base);
@@ -527,7 +553,7 @@ export function check(project: Project): Problem[] {
       }
     }
     if (node.layout) {
-      const validLayouts = ["vbox", "hbox", "grid", "form", "stack"];
+      const validLayouts = ["vbox", "hbox", "grid", "form", "stack", "flow"];
       if (!validLayouts.includes(node.layout.kind)) {
         error(`节点 ${id}：layout.kind 应为 ${validLayouts.join("、")} 之一，现在是“${node.layout.kind}”`, id);
       }
@@ -674,25 +700,56 @@ export function check(project: Project): Problem[] {
     }
   }
 
-  // 状态
+  // 状态、条件、控件与菜单项的保留名与重名检查
   const stateRoots = Object.keys(logic.state ?? {});
+  for (const id of Object.keys(scene.nodes)) {
+    if (RESERVED_IDENTIFIER_NAMES.has(id)) {
+      error(`控件 ID“${id}”是系统保留名称，请改名`, id);
+    }
+  }
   for (const { path, leaf } of allStateLeaves(logic)) {
     if (leaf.owner !== undefined && leaf.owner !== "ui" && leaf.owner !== "business") {
       error(`状态 ${path}：owner 应为 ui（界面自己管）或 business（业务管），现在是“${leaf.owner}”`);
     }
   }
   for (const id of Object.keys(logic.conditions ?? {})) {
+    if (RESERVED_IDENTIFIER_NAMES.has(id)) error(`全局条件“${id}”是系统保留名称，请改名`);
     if (stateRoots.includes(id) || scene.nodes[id]) error(`全局条件“${id}”与状态根名或控件 ID 重名`);
   }
   for (const root of stateRoots) {
+    if (RESERVED_IDENTIFIER_NAMES.has(root)) error(`状态根名“${root}”是系统保留名称，请改名`);
     if (scene.nodes[root]) error(`状态根名“${root}”与控件 ID 重名`);
+  }
+  const seenMenuItemIds = new Set<string>();
+  const checkMenuItemList = (items: import("./model.ts").MenuItemSpec[] | undefined, ownerNodeId?: string) => {
+    walkMenuItems(items, (item) => {
+      if (item.kind === "separator" || !item.id) return;
+      if (RESERVED_IDENTIFIER_NAMES.has(item.id)) {
+        error(`菜单项 ID“${item.id}”是系统保留名称，请改名`, ownerNodeId);
+      }
+      if (seenMenuItemIds.has(item.id)) {
+        error(`菜单项 ID“${item.id}”重复定义`, ownerNodeId);
+      }
+      seenMenuItemIds.add(item.id);
+      if (scene.nodes[item.id] || stateRoots.includes(item.id) || logic.conditions?.[item.id]) {
+        error(`菜单项 ID“${item.id}”与控件 ID、状态根名或全局条件重名`, ownerNodeId);
+      }
+    });
+  };
+  for (const [nid, n] of Object.entries(scene.nodes)) {
+    for (const menu of n.menuBar?.menus ?? []) {
+      checkMenuItemList(menu.items, nid);
+    }
+    checkMenuItemList(n.contextMenu, nid);
+    checkMenuItemList(n.popupMenu, nid);
   }
   checkConditions(logic.conditions, "");
 
   // 全局事件、业务事件与请求事件
   for (const [name, def] of Object.entries(logic.events ?? {})) {
     if (Array.isArray(def)) {
-      checkSteps(def, `全局事件 ${name}`, "normal");
+      const extra = name === "clock.tick" ? new Set(["value", "param", "ms", "prevMs", "deltaMs"]) : new Set<string>();
+      checkSteps(def, `全局事件 ${name}`, "normal", undefined, extra);
     } else if (def && typeof def === "object" && def.owner === "business") {
       const bDef = businessEvent(logic, name)!;
       const paramNames = new Set<string>(["param"]);
@@ -781,7 +838,13 @@ export function check(project: Project): Problem[] {
       } else if (!MOUSE_EVENTS.includes(event) && !decl?.events?.includes(event)) {
         error(`控件 ${id}：当前类型 ${node.type} 不支持事件“${event}”`, id);
       }
-      checkSteps(steps, `控件 ${id} 的 ${event} 事件`, "normal", id, new Set(["value", "param"]));
+      checkSteps(
+        steps,
+        `控件 ${id} 的 ${event} 事件`,
+        "normal",
+        id,
+        new Set(["value", "param", "from", "to", "index", "id", "checked", "collapsed", "name", "hook", "type"]),
+      );
     }
     for (const [prop, effectName] of Object.entries(object.effects ?? {})) {
       if (prop !== "visible" && prop !== "paint") {

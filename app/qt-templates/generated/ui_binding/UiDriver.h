@@ -16,11 +16,18 @@ class Ui;
 //   enter:控件ID             鼠标移入
 //   leave:控件ID             鼠标移出
 //   type:控件ID:文字         在控件里逐个字符输入
-//   input:控件ID:值          直接输入完整文本或数字（TextInput / SpinBox）
-//   select:控件ID:值或下标   在下拉框或列表中选择某一项（ComboBox / List）
+//   input:控件ID:值          直接输入完整文本或数字（TextInput / TextArea / SpinBox / Slider / ScrollBar）
+//   select:控件ID:值或下标   在下拉框、列表、页签栏或树中选择某一项（ComboBox / List / TabBar / Tree）
 //   toggle:控件ID            切换复选框、可勾选按钮或浮动嵌入框（CheckBox / Button / FloatBox）
+//   check:控件ID:行号:布尔   切换树控件某行的显隐勾选（Tree toggleCheck）
+//   collapse:控件ID:行号:布尔 切换树控件某分组行的折叠状态（Tree toggleCollapse）
+//   drag:控件ID:from:to      拖动列表或树控件中的某行重排（List / Tree reorder，等价于 reorder:）
+//   form:控件ID:字段名:值    修改动态表单中的某个字段值（DataForm change）
+//   accept:控件ID            触发对话框按钮盒的确定（DialogButtonBox accept）
+//   reject:控件ID            触发对话框按钮盒的取消或关闭对话框（DialogButtonBox reject / QDialog::reject）
 //   close:窗口ID             模拟用户按 Esc 或点标题栏关闭按钮关闭对话框（QDialog::reject）
 //   dock:动作:参数...        执行停靠面板操作（tabify / tab / float / restore / move / split / resize / resizeSplit / close / open）
+//   clock:毫秒               把预览时钟推进或调整到指定毫秒数（触发 clock.tick）
 //   request:事件名[:JSON]    触发业务发给界面的请求事件
 //   mock:动作名:模式[:毫秒]  切换动作模拟方式（real / success / error）及可选延迟毫秒数
 //   resize:宽x高             调整主窗口尺寸

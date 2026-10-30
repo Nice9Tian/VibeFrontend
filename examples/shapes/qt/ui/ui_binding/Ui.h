@@ -37,10 +37,16 @@ public:
     // 当前各停靠面板在窗口中的实际停靠排列（四个区域、并排、页签组、浮窗）。一行 JSON，和 stateDump 里的 docks 对照。
     QString dockDump() const;
 
-    // 供自动化测试驱动触发请求事件、切换动作模拟方式或执行停靠操作
+    // 供自动化测试驱动触发请求事件、切换动作模拟方式、执行停靠操作、拨动预览时钟与驱动复合控件事件
     void triggerRequest(const QString &name, const QString &jsonArgs = QString());
     void setActionSimulation(const QString &name, const QString &mode, int delayMs = 0);
     void runDockOp(const QString &op, const QString &jsonArgs = QString());
+    void setClock(int ms);
+    int clock() const;
+    void reorderControl(const QString &id, int from, int to);
+    void toggleTreeCheck(const QString &id, int row, bool checked);
+    void toggleTreeCollapse(const QString &id, int row, bool collapsed);
+    void setDataFormField(const QString &id, const QString &fieldName, const QString &rawValue);
 
     // ---- BusinessInterface ----
     // 这个设计项目没有业务管的状态，也没有外部容器

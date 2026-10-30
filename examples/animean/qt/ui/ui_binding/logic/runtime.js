@@ -1489,10 +1489,10 @@ var VF = (function(exports) {
 	}
 	//#endregion
 	//#region standard/Button/component.json
-	var component_default$8 = {
+	var component_default$16 = {
 		type: "Button",
 		label: "按钮",
-		description: "标准按钮，支持主次样式与可勾选状态",
+		description: "标准按钮，支持图标、主次样式与可勾选状态",
 		defaultSize: {
 			"width": 100,
 			"height": 32
@@ -1503,6 +1503,11 @@ var VF = (function(exports) {
 			"text": {
 				"type": "string",
 				"default": "按钮",
+				"logic": true
+			},
+			"icon": {
+				"type": "string",
+				"default": "",
 				"logic": true
 			},
 			"variant": {
@@ -1531,6 +1536,7 @@ var VF = (function(exports) {
 			"widget": "QPushButton",
 			"props": {
 				"text": "text",
+				"icon": "vfIcon",
 				"variant": "vfVariant",
 				"checkable": "checkable",
 				"checked": "checked"
@@ -1543,7 +1549,7 @@ var VF = (function(exports) {
 	};
 	//#endregion
 	//#region standard/CheckBox/component.json
-	var component_default$7 = {
+	var component_default$15 = {
 		type: "CheckBox",
 		label: "复选框",
 		description: "复选框，支持文字和双向绑定布尔状态",
@@ -1587,7 +1593,7 @@ var VF = (function(exports) {
 	};
 	//#endregion
 	//#region standard/ComboBox/component.json
-	var component_default$6 = {
+	var component_default$14 = {
 		type: "ComboBox",
 		label: "下拉框",
 		description: "下拉选择框，options 用逗号分隔各选项，支持双向绑定字符串状态",
@@ -1630,8 +1636,105 @@ var VF = (function(exports) {
 		}
 	};
 	//#endregion
+	//#region standard/DataForm/component.json
+	var component_default$13 = {
+		type: "DataForm",
+		label: "数据生成表单",
+		description: "由结构化数据（各字段名、类型、范围、行列、显示条件）动态生成控件网格并向外发出修改事件",
+		defaultSize: {
+			"width": 220,
+			"height": 180
+		},
+		entry: "index.js",
+		style: "style.css",
+		props: {
+			"schema": {
+				"type": "object",
+				"default": {},
+				"logic": true
+			},
+			"values": {
+				"type": "object",
+				"default": {},
+				"logic": true
+			},
+			"emptyText": {
+				"type": "string",
+				"default": "当前工具无可调选项"
+			},
+			"enabled": {
+				"type": "boolean",
+				"default": true,
+				"logic": true
+			}
+		},
+		events: ["change"],
+		children: false,
+		qt: {
+			"widget": "QFrame",
+			"props": {
+				"schema": "vfSchema",
+				"values": "vfValues",
+				"emptyText": "vfEmptyText"
+			},
+			"events": { "change": {
+				"signal": "fieldChanged",
+				"type": "string"
+			} }
+		}
+	};
+	//#endregion
+	//#region standard/DialogButtonBox/component.json
+	var component_default$12 = {
+		type: "DialogButtonBox",
+		label: "对话框按钮组",
+		description: "对话框底部的标准确认与取消按钮组",
+		defaultSize: {
+			"width": 220,
+			"height": 32
+		},
+		entry: "index.js",
+		style: "style.css",
+		props: {
+			"buttons": {
+				"type": "string",
+				"default": "OK,Cancel",
+				"logic": true
+			},
+			"okText": {
+				"type": "string",
+				"default": "OK",
+				"logic": true
+			},
+			"cancelText": {
+				"type": "string",
+				"default": "Cancel",
+				"logic": true
+			},
+			"enabled": {
+				"type": "boolean",
+				"default": true,
+				"logic": true
+			}
+		},
+		events: ["accept", "reject"],
+		children: false,
+		qt: {
+			"widget": "QDialogButtonBox",
+			"props": {
+				"buttons": "vfButtons",
+				"okText": "vfOkText",
+				"cancelText": "vfCancelText"
+			},
+			"events": {
+				"accept": { "signal": "accepted" },
+				"reject": { "signal": "rejected" }
+			}
+		}
+	};
+	//#endregion
 	//#region standard/FloatBox/component.json
-	var component_default$5 = {
+	var component_default$11 = {
 		type: "FloatBox",
 		label: "浮动嵌入框",
 		description: "可在嵌入布局与窗口内浮动面板之间切换的标准容器",
@@ -1712,7 +1815,7 @@ var VF = (function(exports) {
 	};
 	//#endregion
 	//#region standard/Label/component.json
-	var component_default$4 = {
+	var component_default$10 = {
 		type: "Label",
 		label: "文字",
 		description: "一行或多行文字，tone 可选 normal、title、muted、error、accent",
@@ -1751,10 +1854,10 @@ var VF = (function(exports) {
 	};
 	//#endregion
 	//#region standard/List/component.json
-	var component_default$3 = {
+	var component_default$9 = {
 		type: "List",
 		label: "列表",
-		description: "行列表，绑定数组状态 items，支持选中行",
+		description: "行列表，绑定数组状态 items，支持选中行与拖动重排",
 		defaultSize: {
 			"width": 220,
 			"height": 180
@@ -1776,6 +1879,15 @@ var VF = (function(exports) {
 				"type": "string",
 				"default": "暂无内容"
 			},
+			"draggable": {
+				"type": "boolean",
+				"default": false
+			},
+			"mutedFrom": {
+				"type": "number",
+				"default": -1,
+				"logic": true
+			},
 			"enabled": {
 				"type": "boolean",
 				"default": true,
@@ -1783,14 +1895,20 @@ var VF = (function(exports) {
 			}
 		},
 		bind: "number",
-		events: ["change", "select"],
+		events: [
+			"change",
+			"select",
+			"reorder"
+		],
 		children: false,
 		qt: {
 			"widget": "QListWidget",
 			"props": {
 				"items": "vfItems",
 				"value": "currentRow",
-				"emptyText": "vfEmptyText"
+				"emptyText": "vfEmptyText",
+				"draggable": "vfDraggable",
+				"mutedFrom": "vfMutedFrom"
 			},
 			"events": {
 				"change": {
@@ -1800,13 +1918,80 @@ var VF = (function(exports) {
 				"select": {
 					"signal": "currentRowChanged",
 					"type": "number"
+				},
+				"reorder": {
+					"signal": "itemReordered",
+					"type": "string"
 				}
 			}
 		}
 	};
 	//#endregion
+	//#region standard/ScrollBar/component.json
+	var component_default$8 = {
+		type: "ScrollBar",
+		label: "滚动条",
+		description: "水平或垂直滚动条，支持范围、步长和双向绑定数字状态",
+		defaultSize: {
+			"width": 160,
+			"height": 16
+		},
+		entry: "index.js",
+		style: "style.css",
+		props: {
+			"min": {
+				"type": "number",
+				"default": 0
+			},
+			"max": {
+				"type": "number",
+				"default": 100
+			},
+			"step": {
+				"type": "number",
+				"default": 1
+			},
+			"pageStep": {
+				"type": "number",
+				"default": 10
+			},
+			"orientation": {
+				"type": "string",
+				"default": "horizontal"
+			},
+			"value": {
+				"type": "number",
+				"default": 0,
+				"logic": true
+			},
+			"enabled": {
+				"type": "boolean",
+				"default": true,
+				"logic": true
+			}
+		},
+		bind: "number",
+		events: ["change"],
+		children: false,
+		qt: {
+			"widget": "QScrollBar",
+			"props": {
+				"min": "minimum",
+				"max": "maximum",
+				"step": "singleStep",
+				"pageStep": "pageStep",
+				"orientation": "vfOrientation",
+				"value": "value"
+			},
+			"events": { "change": {
+				"signal": "valueChanged",
+				"type": "number"
+			} }
+		}
+	};
+	//#endregion
 	//#region standard/Separator/component.json
-	var component_default$2 = {
+	var component_default$7 = {
 		type: "Separator",
 		label: "分隔线",
 		description: "水平或垂直分隔线，orientation 可选 horizontal、vertical",
@@ -1831,8 +2016,90 @@ var VF = (function(exports) {
 		}
 	};
 	//#endregion
+	//#region standard/Slider/component.json
+	var component_default$6 = {
+		type: "Slider",
+		label: "滑条",
+		description: "数值滑条，支持最小最大值、步长、方向和双向绑定数字状态",
+		defaultSize: {
+			"width": 160,
+			"height": 24
+		},
+		entry: "index.js",
+		style: "style.css",
+		props: {
+			"min": {
+				"type": "number",
+				"default": 0,
+				"logic": true
+			},
+			"max": {
+				"type": "number",
+				"default": 100,
+				"logic": true
+			},
+			"step": {
+				"type": "number",
+				"default": 1
+			},
+			"orientation": {
+				"type": "string",
+				"default": "horizontal"
+			},
+			"value": {
+				"type": "number",
+				"default": 0,
+				"logic": true
+			},
+			"enabled": {
+				"type": "boolean",
+				"default": true,
+				"logic": true
+			}
+		},
+		bind: "number",
+		events: ["change"],
+		children: false,
+		qt: {
+			"widget": "QSlider",
+			"props": {
+				"min": "minimum",
+				"max": "maximum",
+				"step": "singleStep",
+				"orientation": "vfOrientation",
+				"value": "value"
+			},
+			"events": { "change": {
+				"signal": "valueChanged",
+				"type": "number"
+			} }
+		}
+	};
+	//#endregion
+	//#region standard/Spacer/component.json
+	var component_default$5 = {
+		type: "Spacer",
+		label: "占位区",
+		description: "排版中的弹性或固定空白占位区",
+		defaultSize: {
+			"width": 24,
+			"height": 24
+		},
+		entry: "index.js",
+		style: "style.css",
+		props: { "orientation": {
+			"type": "string",
+			"default": "horizontal"
+		} },
+		children: false,
+		qt: {
+			"widget": "QWidget",
+			"props": { "orientation": "vfOrientation" }
+		}
+	};
+	//#endregion
 	//#region standard/SpinBox/component.json
-	var component_default$1 = {
+	var component_default$4 = {
 		type: "SpinBox",
 		label: "数字框",
 		description: "数值输入框，支持最小最大值、步长、后缀和双向绑定数字状态",
@@ -1889,8 +2156,102 @@ var VF = (function(exports) {
 		}
 	};
 	//#endregion
+	//#region standard/TabBar/component.json
+	var component_default$3 = {
+		type: "TabBar",
+		label: "页签栏",
+		description: "页签切换栏，tabs 用逗号分隔各页签名，支持双向绑定当前页签序号",
+		defaultSize: {
+			"width": 220,
+			"height": 28
+		},
+		entry: "index.js",
+		style: "style.css",
+		props: {
+			"tabs": {
+				"type": "string",
+				"default": "Tab 1,Tab 2",
+				"logic": true
+			},
+			"value": {
+				"type": "number",
+				"default": 0,
+				"logic": true
+			},
+			"enabled": {
+				"type": "boolean",
+				"default": true,
+				"logic": true
+			}
+		},
+		bind: "number",
+		events: ["change"],
+		children: false,
+		qt: {
+			"widget": "QTabBar",
+			"props": {
+				"tabs": "vfTabs",
+				"value": "currentIndex"
+			},
+			"events": { "change": {
+				"signal": "currentChanged",
+				"type": "number"
+			} }
+		}
+	};
+	//#endregion
+	//#region standard/TextArea/component.json
+	var component_default$2 = {
+		type: "TextArea",
+		label: "多行文本",
+		description: "多行文本编辑框，支持占位提示、只读和双向绑定字符串状态",
+		defaultSize: {
+			"width": 220,
+			"height": 100
+		},
+		entry: "index.js",
+		style: "style.css",
+		props: {
+			"placeholder": {
+				"type": "string",
+				"default": "",
+				"logic": true
+			},
+			"value": {
+				"type": "string",
+				"default": "",
+				"logic": true
+			},
+			"readOnly": {
+				"type": "boolean",
+				"default": false,
+				"logic": true
+			},
+			"enabled": {
+				"type": "boolean",
+				"default": true,
+				"logic": true
+			}
+		},
+		bind: "string",
+		events: ["change"],
+		children: false,
+		qt: {
+			"widget": "QPlainTextEdit",
+			"props": {
+				"placeholder": "placeholderText",
+				"value": "plainText",
+				"readOnly": "readOnly"
+			},
+			"events": { "change": {
+				"signal": "textChanged",
+				"type": "string"
+			} }
+		}
+	};
+	//#endregion
 	//#region standard/TextInput/component.json
-	var component_default = {
+	var component_default$1 = {
 		type: "TextInput",
 		label: "输入框",
 		description: "单行文本输入框，支持双向绑定字符串状态",
@@ -1933,7 +2294,129 @@ var VF = (function(exports) {
 		}
 	};
 	//#endregion
+	//#region standard/Tree/component.json
+	var component_default = {
+		type: "Tree",
+		label: "树",
+		description: "层级树控件，支持分组展开折叠、勾选框、选中行与拖动重排",
+		defaultSize: {
+			"width": 220,
+			"height": 180
+		},
+		entry: "index.js",
+		style: "style.css",
+		props: {
+			"items": {
+				"type": "array",
+				"default": [],
+				"logic": true
+			},
+			"value": {
+				"type": "number",
+				"default": 0,
+				"logic": true
+			},
+			"checkable": {
+				"type": "boolean",
+				"default": true
+			},
+			"draggable": {
+				"type": "boolean",
+				"default": true
+			},
+			"emptyText": {
+				"type": "string",
+				"default": "暂无内容"
+			},
+			"enabled": {
+				"type": "boolean",
+				"default": true,
+				"logic": true
+			}
+		},
+		bind: "number",
+		events: [
+			"change",
+			"select",
+			"toggleCheck",
+			"toggleCollapse",
+			"reorder"
+		],
+		children: false,
+		qt: {
+			"widget": "QTreeWidget",
+			"props": {
+				"items": "vfItems",
+				"value": "currentRow",
+				"checkable": "vfCheckable",
+				"draggable": "vfDraggable",
+				"emptyText": "vfEmptyText"
+			},
+			"events": {
+				"change": {
+					"signal": "currentRowChanged",
+					"type": "number"
+				},
+				"select": {
+					"signal": "currentRowChanged",
+					"type": "number"
+				},
+				"toggleCheck": {
+					"signal": "itemCheckToggled",
+					"type": "string"
+				},
+				"toggleCollapse": {
+					"signal": "itemCollapseToggled",
+					"type": "string"
+				},
+				"reorder": {
+					"signal": "itemReordered",
+					"type": "string"
+				}
+			}
+		}
+	};
+	//#endregion
 	//#region standard/index.ts
+	const ICONS = {
+		arrow: "<path d=\"M5 3l12 7-5 1.5L9.5 16 5 3z\" fill=\"currentColor\"/>",
+		pen: "<path d=\"M14.5 2.5l3 3-9.5 9.5-3.5.5.5-3.5 9.5-9.5zm-8.5 11l-1 1\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		brush: "<path d=\"M14.5 2.5l3 3-8.5 8.5c-1.5 1.5-3.5 2-5 1.5.5-1.5 0-3.5 1.5-5l8.5-8.5z\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		eraser: "<path d=\"M11 4l6 6-7 7H5l-2-2 8-11zm-4 13h10\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		fill: "<path d=\"M9 3l6 6-6 6-6-6 6-6zm7 9c1.2 1.5 2 2.7 2 3.8a2 2 0 1 1-4 0c0-1.1.8-2.3 2-3.8z\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		bucket: "<path d=\"M9 3l6 6-6 6-6-6 6-6zm7 9c1.2 1.5 2 2.7 2 3.8a2 2 0 1 1-4 0c0-1.1.8-2.3 2-3.8z\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		shape: "<rect x=\"3.5\" y=\"3.5\" width=\"8.5\" height=\"8.5\" rx=\"1\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\"/><circle cx=\"13\" cy=\"13\" r=\"4\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\"/>",
+		move: "<path d=\"M10 3v14M3 10h14M10 3l-2.5 2.5M10 3l2.5 2.5M10 17l-2.5-2.5M10 17l2.5-2.5M3 10l2.5-2.5M3 10l2.5 2.5M17 10l-2.5-2.5M17 10l-2.5 2.5\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		lasso: "<path d=\"M10 4c4 0 6.5 2.2 6.5 5s-2.5 5-6.5 5c-1.8 0-3.3-.4-4.5-1.2M6 13a2 2 0 1 0 0 4 2 2 0 0 0 0-4z\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\"/>",
+		eyedropper: "<path d=\"M13.5 3.5l3 3-2 2-3-3 2-2zm-3 3l3 3-6.5 6.5H4v-3l6.5-6.5z\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linejoin=\"round\"/>",
+		transfer: "<path d=\"M4 7h11m-3-3l3 3-3 3M16 13H5m3-3l-3 3 3 3\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		remap: "<path d=\"M4 7h11m-3-3l3 3-3 3M16 13H5m3-3l-3 3 3 3\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		connect: "<path d=\"M5 15c2-6 8-6 10-10M5 15a1.5 1.5 0 1 0 0 .1zm10-10a1.5 1.5 0 1 0 0 .1z\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\"/>",
+		hline: "<path d=\"M3 10h14M6 6v8m8-8v8\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\"/>",
+		vline: "<path d=\"M10 3v14M6 6h8m-8 8h8\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\"/>",
+		area: "<rect x=\"3.5\" y=\"4.5\" width=\"13\" height=\"11\" rx=\"1.5\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-dasharray=\"2.5 2\" fill=\"none\"/>",
+		addline: "<path d=\"M4 14L14 4m-3 11h5m-2.5-2.5v5\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\"/>",
+		automap: "<path d=\"M10 3l2 4.5L16.5 9 12 11l-2 4.5L8 11 3.5 9 8 7.5 10 3z\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\" stroke-linejoin=\"round\"/>",
+		plus: "<path d=\"M10 4v12M4 10h12\" stroke=\"currentColor\" stroke-width=\"1.7\" fill=\"none\" stroke-linecap=\"round\"/>",
+		add: "<path d=\"M10 4v12M4 10h12\" stroke=\"currentColor\" stroke-width=\"1.7\" fill=\"none\" stroke-linecap=\"round\"/>",
+		minus: "<path d=\"M4 10h12\" stroke=\"currentColor\" stroke-width=\"1.7\" fill=\"none\" stroke-linecap=\"round\"/>",
+		remove: "<path d=\"M4 10h12\" stroke=\"currentColor\" stroke-width=\"1.7\" fill=\"none\" stroke-linecap=\"round\"/>",
+		duplicate: "<rect x=\"6.5\" y=\"6.5\" width=\"9\" height=\"9\" rx=\"1.2\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\"/><path d=\"M4.5 12.5V5a1 1 0 0 1 1-1h7.5\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\" stroke-linecap=\"round\"/>",
+		folder: "<path d=\"M3 6a1.5 1.5 0 0 1 1.5-1.5h3.5l1.5 2h6A1.5 1.5 0 0 1 17 8v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 14.5V6z\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\" stroke-linejoin=\"round\"/>",
+		eye: "<path d=\"M2.5 10s3-5 7.5-5 7.5 5 7.5 5-3 5-7.5 5-7.5-5-7.5-5z\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\"/><circle cx=\"10\" cy=\"10\" r=\"2.2\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\"/>",
+		lock: "<rect x=\"4.5\" y=\"9\" width=\"11\" height=\"7.5\" rx=\"1.5\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\"/><path d=\"M7 9V6.5a3 3 0 0 1 6 0V9\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\"/>",
+		unselect: "<rect x=\"4\" y=\"4\" width=\"12\" height=\"12\" rx=\"1.5\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-dasharray=\"2.5 2\" fill=\"none\"/><path d=\"M7 7l6 6M13 7l-6 6\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linecap=\"round\"/>",
+		to_layer: "<path d=\"M4 13l6 3 6-3M4 9l6 3 6-3M10 3v6m-2.5-2L10 9.5 12.5 7\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		float: "<rect x=\"3.5\" y=\"4.5\" width=\"13\" height=\"11\" rx=\"1.5\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\"/><path d=\"M11 4.5v4.5h5.5\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\"/>",
+		play: "<path d=\"M6 4.5l10 5.5-10 5.5V4.5z\" fill=\"currentColor\"/>",
+		pause: "<path d=\"M6.5 4.5h2.5v11H6.5zm4.5 0h2.5v11H11z\" fill=\"currentColor\"/>",
+		prev: "<path d=\"M5.5 5v10M14.5 5l-7 5 7 5V5z\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		next: "<path d=\"M14.5 5v10M5.5 5l7 5-7 5V5z\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		loop: "<path d=\"M14 6l2 2-2 2M6 14l-2-2 2-2M4 10V8a2 2 0 0 1 2-2h10m0 4v2a2 2 0 0 1-2 2H4\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+		onion: "<circle cx=\"8.5\" cy=\"10\" r=\"4.5\" stroke=\"currentColor\" stroke-width=\"1.4\" fill=\"none\"/><circle cx=\"11.5\" cy=\"10\" r=\"4.5\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-dasharray=\"2 1.5\" fill=\"none\"/>",
+		clear: "<path d=\"M5 5l10 10M15 5L5 15\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\"/>",
+		hold: "<path d=\"M5 5v10m4-10v10m3-5h4m-2-2v4\" stroke=\"currentColor\" stroke-width=\"1.5\" fill=\"none\" stroke-linecap=\"round\"/>"
+	};
 	const createLabel = (el, { props }) => {
 		const label = document.createElement("div");
 		label.className = "vf-std-label";
@@ -1961,9 +2444,19 @@ var VF = (function(exports) {
 		});
 		el.append(button);
 		const update = (next) => {
-			var _next$text2, _next$variant;
+			var _next$icon, _next$text2, _next$variant;
 			current = next;
-			button.textContent = String((_next$text2 = next.text) !== null && _next$text2 !== void 0 ? _next$text2 : "");
+			const iconName = String((_next$icon = next.icon) !== null && _next$icon !== void 0 ? _next$icon : "").trim();
+			const text = String((_next$text2 = next.text) !== null && _next$text2 !== void 0 ? _next$text2 : "");
+			if (iconName && ICONS[iconName]) {
+				const svg = `<svg viewBox="0 0 20 20" width="14" height="14" style="flex-shrink:0;display:block">${ICONS[iconName]}</svg>`;
+				const span = text ? `<span style="overflow:hidden;text-overflow:ellipsis">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</span>` : "";
+				button.innerHTML = svg + span;
+				button.dataset.hasIcon = "true";
+			} else {
+				button.textContent = text;
+				delete button.dataset.hasIcon;
+			}
 			button.dataset.variant = String((_next$variant = next.variant) !== null && _next$variant !== void 0 ? _next$variant : "secondary");
 			button.dataset.checked = String(Boolean(next.checked));
 			button.disabled = next.enabled === false;
@@ -1993,6 +2486,25 @@ var VF = (function(exports) {
 			destroy: () => input.remove()
 		};
 	};
+	const createTextArea = (el, { props, emit }) => {
+		const area = document.createElement("textarea");
+		area.className = "vf-std-textarea";
+		area.addEventListener("input", () => emit("change", area.value));
+		el.append(area);
+		const update = (next) => {
+			var _next$placeholder2, _next$value2;
+			area.placeholder = String((_next$placeholder2 = next.placeholder) !== null && _next$placeholder2 !== void 0 ? _next$placeholder2 : "");
+			area.readOnly = Boolean(next.readOnly);
+			area.disabled = next.enabled === false;
+			const value = String((_next$value2 = next.value) !== null && _next$value2 !== void 0 ? _next$value2 : "");
+			if (area.value !== value) area.value = value;
+		};
+		update(props);
+		return {
+			update,
+			destroy: () => area.remove()
+		};
+	};
 	const createSpinBox = (el, { props, emit }) => {
 		const wrap = document.createElement("div");
 		wrap.className = "vf-std-spinbox";
@@ -2015,14 +2527,14 @@ var VF = (function(exports) {
 			}
 		});
 		const update = (next) => {
-			var _next$min, _next$max, _next$step, _next$value2, _next$suffix;
+			var _next$min, _next$max, _next$step, _next$value3, _next$suffix;
 			min = Number((_next$min = next.min) !== null && _next$min !== void 0 ? _next$min : 0);
 			max = Number((_next$max = next.max) !== null && _next$max !== void 0 ? _next$max : 9999);
 			input.min = String(min);
 			input.max = String(max);
 			input.step = String((_next$step = next.step) !== null && _next$step !== void 0 ? _next$step : 1);
 			input.disabled = next.enabled === false;
-			const raw = Number((_next$value2 = next.value) !== null && _next$value2 !== void 0 ? _next$value2 : 0);
+			const raw = Number((_next$value3 = next.value) !== null && _next$value3 !== void 0 ? _next$value3 : 0);
 			const val = String(Number.isFinite(raw) ? clamp(raw) : min);
 			if (input.value !== val) input.value = val;
 			const sfx = String((_next$suffix = next.suffix) !== null && _next$suffix !== void 0 ? _next$suffix : "");
@@ -2035,6 +2547,85 @@ var VF = (function(exports) {
 			destroy: () => wrap.remove()
 		};
 	};
+	const createSlider = (el, { props, emit }) => {
+		const wrap = document.createElement("div");
+		wrap.className = "vf-std-slider";
+		const input = document.createElement("input");
+		input.type = "range";
+		input.className = "vf-std-slider-input";
+		wrap.append(input);
+		el.append(wrap);
+		input.addEventListener("input", () => emit("change", Number(input.value)));
+		const update = (next) => {
+			var _next$min2, _next$max2, _next$step2, _next$value4, _next$orientation;
+			const min = Number((_next$min2 = next.min) !== null && _next$min2 !== void 0 ? _next$min2 : 0);
+			const max = Number((_next$max2 = next.max) !== null && _next$max2 !== void 0 ? _next$max2 : 100);
+			const step = Number((_next$step2 = next.step) !== null && _next$step2 !== void 0 ? _next$step2 : 1);
+			const val = Number((_next$value4 = next.value) !== null && _next$value4 !== void 0 ? _next$value4 : 0);
+			input.min = String(min);
+			input.max = String(max);
+			input.step = String(step > 0 ? step : 1);
+			if (Number(input.value) !== val) input.value = String(val);
+			input.disabled = next.enabled === false;
+			wrap.dataset.orientation = String((_next$orientation = next.orientation) !== null && _next$orientation !== void 0 ? _next$orientation : "horizontal");
+		};
+		update(props);
+		return {
+			update,
+			destroy: () => wrap.remove()
+		};
+	};
+	const createScrollBar = (el, { props, emit }) => {
+		const track = document.createElement("div");
+		track.className = "vf-std-scrollbar";
+		const thumb = document.createElement("div");
+		thumb.className = "vf-std-scrollbar-thumb";
+		track.append(thumb);
+		el.append(track);
+		let current = props;
+		const update = (next) => {
+			var _next$min3, _next$max3, _next$pageStep, _next$value5;
+			current = next;
+			const min = Number((_next$min3 = next.min) !== null && _next$min3 !== void 0 ? _next$min3 : 0);
+			const max = Math.max(min, Number((_next$max3 = next.max) !== null && _next$max3 !== void 0 ? _next$max3 : 100));
+			const page = Math.max(1, Number((_next$pageStep = next.pageStep) !== null && _next$pageStep !== void 0 ? _next$pageStep : 10));
+			const val = Math.min(max, Math.max(min, Number((_next$value5 = next.value) !== null && _next$value5 !== void 0 ? _next$value5 : 0)));
+			const range = Math.max(1, max - min);
+			const ratio = Math.min(.85, Math.max(.15, page / (range + page)));
+			const posRatio = max > min ? (val - min) / (max - min) : 0;
+			const vertical = next.orientation === "vertical";
+			track.dataset.orientation = vertical ? "vertical" : "horizontal";
+			track.dataset.disabled = String(next.enabled === false);
+			if (vertical) {
+				thumb.style.left = "1px";
+				thumb.style.right = "1px";
+				thumb.style.width = "auto";
+				thumb.style.height = `${ratio * 100}%`;
+				thumb.style.top = `${(1 - ratio) * posRatio * 100}%`;
+			} else {
+				thumb.style.top = "1px";
+				thumb.style.bottom = "1px";
+				thumb.style.height = "auto";
+				thumb.style.width = `${ratio * 100}%`;
+				thumb.style.left = `${(1 - ratio) * posRatio * 100}%`;
+			}
+		};
+		track.addEventListener("mousedown", (ev) => {
+			var _current$min, _current$max, _current$step;
+			if (current.enabled === false) return;
+			const rect = track.getBoundingClientRect();
+			const min = Number((_current$min = current.min) !== null && _current$min !== void 0 ? _current$min : 0);
+			const max = Math.max(min, Number((_current$max = current.max) !== null && _current$max !== void 0 ? _current$max : 100));
+			const step = Math.max(1, Number((_current$step = current.step) !== null && _current$step !== void 0 ? _current$step : 1));
+			const frac = current.orientation === "vertical" ? (ev.clientY - rect.top) / Math.max(1, rect.height) : (ev.clientX - rect.left) / Math.max(1, rect.width);
+			emit("change", Math.min(max, Math.max(min, Math.round((min + Math.min(1, Math.max(0, frac)) * (max - min)) / step) * step)));
+		});
+		update(props);
+		return {
+			update,
+			destroy: () => track.remove()
+		};
+	};
 	const createComboBox = (el, { props, emit }) => {
 		const select = document.createElement("select");
 		select.className = "vf-std-combobox";
@@ -2042,8 +2633,8 @@ var VF = (function(exports) {
 		select.addEventListener("change", () => emit("change", select.value));
 		el.append(select);
 		const update = (next) => {
-			var _next$options, _next$value3;
-			const rawOptions = String((_next$options = next.options) !== null && _next$options !== void 0 ? _next$options : "");
+			var _next$options, _next$value6;
+			const rawOptions = Array.isArray(next.options) ? next.options.map(String).join(",") : String((_next$options = next.options) !== null && _next$options !== void 0 ? _next$options : "");
 			if (rawOptions !== lastOptions) {
 				lastOptions = rawOptions;
 				select.replaceChildren();
@@ -2055,7 +2646,7 @@ var VF = (function(exports) {
 				}
 			}
 			select.disabled = next.enabled === false;
-			const val = String((_next$value3 = next.value) !== null && _next$value3 !== void 0 ? _next$value3 : "");
+			const val = String((_next$value6 = next.value) !== null && _next$value6 !== void 0 ? _next$value6 : "");
 			if (val && select.value !== val) select.value = val;
 		};
 		update(props);
@@ -2086,14 +2677,52 @@ var VF = (function(exports) {
 			destroy: () => label.remove()
 		};
 	};
+	const createTabBar = (el, { props, emit }) => {
+		const bar = document.createElement("div");
+		bar.className = "vf-std-tabbar";
+		el.append(bar);
+		const parseTabs = (raw) => {
+			if (Array.isArray(raw)) return raw.map((it, i) => {
+				var _ref, _ref2, _it$label;
+				return typeof it === "object" && it !== null && !Array.isArray(it) ? String((_ref = (_ref2 = (_it$label = it.label) !== null && _it$label !== void 0 ? _it$label : it.title) !== null && _ref2 !== void 0 ? _ref2 : it.name) !== null && _ref !== void 0 ? _ref : i) : String(it);
+			});
+			return String(raw !== null && raw !== void 0 ? raw : "").split(",").map((s) => s.trim()).filter(Boolean);
+		};
+		const update = (next) => {
+			var _next$tabs, _next$value7;
+			bar.replaceChildren();
+			const tabs = parseTabs((_next$tabs = next.tabs) !== null && _next$tabs !== void 0 ? _next$tabs : "");
+			const cur = Number((_next$value7 = next.value) !== null && _next$value7 !== void 0 ? _next$value7 : 0);
+			const disabled = next.enabled === false;
+			tabs.forEach((label, idx) => {
+				const btn = document.createElement("button");
+				btn.type = "button";
+				btn.dataset.vfTab = String(idx);
+				btn.className = "vf-std-tabbar-tab" + (idx === cur ? " active" : "");
+				btn.textContent = label;
+				btn.disabled = disabled;
+				btn.addEventListener("click", () => {
+					if (disabled) return;
+					if (idx !== cur) emit("change", idx);
+				});
+				bar.append(btn);
+			});
+		};
+		update(props);
+		return {
+			update,
+			destroy: () => bar.remove()
+		};
+	};
 	const createList = (el, { props, emit }) => {
 		const container = document.createElement("div");
 		container.className = "vf-std-list";
 		el.append(container);
+		let dragFrom = -1;
 		const itemLabel = (item) => {
 			if (item && typeof item === "object" && !Array.isArray(item)) {
-				var _ref, _ref2, _ref3, _ref4, _item$name;
-				return String((_ref = (_ref2 = (_ref3 = (_ref4 = (_item$name = item.name) !== null && _item$name !== void 0 ? _item$name : item.label) !== null && _ref4 !== void 0 ? _ref4 : item.title) !== null && _ref3 !== void 0 ? _ref3 : item.text) !== null && _ref2 !== void 0 ? _ref2 : item.id) !== null && _ref !== void 0 ? _ref : "");
+				var _ref3, _ref4, _ref5, _ref6, _item$name;
+				return String((_ref3 = (_ref4 = (_ref5 = (_ref6 = (_item$name = item.name) !== null && _item$name !== void 0 ? _item$name : item.label) !== null && _ref6 !== void 0 ? _ref6 : item.title) !== null && _ref5 !== void 0 ? _ref5 : item.text) !== null && _ref4 !== void 0 ? _ref4 : item.id) !== null && _ref3 !== void 0 ? _ref3 : "");
 			}
 			return String(item !== null && item !== void 0 ? item : "");
 		};
@@ -2103,6 +2732,8 @@ var VF = (function(exports) {
 			container.dataset.disabled = String(disabled);
 			const items = Array.isArray(next.items) ? next.items : [];
 			const selected = typeof next.value === "number" ? next.value : 0;
+			const draggable = Boolean(next.draggable);
+			const mutedFrom = typeof next.mutedFrom === "number" ? next.mutedFrom : -1;
 			if (items.length === 0) {
 				var _next$emptyText;
 				const empty = document.createElement("div");
@@ -2112,19 +2743,51 @@ var VF = (function(exports) {
 				return;
 			}
 			items.forEach((item, index) => {
+				const isObj = item !== null && typeof item === "object" && !Array.isArray(item);
+				const muted = isObj && Boolean(item.muted) || mutedFrom >= 0 && index >= mutedFrom;
 				const row = document.createElement("div");
-				row.className = "vf-std-list-row" + (index === selected ? " selected" : "");
+				row.dataset.vfRow = String(index);
+				row.className = "vf-std-list-row" + (index === selected ? " selected" : "") + (muted ? " muted" : "");
 				const text = document.createElement("span");
 				text.className = "vf-std-list-text";
 				text.textContent = itemLabel(item);
 				row.append(text);
+				if (isObj && item.badge !== void 0 && item.badge !== "") {
+					const badge = document.createElement("span");
+					badge.className = "vf-std-list-badge";
+					badge.textContent = String(item.badge);
+					row.append(badge);
+				}
 				row.addEventListener("click", () => {
 					if (disabled) return;
-					if (index !== selected) {
-						emit("change", index);
-						emit("select", index);
-					}
+					emit("select", index);
+					if (index !== selected) emit("change", index);
 				});
+				if (draggable) {
+					row.draggable = true;
+					row.addEventListener("dragstart", (ev) => {
+						dragFrom = index;
+						if (ev.dataTransfer) {
+							ev.dataTransfer.effectAllowed = "move";
+							ev.dataTransfer.setData("text/plain", String(index));
+						}
+					});
+					row.addEventListener("dragover", (ev) => {
+						ev.preventDefault();
+						if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+					});
+					row.addEventListener("drop", (ev) => {
+						var _ev$dataTransfer$getD, _ev$dataTransfer;
+						ev.preventDefault();
+						if (disabled) return;
+						const from = dragFrom >= 0 ? dragFrom : Number((_ev$dataTransfer$getD = (_ev$dataTransfer = ev.dataTransfer) === null || _ev$dataTransfer === void 0 ? void 0 : _ev$dataTransfer.getData("text/plain")) !== null && _ev$dataTransfer$getD !== void 0 ? _ev$dataTransfer$getD : -1);
+						dragFrom = -1;
+						if (from >= 0 && from !== index) emit("reorder", {
+							from,
+							to: index
+						});
+					});
+				}
 				container.append(row);
 			});
 		};
@@ -2134,13 +2797,206 @@ var VF = (function(exports) {
 			destroy: () => container.remove()
 		};
 	};
+	function normalizeTreeItems(rawItems) {
+		if (!Array.isArray(rawItems)) return [];
+		const flat = [];
+		const walk = (list, depthOffset) => {
+			for (let i = 0; i < list.length; i++) {
+				var _ref7, _item$id, _ref8, _ref9, _item$label, _item$kind;
+				const item = list[i];
+				if (typeof item !== "object" || item === null || Array.isArray(item)) {
+					flat.push({
+						index: flat.length,
+						id: String(flat.length),
+						label: String(item !== null && item !== void 0 ? item : ""),
+						kind: "",
+						isGroup: false,
+						depth: depthOffset,
+						collapsed: false,
+						checked: true
+					});
+					continue;
+				}
+				const children = Array.isArray(item.children) ? item.children : [];
+				const depth = typeof item.depth === "number" ? item.depth : depthOffset;
+				const idx = flat.length;
+				flat.push({
+					index: idx,
+					id: String((_ref7 = (_item$id = item.id) !== null && _item$id !== void 0 ? _item$id : item.name) !== null && _ref7 !== void 0 ? _ref7 : idx),
+					label: String((_ref8 = (_ref9 = (_item$label = item.label) !== null && _item$label !== void 0 ? _item$label : item.name) !== null && _ref9 !== void 0 ? _ref9 : item.text) !== null && _ref8 !== void 0 ? _ref8 : idx),
+					kind: String((_item$kind = item.kind) !== null && _item$kind !== void 0 ? _item$kind : ""),
+					isGroup: Boolean(item.isGroup || children.length > 0),
+					depth,
+					collapsed: Boolean(item.collapsed),
+					checked: item.checked !== void 0 ? Boolean(item.checked) : item.visible !== void 0 ? Boolean(item.visible) : true
+				});
+				if (children.length > 0) walk(children, depth + 1);
+			}
+		};
+		walk(rawItems, 0);
+		return flat;
+	}
+	const createTree = (el, { props, emit }) => {
+		const container = document.createElement("div");
+		container.className = "vf-std-tree";
+		el.append(container);
+		let dragFrom = -1;
+		const update = (next) => {
+			var _next$items, _next$selectedIndex;
+			container.replaceChildren();
+			const disabled = next.enabled === false;
+			container.dataset.disabled = String(disabled);
+			const rows = normalizeTreeItems((_next$items = next.items) !== null && _next$items !== void 0 ? _next$items : []);
+			const selected = typeof next.value === "number" ? next.value : Number((_next$selectedIndex = next.selectedIndex) !== null && _next$selectedIndex !== void 0 ? _next$selectedIndex : 0);
+			const checkable = next.checkable !== false;
+			const draggable = next.draggable !== false;
+			if (rows.length === 0) {
+				var _next$emptyText2;
+				const empty = document.createElement("div");
+				empty.className = "vf-std-tree-empty";
+				empty.textContent = String((_next$emptyText2 = next.emptyText) !== null && _next$emptyText2 !== void 0 ? _next$emptyText2 : "暂无内容");
+				container.append(empty);
+				return;
+			}
+			let collapsedDepth = null;
+			for (const r of rows) {
+				if (collapsedDepth !== null) {
+					if (r.depth > collapsedDepth) continue;
+					collapsedDepth = null;
+				}
+				if (r.isGroup && r.collapsed) collapsedDepth = r.depth;
+				const row = document.createElement("div");
+				row.dataset.vfRow = String(r.index);
+				row.dataset.vfItemId = r.id;
+				row.className = "vf-std-tree-row" + (r.index === selected ? " selected" : "") + (!r.checked ? " unchecked" : "");
+				row.style.paddingLeft = `${6 + r.depth * 14}px`;
+				const caret = document.createElement("span");
+				caret.className = "vf-std-tree-caret";
+				if (r.isGroup) {
+					caret.dataset.vfAction = "collapse";
+					caret.textContent = r.collapsed ? "▸" : "▾";
+					caret.addEventListener("click", (ev) => {
+						ev.stopPropagation();
+						if (disabled) return;
+						emit("toggleCollapse", {
+							index: r.index,
+							id: r.id,
+							collapsed: !r.collapsed
+						});
+					});
+				}
+				row.append(caret);
+				if (checkable) {
+					const chk = document.createElement("input");
+					chk.type = "checkbox";
+					chk.dataset.vfAction = "check";
+					chk.className = "vf-std-tree-check";
+					chk.checked = r.checked;
+					chk.addEventListener("click", (ev) => ev.stopPropagation());
+					chk.addEventListener("change", (ev) => {
+						ev.stopPropagation();
+						if (disabled) return;
+						emit("toggleCheck", {
+							index: r.index,
+							id: r.id,
+							checked: chk.checked
+						});
+					});
+					row.append(chk);
+				}
+				const label = document.createElement("span");
+				label.className = "vf-std-tree-text" + (r.isGroup ? " group" : "");
+				label.textContent = r.label;
+				row.append(label);
+				if (r.kind) {
+					const badge = document.createElement("span");
+					badge.className = "vf-std-tree-badge";
+					badge.textContent = r.kind;
+					row.append(badge);
+				}
+				row.addEventListener("click", () => {
+					if (disabled) return;
+					emit("select", r.index);
+					if (r.index !== selected) emit("change", r.index);
+				});
+				if (draggable) {
+					row.draggable = true;
+					row.addEventListener("dragstart", (ev) => {
+						dragFrom = r.index;
+						if (ev.dataTransfer) {
+							ev.dataTransfer.effectAllowed = "move";
+							ev.dataTransfer.setData("text/plain", String(r.index));
+						}
+					});
+					row.addEventListener("dragover", (ev) => {
+						ev.preventDefault();
+						if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+					});
+					row.addEventListener("drop", (ev) => {
+						var _ev$dataTransfer$getD2, _ev$dataTransfer2;
+						ev.preventDefault();
+						if (disabled) return;
+						const from = dragFrom >= 0 ? dragFrom : Number((_ev$dataTransfer$getD2 = (_ev$dataTransfer2 = ev.dataTransfer) === null || _ev$dataTransfer2 === void 0 ? void 0 : _ev$dataTransfer2.getData("text/plain")) !== null && _ev$dataTransfer$getD2 !== void 0 ? _ev$dataTransfer$getD2 : -1);
+						dragFrom = -1;
+						if (from >= 0 && from !== r.index) emit("reorder", {
+							from,
+							to: r.index
+						});
+					});
+				}
+				container.append(row);
+			}
+		};
+		update(props);
+		return {
+			update,
+			destroy: () => container.remove()
+		};
+	};
+	const createDialogButtonBox = (el, { props, emit }) => {
+		const bar = document.createElement("div");
+		bar.className = "vf-std-buttonbox";
+		el.append(bar);
+		const parseButtons = (raw) => {
+			if (Array.isArray(raw)) return raw.map(String);
+			return String(raw !== null && raw !== void 0 ? raw : "OK,Cancel").split(",").map((s) => s.trim()).filter(Boolean);
+		};
+		const update = (next) => {
+			var _next$buttons;
+			bar.replaceChildren();
+			const list = parseButtons((_next$buttons = next.buttons) !== null && _next$buttons !== void 0 ? _next$buttons : "OK,Cancel");
+			const disabled = next.enabled === false;
+			for (const role of list) {
+				const isAccept = /^(ok|accept|yes|apply|create|save|confirm)$/i.test(role);
+				const isReject = /^(cancel|reject|no|close)$/i.test(role);
+				const text = isAccept && next.okText && next.okText !== "OK" ? String(next.okText) : isReject && next.cancelText && next.cancelText !== "Cancel" ? String(next.cancelText) : role;
+				const btn = document.createElement("button");
+				btn.type = "button";
+				btn.dataset.vfRole = isAccept ? "accept" : isReject ? "reject" : role.toLowerCase();
+				btn.className = "vf-std-buttonbox-btn" + (isAccept ? " primary" : "");
+				btn.textContent = text;
+				btn.disabled = disabled;
+				btn.addEventListener("click", () => {
+					if (disabled) return;
+					if (isAccept) emit("accept");
+					else if (isReject) emit("reject");
+				});
+				bar.append(btn);
+			}
+		};
+		update(props);
+		return {
+			update,
+			destroy: () => bar.remove()
+		};
+	};
 	const createSeparator = (el, { props }) => {
 		const line = document.createElement("div");
 		line.className = "vf-std-separator";
 		el.append(line);
 		const update = (next) => {
-			var _next$orientation;
-			line.dataset.orientation = String((_next$orientation = next.orientation) !== null && _next$orientation !== void 0 ? _next$orientation : "horizontal");
+			var _next$orientation2;
+			line.dataset.orientation = String((_next$orientation2 = next.orientation) !== null && _next$orientation2 !== void 0 ? _next$orientation2 : "horizontal");
 		};
 		update(props);
 		return {
@@ -2176,26 +3032,54 @@ var VF = (function(exports) {
 			if (mode !== "preview" || current.enabled === false || !Boolean(current.floating)) return;
 			if (e.button !== 0 || e.target === toggleBtn) return;
 			e.stopPropagation();
-			const startX = e.clientX;
-			const startY = e.clientY;
+			const win = (root.ownerDocument || document).defaultView || window;
+			const frameEl = win.frameElement;
+			const outerWin = frameEl && frameEl.ownerDocument ? frameEl.ownerDocument.defaultView : null;
+			const toLocalPoint = (pe, fromOuter = false) => {
+				if (Boolean(outerWin && frameEl && (fromOuter || pe.view === outerWin)) && frameEl) {
+					const fRect = frameEl.getBoundingClientRect();
+					const scaleX = fRect.width > 0 && frameEl.offsetWidth > 0 ? fRect.width / frameEl.offsetWidth : 1;
+					const scaleY = fRect.height > 0 && frameEl.offsetHeight > 0 ? fRect.height / frameEl.offsetHeight : 1;
+					return {
+						x: (pe.clientX - fRect.left) / scaleX,
+						y: (pe.clientY - fRect.top) / scaleY
+					};
+				}
+				const rect = root.getBoundingClientRect();
+				const zoom = rect.width > 0 && root.offsetWidth > 0 ? rect.width / root.offsetWidth : 1;
+				return {
+					x: pe.clientX / zoom,
+					y: pe.clientY / zoom
+				};
+			};
+			const startPt = toLocalPoint(e, false);
 			const baseX = Number((_current$floatX = current.floatX) !== null && _current$floatX !== void 0 ? _current$floatX : 60);
 			const baseY = Number((_current$floatY = current.floatY) !== null && _current$floatY !== void 0 ? _current$floatY : 80);
-			const rect = root.getBoundingClientRect();
-			const zoom = rect.width > 0 && root.offsetWidth > 0 ? rect.width / root.offsetWidth : 1;
-			const onMove = (me) => {
-				const dx = Math.round((me.clientX - startX) / zoom);
-				const dy = Math.round((me.clientY - startY) / zoom);
+			const onMove = (me, fromOuter = false) => {
+				const curPt = toLocalPoint(me, fromOuter);
+				const dx = Math.round(curPt.x - startPt.x);
+				const dy = Math.round(curPt.y - startPt.y);
 				emit("move", {
 					x: Math.max(0, baseX + dx),
 					y: Math.max(0, baseY + dy)
 				});
 			};
+			const onInnerMove = (me) => onMove(me, false);
+			const onOuterMove = (me) => onMove(me, true);
 			const onUp = () => {
-				window.removeEventListener("pointermove", onMove);
-				window.removeEventListener("pointerup", onUp);
+				win.removeEventListener("pointermove", onInnerMove);
+				win.removeEventListener("pointerup", onUp);
+				if (outerWin && outerWin !== win) {
+					outerWin.removeEventListener("pointermove", onOuterMove);
+					outerWin.removeEventListener("pointerup", onUp);
+				}
 			};
-			window.addEventListener("pointermove", onMove);
-			window.addEventListener("pointerup", onUp);
+			win.addEventListener("pointermove", onInnerMove);
+			win.addEventListener("pointerup", onUp);
+			if (outerWin && outerWin !== win) {
+				outerWin.addEventListener("pointermove", onOuterMove);
+				outerWin.addEventListener("pointerup", onUp);
+			}
 		});
 		const update = (next) => {
 			var _next$headerHeight, _next$title;
@@ -2216,9 +3100,408 @@ var VF = (function(exports) {
 			destroy: () => root.remove()
 		};
 	};
+	const createSpacer = (el) => {
+		const spacer = document.createElement("div");
+		spacer.className = "vf-std-spacer";
+		el.append(spacer);
+		return {
+			update() {},
+			destroy: () => spacer.remove()
+		};
+	};
+	function parseDataFormSchema(raw) {
+		let target = raw;
+		if (typeof target === "string") try {
+			target = JSON.parse(target);
+		} catch (_unused) {
+			return {
+				row_spacing: 8,
+				column_spacing: 6,
+				controls: []
+			};
+		}
+		if (Array.isArray(target)) return {
+			row_spacing: 8,
+			column_spacing: 6,
+			controls: target
+		};
+		if (typeof target === "object" && target !== null) {
+			var _obj$row_spacing, _obj$column_spacing;
+			const obj = target;
+			return {
+				row_spacing: Number((_obj$row_spacing = obj.row_spacing) !== null && _obj$row_spacing !== void 0 ? _obj$row_spacing : 8),
+				column_spacing: Number((_obj$column_spacing = obj.column_spacing) !== null && _obj$column_spacing !== void 0 ? _obj$column_spacing : 6),
+				controls: Array.isArray(obj.controls) ? obj.controls : []
+			};
+		}
+		return {
+			row_spacing: 8,
+			column_spacing: 6,
+			controls: []
+		};
+	}
+	function parseDataFormValues(raw) {
+		if (typeof raw === "string") try {
+			const parsed = JSON.parse(raw);
+			return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+		} catch (_unused2) {
+			return {};
+		}
+		if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) return raw;
+		return {};
+	}
+	function isCheckValueOn(val) {
+		if (typeof val === "boolean") return val;
+		if (typeof val === "number") return val !== 0;
+		if (typeof val === "string") {
+			const s = val.trim().toLowerCase();
+			return s === "on" || s === "true" || s === "1" || s === "yes";
+		}
+		return false;
+	}
+	function evalStringVisibleWhen(expr, valMap) {
+		const s = String(expr !== null && expr !== void 0 ? expr : "").trim();
+		if (!s) return true;
+		if (s.includes("||")) return s.split("||").some((p) => evalStringVisibleWhen(p, valMap));
+		if (s.includes("&&")) return s.split("&&").every((p) => evalStringVisibleWhen(p, valMap));
+		const neIdx = s.indexOf("!=");
+		if (neIdx > 0) {
+			var _valMap$key;
+			const key = s.slice(0, neIdx).trim();
+			const rhs = s.slice(neIdx + 2).trim().replace(/^['"]|['"]$/g, "");
+			return String((_valMap$key = valMap[key]) !== null && _valMap$key !== void 0 ? _valMap$key : "") !== rhs;
+		}
+		const eqIdx = s.indexOf("==");
+		if (eqIdx > 0) {
+			var _valMap$key2;
+			const key = s.slice(0, eqIdx).trim();
+			const rhs = s.slice(eqIdx + 2).trim().replace(/^['"]|['"]$/g, "");
+			return String((_valMap$key2 = valMap[key]) !== null && _valMap$key2 !== void 0 ? _valMap$key2 : "") === rhs;
+		}
+		if (s.startsWith("!")) return !isCheckValueOn(valMap[s.slice(1).trim()]);
+		return isCheckValueOn(valMap[s]);
+	}
+	function isDataFormControlVisible(ctrl, valMap) {
+		var _ref10, _ref11, _cond$name;
+		const cond = ctrl.visible_when;
+		if (!cond) return true;
+		if (typeof cond === "string") return evalStringVisibleWhen(cond, valMap);
+		if (typeof cond !== "object") return true;
+		const target = String((_ref10 = (_ref11 = (_cond$name = cond.name) !== null && _cond$name !== void 0 ? _cond$name : cond.control) !== null && _ref11 !== void 0 ? _ref11 : cond.field) !== null && _ref10 !== void 0 ? _ref10 : "");
+		if (!target) return true;
+		const actual = valMap[target];
+		if (Array.isArray(cond.values)) return cond.values.some((v) => String(v) === String(actual));
+		if (cond.value !== void 0) return String(actual) === String(cond.value);
+		if (cond.equals !== void 0) return String(actual) === String(cond.equals);
+		if (cond.not_equals !== void 0) return String(actual) !== String(cond.not_equals);
+		if (Array.isArray(cond.in)) return cond.in.some((v) => String(v) === String(actual));
+		return true;
+	}
+	function resolveColorHex(raw) {
+		var _map$s;
+		const s = String(raw !== null && raw !== void 0 ? raw : "").trim().toLowerCase();
+		if (s.startsWith("#") && (s.length === 4 || s.length === 7)) return s;
+		return (_map$s = {
+			black: "#1e1e1e",
+			blue: "#2563eb",
+			green: "#16a34a",
+			red: "#dc2626",
+			white: "#f8fafc",
+			yellow: "#eab308"
+		}[s]) !== null && _map$s !== void 0 ? _map$s : "#4a90d9";
+	}
+	const createDataForm = (el, { props, emit }) => {
+		const root = document.createElement("div");
+		root.className = "vf-std-dataform";
+		el.append(root);
+		let localOverrides = {};
+		let lastSchemaKey = "";
+		let entries = [];
+		let currentProps = props;
+		const computeValMap = (schema, next) => {
+			var _next$values;
+			const extValues = parseDataFormValues((_next$values = next.values) !== null && _next$values !== void 0 ? _next$values : "{}");
+			const valMap = {};
+			for (const c of schema.controls) {
+				var _c$name, _c$value;
+				if (!c || typeof c !== "object") continue;
+				const name = String((_c$name = c.name) !== null && _c$name !== void 0 ? _c$name : "");
+				if (!name) continue;
+				if (extValues[name] !== void 0) valMap[name] = extValues[name];
+				else if (localOverrides[name] !== void 0) valMap[name] = localOverrides[name];
+				else if (valMap[name] === void 0) valMap[name] = (_c$value = c.value) !== null && _c$value !== void 0 ? _c$value : null;
+			}
+			for (const [k, v] of Object.entries(extValues)) if (valMap[k] === void 0) valMap[k] = v;
+			return valMap;
+		};
+		const syncAll = (schema, next) => {
+			const valMap = computeValMap(schema, next);
+			const formEnabled = next.enabled !== false;
+			for (const entry of entries) entry.sync(valMap, formEnabled);
+		};
+		const emitField = (c, val) => {
+			var _c$name2, _c$hook, _c$type, _currentProps$schema;
+			const name = String((_c$name2 = c.name) !== null && _c$name2 !== void 0 ? _c$name2 : "");
+			localOverrides[name] = val;
+			emit("change", {
+				name,
+				value: val,
+				hook: String((_c$hook = c.hook) !== null && _c$hook !== void 0 ? _c$hook : ""),
+				type: String((_c$type = c.type) !== null && _c$type !== void 0 ? _c$type : "")
+			});
+			const schema = parseDataFormSchema((_currentProps$schema = currentProps.schema) !== null && _currentProps$schema !== void 0 ? _currentProps$schema : []);
+			syncAll(schema, currentProps);
+		};
+		const buildDom = (schema, next) => {
+			root.replaceChildren();
+			entries = [];
+			if (schema.controls.length === 0) {
+				var _next$emptyText3;
+				const empty = document.createElement("div");
+				empty.className = "vf-std-dataform-empty";
+				empty.textContent = String((_next$emptyText3 = next.emptyText) !== null && _next$emptyText3 !== void 0 ? _next$emptyText3 : "当前工具无可调选项");
+				root.append(empty);
+				return;
+			}
+			let maxCol = 1;
+			const rowCounts = /* @__PURE__ */ new Map();
+			for (const c of schema.controls) {
+				var _c$row, _rowCounts$get, _ref12, _ref13, _c$end_column;
+				if (!c || typeof c !== "object") continue;
+				const r = Number((_c$row = c.row) !== null && _c$row !== void 0 ? _c$row : 0);
+				rowCounts.set(r, ((_rowCounts$get = rowCounts.get(r)) !== null && _rowCounts$get !== void 0 ? _rowCounts$get : 0) + 1);
+				const ec = Number((_ref12 = (_ref13 = (_c$end_column = c.end_column) !== null && _c$end_column !== void 0 ? _c$end_column : c.start_column) !== null && _ref13 !== void 0 ? _ref13 : c.column) !== null && _ref12 !== void 0 ? _ref12 : 1);
+				if (ec > maxCol) maxCol = ec;
+			}
+			const colCount = Math.max(2, maxCol + 1);
+			const grid = document.createElement("div");
+			grid.className = "vf-std-dataform-grid";
+			grid.style.gridTemplateColumns = `repeat(${colCount}, minmax(0, 1fr))`;
+			grid.style.rowGap = `${Math.min(2, Math.max(1, schema.row_spacing))}px`;
+			grid.style.columnGap = `${Math.max(4, schema.column_spacing)}px`;
+			for (const c of schema.controls) {
+				var _c$state$color, _c$name3, _c$title, _c$type2, _c$row2, _ref14, _c$start_column, _ref15, _ref16, _c$end_column2, _rowCounts$get2;
+				if (!c || typeof c !== "object") continue;
+				const stateStr = typeof c.state === "string" ? c.state : "normal";
+				const stateColor = typeof c.state === "object" && c.state !== null && !Array.isArray(c.state) ? String((_c$state$color = c.state.color) !== null && _c$state$color !== void 0 ? _c$state$color : "") : "";
+				const name = String((_c$name3 = c.name) !== null && _c$name3 !== void 0 ? _c$name3 : "");
+				const title = String((_c$title = c.title) !== null && _c$title !== void 0 ? _c$title : name);
+				const type = String((_c$type2 = c.type) !== null && _c$type2 !== void 0 ? _c$type2 : "button");
+				const rawRow = Number((_c$row2 = c.row) !== null && _c$row2 !== void 0 ? _c$row2 : 0);
+				const row = rawRow + 1;
+				const startCol = Number((_ref14 = (_c$start_column = c.start_column) !== null && _c$start_column !== void 0 ? _c$start_column : c.column) !== null && _ref14 !== void 0 ? _ref14 : 0) + 1;
+				let endCol = Number((_ref15 = (_ref16 = (_c$end_column2 = c.end_column) !== null && _c$end_column2 !== void 0 ? _c$end_column2 : c.start_column) !== null && _ref16 !== void 0 ? _ref16 : c.column) !== null && _ref15 !== void 0 ? _ref15 : 1) + 2;
+				if (((_rowCounts$get2 = rowCounts.get(rawRow)) !== null && _rowCounts$get2 !== void 0 ? _rowCounts$get2 : 0) === 1 && startCol === 1 && endCol >= 3) endCol = colCount + 1;
+				const cell = document.createElement("div");
+				cell.className = "vf-std-dataform-cell";
+				cell.dataset.vfField = name;
+				if (c.value !== void 0 && c.type === "button") cell.dataset.vfFieldValueOption = String(c.value);
+				cell.style.gridRow = String(row);
+				cell.style.gridColumn = `${startCol} / ${Math.max(startCol + 1, endCol)}`;
+				let syncControl = () => {};
+				if (type === "slider") {
+					var _c$min, _c$max;
+					const rowBox = document.createElement("div");
+					rowBox.className = "vf-std-dataform-row";
+					const lbl = document.createElement("span");
+					lbl.textContent = title;
+					const num = document.createElement("span");
+					num.className = "vf-std-dataform-val";
+					num.dataset.vfFieldValue = name;
+					const input = document.createElement("input");
+					input.type = "range";
+					input.className = "vf-std-dataform-slider";
+					input.min = String((_c$min = c.min) !== null && _c$min !== void 0 ? _c$min : 0);
+					input.max = String((_c$max = c.max) !== null && _c$max !== void 0 ? _c$max : 100);
+					input.addEventListener("input", () => {
+						num.textContent = input.value;
+						emitField(c, Number(input.value));
+					});
+					input.addEventListener("change", () => {
+						num.textContent = input.value;
+						emitField(c, Number(input.value));
+					});
+					rowBox.append(lbl, input, num);
+					cell.append(rowBox);
+					syncControl = (val, disabled) => {
+						var _ref17;
+						const v = String((_ref17 = val !== null && val !== void 0 ? val : c.min) !== null && _ref17 !== void 0 ? _ref17 : 0);
+						num.textContent = v;
+						if (document.activeElement !== input && input.value !== v) input.value = v;
+						input.disabled = disabled;
+					};
+				} else if (type === "list" || type === "select") {
+					const rowBox = document.createElement("div");
+					rowBox.className = "vf-std-dataform-row";
+					const lbl = document.createElement("span");
+					lbl.textContent = title;
+					const sel = document.createElement("select");
+					sel.className = "vf-std-dataform-select";
+					const opts = Array.isArray(c.options) ? c.options : [];
+					for (const opt of opts) {
+						var _ref18, _ref19, _optMap$value, _ref20, _ref21, _optMap$title;
+						const optMap = typeof opt === "object" && opt !== null && !Array.isArray(opt) ? opt : null;
+						const optVal = optMap ? String((_ref18 = (_ref19 = (_optMap$value = optMap.value) !== null && _optMap$value !== void 0 ? _optMap$value : optMap.title) !== null && _ref19 !== void 0 ? _ref19 : optMap.label) !== null && _ref18 !== void 0 ? _ref18 : "") : String(opt);
+						const optTitle = optMap ? String((_ref20 = (_ref21 = (_optMap$title = optMap.title) !== null && _optMap$title !== void 0 ? _optMap$title : optMap.label) !== null && _ref21 !== void 0 ? _ref21 : optMap.value) !== null && _ref20 !== void 0 ? _ref20 : "") : String(opt);
+						const o = document.createElement("option");
+						o.value = optVal;
+						o.textContent = optTitle;
+						sel.append(o);
+					}
+					sel.addEventListener("change", () => emitField(c, sel.value));
+					rowBox.append(lbl, sel);
+					cell.append(rowBox);
+					syncControl = (val, disabled) => {
+						sel.disabled = disabled;
+						const v = String(val !== null && val !== void 0 ? val : "");
+						if (v && sel.value !== v) sel.value = v;
+					};
+				} else if (type === "check" || type === "checkbox") {
+					const lbl = document.createElement("label");
+					lbl.className = "vf-std-dataform-check";
+					const chk = document.createElement("input");
+					chk.type = "checkbox";
+					const usesOnOff = typeof c.value === "string" && (c.value.toLowerCase() === "on" || c.value.toLowerCase() === "off");
+					chk.addEventListener("change", () => {
+						emitField(c, usesOnOff ? chk.checked ? "on" : "off" : chk.checked);
+					});
+					const span = document.createElement("span");
+					span.textContent = title;
+					lbl.append(chk, span);
+					cell.append(lbl);
+					syncControl = (val, disabled) => {
+						chk.checked = isCheckValueOn(val);
+						chk.disabled = disabled;
+					};
+				} else if (type === "color" || type === "palette") {
+					const palBox = document.createElement("div");
+					palBox.className = "vf-std-dataform-palette";
+					const rowBox = document.createElement("div");
+					rowBox.className = "vf-std-dataform-row";
+					const lbl = document.createElement("span");
+					lbl.textContent = title;
+					const sw = document.createElement("input");
+					sw.type = "color";
+					sw.addEventListener("change", () => emitField(c, sw.value));
+					rowBox.append(lbl, sw);
+					palBox.append(rowBox);
+					const swatches = Array.isArray(c.swatches) ? [...c.swatches.map(String)] : type === "palette" ? [
+						"black",
+						"blue",
+						"green",
+						"#dc2626"
+					] : [];
+					const swatchRow = document.createElement("div");
+					swatchRow.className = "vf-std-dataform-swatches";
+					const renderSwatches = (activeVal, disabled) => {
+						swatchRow.replaceChildren();
+						for (const sc of swatches) {
+							const sb = document.createElement("button");
+							sb.type = "button";
+							sb.className = "vf-std-dataform-swatch-btn";
+							sb.dataset.vfSwatch = sc;
+							sb.dataset.active = String(String(activeVal) === sc);
+							sb.style.background = resolveColorHex(sc);
+							sb.title = sc;
+							sb.disabled = disabled;
+							sb.addEventListener("click", () => emitField(c, sc));
+							swatchRow.append(sb);
+						}
+					};
+					if (swatches.length > 0) palBox.append(swatchRow);
+					cell.append(palBox);
+					syncControl = (val, disabled) => {
+						sw.disabled = disabled;
+						sw.value = resolveColorHex(val);
+						if (swatches.length > 0) renderSwatches(val, disabled);
+					};
+				} else if (type === "subwindow") {
+					const sub = document.createElement("div");
+					sub.className = "vf-std-dataform-subwindow";
+					sub.dataset.vfSubwindow = name;
+					const head = document.createElement("div");
+					head.className = "vf-std-dataform-subwindow-head";
+					const lbl = document.createElement("span");
+					lbl.textContent = `${title} (SubControlFrame)`;
+					const status = document.createElement("span");
+					status.textContent = "Embedded";
+					head.append(lbl, status);
+					sub.append(head);
+					sub.addEventListener("click", () => {
+						emitField(c, c.value !== void 0 && c.value !== "" ? c.value : "embedded");
+					});
+					cell.append(sub);
+					syncControl = (val) => {
+						if (val !== void 0 && val !== null && val !== "") status.textContent = String(val);
+					};
+				} else {
+					const btn = document.createElement("button");
+					btn.type = "button";
+					btn.className = "vf-std-dataform-btn";
+					if (c.value !== void 0 && c.value !== "") btn.dataset.vfBtnValue = String(c.value);
+					if (stateColor) {
+						const dot = document.createElement("span");
+						dot.className = "vf-std-dataform-swatch-dot";
+						dot.style.background = resolveColorHex(stateColor);
+						btn.append(dot);
+					}
+					const textSpan = document.createElement("span");
+					textSpan.textContent = title;
+					btn.append(textSpan);
+					btn.addEventListener("click", () => {
+						const emitVal = c.value !== void 0 && c.value !== "" && c.value !== null ? c.value : true;
+						emitField(c, emitVal);
+					});
+					cell.append(btn);
+					syncControl = (val, disabled) => {
+						btn.disabled = disabled;
+						const isActive = c.value !== void 0 && c.value !== "" && String(val) === String(c.value);
+						btn.dataset.active = String(isActive);
+					};
+				}
+				grid.append(cell);
+				entries.push({
+					spec: c,
+					name,
+					stateStr,
+					cell,
+					sync: (valMap, formEnabled) => {
+						const visible = stateStr !== "hidden" && isDataFormControlVisible(c, valMap);
+						cell.style.display = visible ? "" : "none";
+						cell.hidden = !visible;
+						const disabled = !formEnabled || stateStr === "disabled";
+						syncControl(valMap[name], disabled);
+					}
+				});
+			}
+			root.append(grid);
+		};
+		const update = (next) => {
+			var _next$schema, _next$emptyText4;
+			currentProps = next;
+			const schema = parseDataFormSchema((_next$schema = next.schema) !== null && _next$schema !== void 0 ? _next$schema : []);
+			const schemaKey = JSON.stringify({
+				row_spacing: schema.row_spacing,
+				column_spacing: schema.column_spacing,
+				controls: schema.controls,
+				emptyText: (_next$emptyText4 = next.emptyText) !== null && _next$emptyText4 !== void 0 ? _next$emptyText4 : ""
+			});
+			if (schemaKey !== lastSchemaKey) {
+				localOverrides = {};
+				lastSchemaKey = schemaKey;
+				buildDom(schema, next);
+			}
+			syncAll(schema, next);
+		};
+		update(props);
+		return {
+			update,
+			destroy: () => root.remove()
+		};
+	};
 	const STANDARD_COMPONENTS = new Map([
 		{
-			decl: component_default$4,
+			decl: component_default$10,
 			folder: "Label",
 			create: createLabel,
 			styleText: `.vf-std-label { display: flex; align-items: center; width: 100%; height: 100%; color: var(--color-text, #1e293b); font-size: 13px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; overflow-wrap: anywhere; }
@@ -2230,10 +3513,11 @@ var VF = (function(exports) {
 .vf-std-label[data-tone="accent"] { color: var(--color-primary, #2563eb); font-weight: 500; }`
 		},
 		{
-			decl: component_default$8,
+			decl: component_default$16,
 			folder: "Button",
 			create: createButton,
-			styleText: `.vf-std-button { width: 100%; height: 100%; padding: 0 10px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.06s; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+			styleText: `.vf-std-button { width: 100%; height: 100%; padding: 0 6px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 4px; transition: background 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.06s; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vf-std-button[data-has-icon="true"] { padding: 0 4px; gap: 3px; }
 .vf-std-button[data-variant="primary"], .vf-std-button[data-checked="true"] { border-color: var(--color-primary, #2563eb); background: var(--color-primary, #2563eb); color: #ffffff; }
 .vf-std-button[data-variant="danger"] { border-color: #ef4444; background: #fef2f2; color: #dc2626; }
 .vf-std-button:hover:not(:disabled) { border-color: var(--color-primary, #2563eb); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18); }
@@ -2241,7 +3525,7 @@ var VF = (function(exports) {
 .vf-std-button:disabled { opacity: 0.45; cursor: not-allowed; }`
 		},
 		{
-			decl: component_default,
+			decl: component_default$1,
 			folder: "TextInput",
 			create: createTextInput,
 			styleText: `.vf-std-input { box-sizing: border-box; width: 100%; height: 100%; padding: 0 10px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font: inherit; font-size: 13px; outline: none; }
@@ -2249,7 +3533,15 @@ var VF = (function(exports) {
 .vf-std-input:disabled { opacity: 0.5; background: #f8fafc; }`
 		},
 		{
-			decl: component_default$1,
+			decl: component_default$2,
+			folder: "TextArea",
+			create: createTextArea,
+			styleText: `.vf-std-textarea { box-sizing: border-box; width: 100%; height: 100%; padding: 6px 8px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font: inherit; font-size: 12px; line-height: 1.4; resize: none; outline: none; }
+.vf-std-textarea:focus { border-color: var(--color-primary, #2563eb); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18); }
+.vf-std-textarea:disabled { opacity: 0.5; }`
+		},
+		{
+			decl: component_default$4,
 			folder: "SpinBox",
 			create: createSpinBox,
 			styleText: `.vf-std-spinbox { box-sizing: border-box; display: flex; align-items: center; width: 100%; height: 100%; padding: 0 8px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); }
@@ -2259,6 +3551,22 @@ var VF = (function(exports) {
 		},
 		{
 			decl: component_default$6,
+			folder: "Slider",
+			create: createSlider,
+			styleText: `.vf-std-slider { box-sizing: border-box; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
+.vf-std-slider-input { width: 100%; margin: 0; accent-color: var(--color-primary, #2563eb); cursor: pointer; }
+.vf-std-slider[data-orientation="vertical"] .vf-std-slider-input { writing-mode: vertical-lr; width: auto; height: 100%; }`
+		},
+		{
+			decl: component_default$8,
+			folder: "ScrollBar",
+			create: createScrollBar,
+			styleText: `.vf-std-scrollbar { box-sizing: border-box; position: relative; width: 100%; height: 100%; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #f1f5f9); overflow: hidden; cursor: pointer; user-select: none; }
+.vf-std-scrollbar-thumb { position: absolute; border-radius: 3px; background: var(--color-muted, #94a3b8); }
+.vf-std-scrollbar[data-disabled="true"] { opacity: 0.5; pointer-events: none; }`
+		},
+		{
+			decl: component_default$14,
 			folder: "ComboBox",
 			create: createComboBox,
 			styleText: `.vf-std-combobox { box-sizing: border-box; width: 100%; height: 100%; padding: 0 8px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font: inherit; font-size: 13px; outline: none; cursor: pointer; }
@@ -2266,7 +3574,7 @@ var VF = (function(exports) {
 .vf-std-combobox:disabled { opacity: 0.5; cursor: not-allowed; }`
 		},
 		{
-			decl: component_default$7,
+			decl: component_default$15,
 			folder: "CheckBox",
 			create: createCheckBox,
 			styleText: `.vf-std-checkbox { display: flex; align-items: center; gap: 8px; width: 100%; height: 100%; color: var(--color-text, #1e293b); font-size: 13px; cursor: pointer; user-select: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2275,21 +3583,54 @@ var VF = (function(exports) {
 		},
 		{
 			decl: component_default$3,
+			folder: "TabBar",
+			create: createTabBar,
+			styleText: `.vf-std-tabbar { box-sizing: border-box; display: flex; align-items: stretch; gap: 2px; width: 100%; height: 100%; padding: 2px 2px 0 2px; border-bottom: 1px solid var(--color-border, #cbd5e1); overflow: hidden; }
+.vf-std-tabbar-tab { flex: 1 1 0; min-width: 0; height: 100%; padding: 0 4px; border: 1px solid var(--color-border, #cbd5e1); border-bottom: none; border-radius: 5px 5px 0 0; background: transparent; color: var(--color-muted, #64748b); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vf-std-tabbar-tab.active { background: var(--color-primary, #2563eb); border-color: var(--color-primary, #60a5fa); color: #ffffff; font-weight: 600; }`
+		},
+		{
+			decl: component_default$9,
 			folder: "List",
 			create: createList,
-			styleText: `.vf-std-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; width: 100%; height: 100%; padding: 4px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; }
+			styleText: `.vf-std-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 1px; width: 100%; height: 100%; padding: 3px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; }
 .vf-std-list[data-disabled="true"] { opacity: 0.5; pointer-events: none; }
 .vf-std-list-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-muted, #64748b); font-size: 12px; }
-.vf-std-list-row { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 8px; border-radius: 4px; color: var(--color-text, #1e293b); font-size: 13px; cursor: pointer; user-select: none; }
-.vf-std-list-row:hover { background: #f1f5f9; }
-.vf-std-list-row.selected { background: #eff6ff; color: var(--color-primary, #2563eb); font-weight: 500; }
+.vf-std-list-row { display: flex; align-items: center; gap: 6px; min-height: 20px; padding: 0 6px; border-radius: 4px; color: var(--color-text, #1e293b); font-size: 12px; cursor: pointer; user-select: none; }
+.vf-std-list-row:hover { background: rgba(148, 163, 184, 0.15); }
+.vf-std-list-row.selected { background: var(--color-primary, #2563eb); color: #ffffff; font-weight: 600; }
+.vf-std-list-row.muted { opacity: 0.45; }
 .vf-std-list-check { font-size: 12px; color: #94a3b8; cursor: pointer; }
 .vf-std-list-check.on { color: var(--color-primary, #2563eb); }
 .vf-std-list-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vf-std-list-badge { padding: 1px 5px; border-radius: 4px; background: #f1f5f9; color: #64748b; font-size: 11px; }`
+.vf-std-list-badge { padding: 1px 4px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); color: inherit; font-size: 10px; }`
 		},
 		{
-			decl: component_default$2,
+			decl: component_default,
+			folder: "Tree",
+			create: createTree,
+			styleText: `.vf-std-tree { box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; width: 100%; height: 100%; padding: 4px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; user-select: none; }
+.vf-std-tree[data-disabled="true"] { opacity: 0.5; pointer-events: none; }
+.vf-std-tree-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-muted, #64748b); font-size: 12px; }
+.vf-std-tree-row { display: flex; align-items: center; gap: 5px; min-height: 24px; padding-right: 6px; border-radius: 4px; color: var(--color-text, #1e293b); font-size: 12px; cursor: pointer; }
+.vf-std-tree-row.selected { background: var(--color-primary, #2563eb); color: #ffffff; }
+.vf-std-tree-row.unchecked .vf-std-tree-text { opacity: 0.55; }
+.vf-std-tree-caret { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0; }
+.vf-std-tree-check { width: 13px; height: 13px; margin: 0; accent-color: var(--color-primary, #2563eb); cursor: pointer; flex-shrink: 0; }
+.vf-std-tree-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vf-std-tree-text.group { font-weight: 600; }
+.vf-std-tree-badge { padding: 1px 4px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); font-size: 10px; flex-shrink: 0; }`
+		},
+		{
+			decl: component_default$12,
+			folder: "DialogButtonBox",
+			create: createDialogButtonBox,
+			styleText: `.vf-std-buttonbox { box-sizing: border-box; display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: 100%; height: 100%; }
+.vf-std-buttonbox-btn { min-width: 72px; height: 28px; padding: 0 12px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 5px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font: inherit; font-size: 12px; cursor: pointer; }
+.vf-std-buttonbox-btn.primary { border-color: var(--color-primary, #2563eb); background: var(--color-primary, #2563eb); color: #ffffff; font-weight: 500; }`
+		},
+		{
+			decl: component_default$7,
 			folder: "Separator",
 			create: createSeparator,
 			styleText: `.vf-std-separator { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
@@ -2297,7 +3638,7 @@ var VF = (function(exports) {
 .vf-std-separator[data-orientation="vertical"]::after { width: 1px; height: 100%; }`
 		},
 		{
-			decl: component_default$5,
+			decl: component_default$11,
 			folder: "FloatBox",
 			create: createFloatBox,
 			styleText: `.vf-std-floatbox { box-sizing: border-box; display: flex; flex-direction: column; width: 100%; height: 100%; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); pointer-events: none; overflow: hidden; }
@@ -2307,6 +3648,36 @@ var VF = (function(exports) {
 .vf-std-floatbox-toggle { padding: 1px 6px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; line-height: 1.3; cursor: pointer; }
 .vf-std-floatbox-toggle:hover:not(:disabled) { border-color: var(--color-primary, #2563eb); color: var(--color-primary, #2563eb); }
 .vf-std-floatbox-body { flex: 1; min-height: 0; pointer-events: none; }`
+		},
+		{
+			decl: component_default$5,
+			folder: "Spacer",
+			create: createSpacer,
+			styleText: `.vf-std-spacer { width: 100%; height: 100%; pointer-events: none; }`
+		},
+		{
+			decl: component_default$13,
+			folder: "DataForm",
+			create: createDataForm,
+			styleText: `.vf-std-dataform { box-sizing: border-box; width: 100%; height: 100%; padding: 2px 4px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; overflow: auto; }
+.vf-std-dataform-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-muted, #64748b); font-size: 12px; }
+.vf-std-dataform-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; }
+.vf-std-dataform-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vf-std-dataform-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; line-height: 1.1; }
+.vf-std-dataform-val { color: var(--color-primary, #2563eb); font-variant-numeric: tabular-nums; font-weight: 500; }
+.vf-std-dataform-slider { flex: 1; min-width: 0; height: 12px; margin: 0; accent-color: var(--color-primary, #2563eb); }
+.vf-std-dataform-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.vf-std-dataform-select { flex: 1; min-width: 0; height: 22px; padding: 0 4px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; }
+.vf-std-dataform-check { display: flex; align-items: center; gap: 6px; height: 20px; cursor: pointer; }
+.vf-std-dataform-btn { height: 19px; padding: 0 6px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.vf-std-dataform-btn[data-active="true"] { border-color: var(--color-primary, #2563eb); box-shadow: 0 0 0 1px var(--color-primary, #2563eb); font-weight: 600; }
+.vf-std-dataform-swatch-dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(148, 163, 184, 0.6); flex-shrink: 0; }
+.vf-std-dataform-palette { display: flex; flex-direction: column; gap: 3px; }
+.vf-std-dataform-swatches { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.vf-std-dataform-swatch-btn { width: 18px; height: 18px; padding: 0; border-radius: 3px; border: 1px solid var(--color-border, #cbd5e1); cursor: pointer; }
+.vf-std-dataform-swatch-btn[data-active="true"] { border: 2px solid var(--color-primary, #2563eb); }
+.vf-std-dataform-subwindow { display: flex; flex-direction: column; gap: 1px; padding: 1px 6px; border: 1px dashed var(--color-primary, #2563eb); border-radius: 4px; background: rgba(37, 99, 235, 0.08); font-size: 11px; line-height: 1.15; cursor: pointer; }
+.vf-std-dataform-subwindow-head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; color: var(--color-primary, #2563eb); }`
 		}
 	].map((item) => [item.decl.type, item]));
 	//#endregion
@@ -2864,8 +4235,9 @@ var VF = (function(exports) {
 			var _layout$areas$top$spl;
 			if (((_layout$areas$top$spl = layout.areas.top.splitOrientation) !== null && _layout$areas$top$spl !== void 0 ? _layout$areas$top$spl : "horizontal") === "horizontal") {
 				var _layout$areas$top$siz2;
-				topH = Math.max(40, Math.round((_layout$areas$top$siz2 = layout.areas.top.size) !== null && _layout$areas$top$siz2 !== void 0 ? _layout$areas$top$siz2 : prefHeight(topGroups[0].activeDock)));
 				const widths = distributeGroupAxisSizes(W, topGroups, "horizontal");
+				const baseTopH = Math.max(40, Math.round((_layout$areas$top$siz2 = layout.areas.top.size) !== null && _layout$areas$top$siz2 !== void 0 ? _layout$areas$top$siz2 : prefHeight(topGroups[0].activeDock)));
+				topH = Math.max(baseTopH, ...topGroups.map((g, idx) => dockHeightForWidth(scene, g.activeDock, widths[idx], isVisible)));
 				let curX = 0;
 				topGroups.forEach((g, idx) => {
 					const gw = widths[idx];
@@ -2887,7 +4259,7 @@ var VF = (function(exports) {
 				let curY = midY;
 				topGroups.forEach((g, idx) => {
 					var _ref7, _g$group$size;
-					const gh = Math.max(40, Math.round((_ref7 = (_g$group$size = g.group.size) !== null && _g$group$size !== void 0 ? _g$group$size : layout.areas.top.size) !== null && _ref7 !== void 0 ? _ref7 : prefHeight(g.activeDock)));
+					const gh = Math.max(40, Math.round((_ref7 = (_g$group$size = g.group.size) !== null && _g$group$size !== void 0 ? _g$group$size : layout.areas.top.size) !== null && _ref7 !== void 0 ? _ref7 : prefHeight(g.activeDock)), dockHeightForWidth(scene, g.activeDock, W, isVisible));
 					assignGroupBoxes("top", g, 0, curY, W, gh);
 					curY += gh;
 					topH += gh;
@@ -2921,9 +4293,10 @@ var VF = (function(exports) {
 			var _layout$areas$bottom$5;
 			if (((_layout$areas$bottom$5 = layout.areas.bottom.splitOrientation) !== null && _layout$areas$bottom$5 !== void 0 ? _layout$areas$bottom$5 : "horizontal") === "horizontal") {
 				var _layout$areas$bottom$6;
-				bottomH = Math.max(40, Math.round((_layout$areas$bottom$6 = layout.areas.bottom.size) !== null && _layout$areas$bottom$6 !== void 0 ? _layout$areas$bottom$6 : prefHeight(bottomGroups[0].activeDock)));
-				const bY = midY + midH - bottomH;
 				const widths = distributeGroupAxisSizes(W, bottomGroups, "horizontal");
+				const baseBottomH = Math.max(40, Math.round((_layout$areas$bottom$6 = layout.areas.bottom.size) !== null && _layout$areas$bottom$6 !== void 0 ? _layout$areas$bottom$6 : prefHeight(bottomGroups[0].activeDock)));
+				bottomH = Math.max(baseBottomH, ...bottomGroups.map((g, idx) => dockHeightForWidth(scene, g.activeDock, widths[idx], isVisible)));
+				const bY = midY + midH - bottomH;
 				let curX = 0;
 				bottomGroups.forEach((g, idx) => {
 					const gw = widths[idx];
@@ -2944,7 +4317,7 @@ var VF = (function(exports) {
 			} else {
 				const ghList = bottomGroups.map((g) => {
 					var _ref8, _g$group$size2;
-					return Math.max(40, Math.round((_ref8 = (_g$group$size2 = g.group.size) !== null && _g$group$size2 !== void 0 ? _g$group$size2 : layout.areas.bottom.size) !== null && _ref8 !== void 0 ? _ref8 : prefHeight(g.activeDock)));
+					return Math.max(40, Math.round((_ref8 = (_g$group$size2 = g.group.size) !== null && _g$group$size2 !== void 0 ? _g$group$size2 : layout.areas.bottom.size) !== null && _ref8 !== void 0 ? _ref8 : prefHeight(g.activeDock)), dockHeightForWidth(scene, g.activeDock, W, isVisible));
 				});
 				bottomH = ghList.reduce((a, b) => a + b, 0);
 				let curY = midY + midH - bottomH;
@@ -3204,7 +4577,8 @@ var VF = (function(exports) {
 		HBox: "hbox",
 		Grid: "grid",
 		Form: "form",
-		Stack: "stack"
+		Stack: "stack",
+		Flow: "flow"
 	};
 	function isStateLeaf(def) {
 		return typeof def === "object" && def !== null && typeof def.type === "string";
@@ -3331,6 +4705,13 @@ var VF = (function(exports) {
 		for (const [parentId, parent] of Object.entries(scene.nodes)) if (childrenOfNode(parent).includes(id)) return parentId;
 		return null;
 	}
+	function walkMenuItems(items, cb) {
+		if (!items) return;
+		for (const item of items) {
+			cb(item);
+			if (item.items && item.items.length > 0) walkMenuItems(item.items, cb);
+		}
+	}
 	function allWindowIds(scene) {
 		var _scene$windows;
 		const result = [];
@@ -3344,18 +4725,25 @@ var VF = (function(exports) {
 	}
 	function allMenuItems(scene) {
 		const list = [];
+		const seen = /* @__PURE__ */ new Set();
+		const pushItem = (windowId, menuId, item) => {
+			if (!item.id || item.kind === "separator" || seen.has(item.id)) return;
+			seen.add(item.id);
+			list.push({
+				windowId,
+				menuId,
+				item
+			});
+		};
 		for (const winId of allWindowIds(scene)) {
 			var _scene$nodes$winId, _menuBar$menus;
 			const menuBar = (_scene$nodes$winId = scene.nodes[winId]) === null || _scene$nodes$winId === void 0 ? void 0 : _scene$nodes$winId.menuBar;
 			if (!menuBar) continue;
-			for (const menu of (_menuBar$menus = menuBar.menus) !== null && _menuBar$menus !== void 0 ? _menuBar$menus : []) {
-				var _menu$items3;
-				for (const item of (_menu$items3 = menu.items) !== null && _menu$items3 !== void 0 ? _menu$items3 : []) list.push({
-					windowId: winId,
-					menuId: menu.id,
-					item
-				});
-			}
+			for (const menu of (_menuBar$menus = menuBar.menus) !== null && _menuBar$menus !== void 0 ? _menuBar$menus : []) walkMenuItems(menu.items, (item) => pushItem(winId, menu.id, item));
+		}
+		for (const [nodeId, n] of Object.entries(scene.nodes)) {
+			if (n.contextMenu) walkMenuItems(n.contextMenu, (item) => pushItem(scene.root, `context:${nodeId}`, item));
+			if (n.popupMenu) walkMenuItems(n.popupMenu, (item) => pushItem(scene.root, `popup:${nodeId}`, item));
 		}
 		return list;
 	}
@@ -3459,6 +4847,68 @@ var VF = (function(exports) {
 		if (!node) return false;
 		return Boolean(node.menuBar || node.statusBar || node.central || node.docks && node.docks.length > 0 || node.dockLayout);
 	}
+	function isWrapLayout(layout) {
+		if (!layout) return false;
+		return layout.kind === "flow" || layout.kind === "hbox" && Boolean(layout.wrap);
+	}
+	function computeFlowRows(scene, visChildren, innerW, colGap) {
+		const rows = [];
+		let curIds = [];
+		let curUsedW = 0;
+		let curMaxH = 0;
+		for (const cid of visChildren) {
+			const c = scene.nodes[cid];
+			if (!c) continue;
+			const cw = clampWidth(c, prefWidth(c));
+			const ch = clampHeight(c, prefHeight(c));
+			const neededW = curIds.length === 0 ? cw : curUsedW + colGap + cw;
+			if (curIds.length > 0 && neededW > innerW) {
+				rows.push({
+					ids: curIds,
+					rowH: curMaxH || 28
+				});
+				curIds = [cid];
+				curUsedW = cw;
+				curMaxH = ch;
+			} else {
+				curIds.push(cid);
+				curUsedW = neededW;
+				curMaxH = Math.max(curMaxH, ch);
+			}
+		}
+		if (curIds.length > 0) rows.push({
+			ids: curIds,
+			rowH: curMaxH || 28
+		});
+		return rows;
+	}
+	function flowHeightForWidth(scene, node, availWidth, isVisible) {
+		var _ref6, _layout$columnGap, _ref7, _layout$rowGap, _node$children;
+		const layout = layoutOf(node);
+		if (!layout || !isWrapLayout(layout)) return prefHeight(node);
+		const [padTop, padRight, padBottom, padLeft] = paddingOf(layout);
+		const colGap = (_ref6 = (_layout$columnGap = layout.columnGap) !== null && _layout$columnGap !== void 0 ? _layout$columnGap : layout.gap) !== null && _ref6 !== void 0 ? _ref6 : 0;
+		const rowGap = (_ref7 = (_layout$rowGap = layout.rowGap) !== null && _layout$rowGap !== void 0 ? _layout$rowGap : layout.gap) !== null && _ref7 !== void 0 ? _ref7 : 0;
+		const innerW = Math.max(0, availWidth - padLeft - padRight);
+		const rows = computeFlowRows(scene, ((_node$children = node.children) !== null && _node$children !== void 0 ? _node$children : []).filter((cid) => Boolean(scene.nodes[cid]) && isVisible(cid)), innerW, colGap);
+		if (rows.length === 0) return prefHeight(node);
+		return clampHeight(node, padTop + (rows.reduce((sum, r) => sum + r.rowH, 0) + Math.max(0, rows.length - 1) * rowGap) + padBottom);
+	}
+	function dockHeightForWidth(scene, dock, availWidth, isVisible) {
+		var _dock$size, _dock$size2, _dock$headerHeight, _ref8, _layout$columnGap2, _ref9, _layout$rowGap2, _dock$children;
+		const baseH = prefHeight(dock);
+		const layout = layoutOf(dock);
+		if (!layout || !isWrapLayout(layout) || ((_dock$size = dock.size) === null || _dock$size === void 0 ? void 0 : _dock$size.fixedHeight) !== void 0 || ((_dock$size2 = dock.size) === null || _dock$size2 === void 0 ? void 0 : _dock$size2.vertical) === "fixed") return baseH;
+		const hdrH = (_dock$headerHeight = dock.headerHeight) !== null && _dock$headerHeight !== void 0 ? _dock$headerHeight : 26;
+		const [padTop, padRight, padBottom, padLeft] = paddingOf(layout);
+		const colGap = (_ref8 = (_layout$columnGap2 = layout.columnGap) !== null && _layout$columnGap2 !== void 0 ? _layout$columnGap2 : layout.gap) !== null && _ref8 !== void 0 ? _ref8 : 0;
+		const rowGap = (_ref9 = (_layout$rowGap2 = layout.rowGap) !== null && _layout$rowGap2 !== void 0 ? _layout$rowGap2 : layout.gap) !== null && _ref9 !== void 0 ? _ref9 : 0;
+		const innerW = Math.max(0, availWidth - padLeft - padRight);
+		const rows = computeFlowRows(scene, ((_dock$children = dock.children) !== null && _dock$children !== void 0 ? _dock$children : []).filter((cid) => Boolean(scene.nodes[cid]) && isVisible(cid)), innerW, colGap);
+		if (rows.length === 0) return baseH;
+		const rowsH = rows.reduce((sum, r) => sum + r.rowH, 0) + Math.max(0, rows.length - 1) * rowGap;
+		return clampHeight(dock, Math.max(baseH, hdrH + padTop + rowsH + padBottom));
+	}
 	/**
 	* 计算一个窗口（或全部窗口）内所有节点的位置和尺寸。
 	* 规则与 Qt 的 QMainWindow + QDockWidget + QVBoxLayout/QHBoxLayout/QGridLayout/QFormLayout/QStackedLayout 完全一致。
@@ -3472,19 +4922,19 @@ var VF = (function(exports) {
 		});
 		const boxes = /* @__PURE__ */ new Map();
 		const isFloatingFloatBox = (cid) => {
-			var _ref6, _getProp, _c$props;
+			var _ref10, _getProp, _c$props;
 			const c = scene.nodes[cid];
 			if (!c || c.type !== "FloatBox") return false;
-			return Boolean((_ref6 = (_getProp = getProp(cid, "floating")) !== null && _getProp !== void 0 ? _getProp : (_c$props = c.props) === null || _c$props === void 0 ? void 0 : _c$props.floating) !== null && _ref6 !== void 0 ? _ref6 : false);
+			return Boolean((_ref10 = (_getProp = getProp(cid, "floating")) !== null && _getProp !== void 0 ? _getProp : (_c$props = c.props) === null || _c$props === void 0 ? void 0 : _c$props.floating) !== null && _ref10 !== void 0 ? _ref10 : false);
 		};
 		const layoutFloatingFloatBox = (cid, parentBox) => {
-			var _ref7, _ref8, _getProp2, _c$props2, _ref9, _getProp3, _c$props3, _ref10, _getProp4, _c$props4, _ref11, _getProp5, _c$props5, _ref12, _getProp6, _c$props6;
+			var _ref11, _ref12, _getProp2, _c$props2, _ref13, _getProp3, _c$props3, _ref14, _getProp4, _c$props4, _ref15, _getProp5, _c$props5, _ref16, _getProp6, _c$props6;
 			const c = scene.nodes[cid];
-			const hdrH = Math.max(0, Number((_ref7 = (_ref8 = (_getProp2 = getProp(cid, "headerHeight")) !== null && _getProp2 !== void 0 ? _getProp2 : (_c$props2 = c.props) === null || _c$props2 === void 0 ? void 0 : _c$props2.headerHeight) !== null && _ref8 !== void 0 ? _ref8 : c.headerHeight) !== null && _ref7 !== void 0 ? _ref7 : 24));
-			const fx = Math.round(Number((_ref9 = (_getProp3 = getProp(cid, "floatX")) !== null && _getProp3 !== void 0 ? _getProp3 : (_c$props3 = c.props) === null || _c$props3 === void 0 ? void 0 : _c$props3.floatX) !== null && _ref9 !== void 0 ? _ref9 : 60));
-			const fy = Math.round(Number((_ref10 = (_getProp4 = getProp(cid, "floatY")) !== null && _getProp4 !== void 0 ? _getProp4 : (_c$props4 = c.props) === null || _c$props4 === void 0 ? void 0 : _c$props4.floatY) !== null && _ref10 !== void 0 ? _ref10 : 80));
-			const fw = Math.max(80, Math.round(Number((_ref11 = (_getProp5 = getProp(cid, "floatWidth")) !== null && _getProp5 !== void 0 ? _getProp5 : (_c$props5 = c.props) === null || _c$props5 === void 0 ? void 0 : _c$props5.floatWidth) !== null && _ref11 !== void 0 ? _ref11 : prefWidth(c))));
-			const fh = Math.max(hdrH + 20, Math.round(Number((_ref12 = (_getProp6 = getProp(cid, "floatHeight")) !== null && _getProp6 !== void 0 ? _getProp6 : (_c$props6 = c.props) === null || _c$props6 === void 0 ? void 0 : _c$props6.floatHeight) !== null && _ref12 !== void 0 ? _ref12 : prefHeight(c))));
+			const hdrH = Math.max(0, Number((_ref11 = (_ref12 = (_getProp2 = getProp(cid, "headerHeight")) !== null && _getProp2 !== void 0 ? _getProp2 : (_c$props2 = c.props) === null || _c$props2 === void 0 ? void 0 : _c$props2.headerHeight) !== null && _ref12 !== void 0 ? _ref12 : c.headerHeight) !== null && _ref11 !== void 0 ? _ref11 : 24));
+			const fx = Math.round(Number((_ref13 = (_getProp3 = getProp(cid, "floatX")) !== null && _getProp3 !== void 0 ? _getProp3 : (_c$props3 = c.props) === null || _c$props3 === void 0 ? void 0 : _c$props3.floatX) !== null && _ref13 !== void 0 ? _ref13 : 60));
+			const fy = Math.round(Number((_ref14 = (_getProp4 = getProp(cid, "floatY")) !== null && _getProp4 !== void 0 ? _getProp4 : (_c$props4 = c.props) === null || _c$props4 === void 0 ? void 0 : _c$props4.floatY) !== null && _ref14 !== void 0 ? _ref14 : 80));
+			const fw = Math.max(80, Math.round(Number((_ref15 = (_getProp5 = getProp(cid, "floatWidth")) !== null && _getProp5 !== void 0 ? _getProp5 : (_c$props5 = c.props) === null || _c$props5 === void 0 ? void 0 : _c$props5.floatWidth) !== null && _ref15 !== void 0 ? _ref15 : prefWidth(c))));
+			const fh = Math.max(hdrH + 20, Math.round(Number((_ref16 = (_getProp6 = getProp(cid, "floatHeight")) !== null && _getProp6 !== void 0 ? _getProp6 : (_c$props6 = c.props) === null || _c$props6 === void 0 ? void 0 : _c$props6.floatHeight) !== null && _ref16 !== void 0 ? _ref16 : prefHeight(c))));
 			const winBox = boxes.get(parentBox.windowId);
 			const winVis = winBox ? winBox.visible : parentBox.visible;
 			const box = {
@@ -3501,12 +4951,12 @@ var VF = (function(exports) {
 			layoutSubtree(cid, box);
 		};
 		const layoutSubtree = (parentId, parentBox) => {
-			var _parent$children, _parent$headerHeight, _ref13, _ref14, _getProp7, _parent$props;
+			var _parent$children, _parent$headerHeight, _ref17, _ref18, _getProp7, _parent$props;
 			const parent = scene.nodes[parentId];
 			if (!parent) return;
 			const rawChildren = ((_parent$children = parent.children) !== null && _parent$children !== void 0 ? _parent$children : []).filter((cid) => !boxes.has(cid) && Boolean(scene.nodes[cid]));
 			if (rawChildren.length === 0) return;
-			const headerOffset = parent.type === "Dock" ? (_parent$headerHeight = parent.headerHeight) !== null && _parent$headerHeight !== void 0 ? _parent$headerHeight : 26 : parent.type === "FloatBox" ? Math.max(0, Number((_ref13 = (_ref14 = (_getProp7 = getProp(parentId, "headerHeight")) !== null && _getProp7 !== void 0 ? _getProp7 : (_parent$props = parent.props) === null || _parent$props === void 0 ? void 0 : _parent$props.headerHeight) !== null && _ref14 !== void 0 ? _ref14 : parent.headerHeight) !== null && _ref13 !== void 0 ? _ref13 : 24)) : 0;
+			const headerOffset = parent.type === "Dock" ? (_parent$headerHeight = parent.headerHeight) !== null && _parent$headerHeight !== void 0 ? _parent$headerHeight : 26 : parent.type === "FloatBox" ? Math.max(0, Number((_ref17 = (_ref18 = (_getProp7 = getProp(parentId, "headerHeight")) !== null && _getProp7 !== void 0 ? _getProp7 : (_parent$props = parent.props) === null || _parent$props === void 0 ? void 0 : _parent$props.headerHeight) !== null && _ref18 !== void 0 ? _ref18 : parent.headerHeight) !== null && _ref17 !== void 0 ? _ref17 : 24)) : 0;
 			const layout = layoutOf(parent);
 			const children = [];
 			for (const cid of rawChildren) if (isFloatingFloatBox(cid)) layoutFloatingFloatBox(cid, parentBox);
@@ -3539,8 +4989,8 @@ var VF = (function(exports) {
 			const innerW = Math.max(0, parentBox.width - padLeft - padRight);
 			const innerH = Math.max(0, parentBox.height - headerOffset - padTop - padBottom);
 			if (layout.kind === "vbox") {
-				var _ref15, _layout$gap;
-				const gap = (_ref15 = (_layout$gap = layout.gap) !== null && _layout$gap !== void 0 ? _layout$gap : layout.rowGap) !== null && _ref15 !== void 0 ? _ref15 : 0;
+				var _ref19, _layout$gap;
+				const gap = (_ref19 = (_layout$gap = layout.gap) !== null && _layout$gap !== void 0 ? _layout$gap : layout.rowGap) !== null && _ref19 !== void 0 ? _ref19 : 0;
 				const visChildren = [];
 				for (const cid of children) if (isVisible(cid)) visChildren.push(cid);
 				else {
@@ -3563,7 +5013,13 @@ var VF = (function(exports) {
 					const c = scene.nodes[cid];
 					return (_c$size$stretch = (_c$size = c.size) === null || _c$size === void 0 ? void 0 : _c$size.stretch) !== null && _c$size$stretch !== void 0 ? _c$size$stretch : ((_c$size2 = c.size) === null || _c$size2 === void 0 ? void 0 : _c$size2.vertical) === "expanding" ? 1 : 0;
 				});
-				const baseHeights = visChildren.map((cid, i) => stretches[i] > 0 ? 0 : clampHeight(scene.nodes[cid], prefHeight(scene.nodes[cid])));
+				const baseHeights = visChildren.map((cid, i) => {
+					var _c$size3, _c$size4;
+					if (stretches[i] > 0) return 0;
+					const c = scene.nodes[cid];
+					if (isWrapLayout(layoutOf(c)) && ((_c$size3 = c.size) === null || _c$size3 === void 0 ? void 0 : _c$size3.fixedHeight) === void 0 && ((_c$size4 = c.size) === null || _c$size4 === void 0 ? void 0 : _c$size4.vertical) !== "fixed") return flowHeightForWidth(scene, c, clampWidth(c, innerW), isVisible);
+					return clampHeight(c, prefHeight(c));
+				});
 				const mins = visChildren.map((cid) => {
 					var _size$minHeight, _size;
 					return Math.round((_size$minHeight = (_size = scene.nodes[cid].size) === null || _size === void 0 ? void 0 : _size.minHeight) !== null && _size$minHeight !== void 0 ? _size$minHeight : 0);
@@ -3597,9 +5053,74 @@ var VF = (function(exports) {
 				});
 				return;
 			}
+			if (isWrapLayout(layout)) {
+				var _ref20, _layout$columnGap3, _ref21, _layout$rowGap3;
+				const colGap = (_ref20 = (_layout$columnGap3 = layout.columnGap) !== null && _layout$columnGap3 !== void 0 ? _layout$columnGap3 : layout.gap) !== null && _ref20 !== void 0 ? _ref20 : 0;
+				const rowGap = (_ref21 = (_layout$rowGap3 = layout.rowGap) !== null && _layout$rowGap3 !== void 0 ? _layout$rowGap3 : layout.gap) !== null && _ref21 !== void 0 ? _ref21 : 0;
+				const visChildren = [];
+				for (const cid of children) if (isVisible(cid)) visChildren.push(cid);
+				else {
+					const c = scene.nodes[cid];
+					const box = {
+						x: innerX,
+						y: innerY,
+						width: prefWidth(c),
+						height: prefHeight(c),
+						absX: parentBox.absX + innerX,
+						absY: parentBox.absY + innerY,
+						visible: false,
+						windowId: parentBox.windowId
+					};
+					boxes.set(cid, box);
+					layoutSubtree(cid, box);
+				}
+				const rows = computeFlowRows(scene, visChildren, innerW, colGap);
+				let curY = innerY;
+				for (const row of rows) {
+					const stretches = row.ids.map((cid) => {
+						var _c$size$stretch2, _c$size5, _c$size6;
+						const c = scene.nodes[cid];
+						return (_c$size$stretch2 = (_c$size5 = c.size) === null || _c$size5 === void 0 ? void 0 : _c$size5.stretch) !== null && _c$size$stretch2 !== void 0 ? _c$size$stretch2 : ((_c$size6 = c.size) === null || _c$size6 === void 0 ? void 0 : _c$size6.horizontal) === "expanding" ? 1 : 0;
+					});
+					const baseWidths = row.ids.map((cid, i) => stretches[i] > 0 ? 0 : clampWidth(scene.nodes[cid], prefWidth(scene.nodes[cid])));
+					const mins = row.ids.map((cid) => {
+						var _size$minWidth, _size3;
+						return Math.round((_size$minWidth = (_size3 = scene.nodes[cid].size) === null || _size3 === void 0 ? void 0 : _size3.minWidth) !== null && _size$minWidth !== void 0 ? _size$minWidth : prefWidth(scene.nodes[cid]));
+					});
+					const maxs = row.ids.map((cid) => {
+						var _size4;
+						const m = (_size4 = scene.nodes[cid].size) === null || _size4 === void 0 ? void 0 : _size4.maxWidth;
+						return m !== void 0 ? Math.round(m) : Infinity;
+					});
+					const fixedSum = baseWidths.reduce((a, b) => a + b, 0);
+					const totalGap = Math.max(0, row.ids.length - 1) * colGap;
+					const extraW = distributeStretch(Math.max(0, innerW - fixedSum - totalGap), stretches, mins, maxs);
+					let curX = innerX;
+					row.ids.forEach((cid, i) => {
+						const c = scene.nodes[cid];
+						const cw = stretches[i] > 0 ? clampWidth(c, extraW[i]) : baseWidths[i];
+						const ch = clampHeight(c, row.rowH);
+						const box = {
+							x: curX,
+							y: curY,
+							width: cw,
+							height: ch,
+							absX: parentBox.absX + curX,
+							absY: parentBox.absY + curY,
+							visible: parentBox.visible,
+							windowId: parentBox.windowId
+						};
+						boxes.set(cid, box);
+						layoutSubtree(cid, box);
+						curX += cw + colGap;
+					});
+					curY += row.rowH + rowGap;
+				}
+				return;
+			}
 			if (layout.kind === "hbox") {
-				var _ref16, _layout$gap2;
-				const gap = (_ref16 = (_layout$gap2 = layout.gap) !== null && _layout$gap2 !== void 0 ? _layout$gap2 : layout.columnGap) !== null && _ref16 !== void 0 ? _ref16 : 0;
+				var _ref22, _layout$gap2;
+				const gap = (_ref22 = (_layout$gap2 = layout.gap) !== null && _layout$gap2 !== void 0 ? _layout$gap2 : layout.columnGap) !== null && _ref22 !== void 0 ? _ref22 : 0;
 				const visChildren = [];
 				for (const cid of children) if (isVisible(cid)) visChildren.push(cid);
 				else {
@@ -3618,18 +5139,18 @@ var VF = (function(exports) {
 					layoutSubtree(cid, box);
 				}
 				const stretches = visChildren.map((cid) => {
-					var _c$size$stretch2, _c$size3, _c$size4;
+					var _c$size$stretch3, _c$size7, _c$size8;
 					const c = scene.nodes[cid];
-					return (_c$size$stretch2 = (_c$size3 = c.size) === null || _c$size3 === void 0 ? void 0 : _c$size3.stretch) !== null && _c$size$stretch2 !== void 0 ? _c$size$stretch2 : ((_c$size4 = c.size) === null || _c$size4 === void 0 ? void 0 : _c$size4.horizontal) === "expanding" ? 1 : 0;
+					return (_c$size$stretch3 = (_c$size7 = c.size) === null || _c$size7 === void 0 ? void 0 : _c$size7.stretch) !== null && _c$size$stretch3 !== void 0 ? _c$size$stretch3 : ((_c$size8 = c.size) === null || _c$size8 === void 0 ? void 0 : _c$size8.horizontal) === "expanding" ? 1 : 0;
 				});
 				const baseWidths = visChildren.map((cid, i) => stretches[i] > 0 ? 0 : clampWidth(scene.nodes[cid], prefWidth(scene.nodes[cid])));
 				const mins = visChildren.map((cid) => {
-					var _size$minWidth, _size3;
-					return Math.round((_size$minWidth = (_size3 = scene.nodes[cid].size) === null || _size3 === void 0 ? void 0 : _size3.minWidth) !== null && _size$minWidth !== void 0 ? _size$minWidth : 0);
+					var _size$minWidth2, _size5;
+					return Math.round((_size$minWidth2 = (_size5 = scene.nodes[cid].size) === null || _size5 === void 0 ? void 0 : _size5.minWidth) !== null && _size$minWidth2 !== void 0 ? _size$minWidth2 : 0);
 				});
 				const maxs = visChildren.map((cid) => {
-					var _size4;
-					const m = (_size4 = scene.nodes[cid].size) === null || _size4 === void 0 ? void 0 : _size4.maxWidth;
+					var _size6;
+					const m = (_size6 = scene.nodes[cid].size) === null || _size6 === void 0 ? void 0 : _size6.maxWidth;
 					return m !== void 0 ? Math.round(m) : Infinity;
 				});
 				const fixedSum = baseWidths.reduce((a, b) => a + b, 0);
@@ -3657,10 +5178,10 @@ var VF = (function(exports) {
 				return;
 			}
 			if (layout.kind === "grid") {
-				var _layout$columns, _ref17, _layout$columnGap, _ref18, _layout$rowGap;
+				var _layout$columns, _ref23, _layout$columnGap4, _ref24, _layout$rowGap4;
 				const cols = Math.max(1, (_layout$columns = layout.columns) !== null && _layout$columns !== void 0 ? _layout$columns : 2);
-				const colGap = (_ref17 = (_layout$columnGap = layout.columnGap) !== null && _layout$columnGap !== void 0 ? _layout$columnGap : layout.gap) !== null && _ref17 !== void 0 ? _ref17 : 0;
-				const rowGap = (_ref18 = (_layout$rowGap = layout.rowGap) !== null && _layout$rowGap !== void 0 ? _layout$rowGap : layout.gap) !== null && _ref18 !== void 0 ? _ref18 : 0;
+				const colGap = (_ref23 = (_layout$columnGap4 = layout.columnGap) !== null && _layout$columnGap4 !== void 0 ? _layout$columnGap4 : layout.gap) !== null && _ref23 !== void 0 ? _ref23 : 0;
+				const rowGap = (_ref24 = (_layout$rowGap4 = layout.rowGap) !== null && _layout$rowGap4 !== void 0 ? _layout$rowGap4 : layout.gap) !== null && _ref24 !== void 0 ? _ref24 : 0;
 				const items = [];
 				let autoIndex = 0;
 				for (const cid of children) {
@@ -3695,16 +5216,16 @@ var VF = (function(exports) {
 				const colMins = Array.from({ length: cols }, (_, col) => {
 					let minW = 0;
 					for (const it of items) {
-						var _size$minWidth2, _size5;
-						if (it.col === col && it.colSpan === 1) minW = Math.max(minW, Math.round((_size$minWidth2 = (_size5 = scene.nodes[it.id].size) === null || _size5 === void 0 ? void 0 : _size5.minWidth) !== null && _size$minWidth2 !== void 0 ? _size$minWidth2 : 0));
+						var _size$minWidth3, _size7;
+						if (it.col === col && it.colSpan === 1) minW = Math.max(minW, Math.round((_size$minWidth3 = (_size7 = scene.nodes[it.id].size) === null || _size7 === void 0 ? void 0 : _size7.minWidth) !== null && _size$minWidth3 !== void 0 ? _size$minWidth3 : 0));
 					}
 					return minW;
 				});
 				const colMaxs = Array.from({ length: cols }, (_, col) => {
 					let maxW = Infinity;
 					for (const it of items) {
-						var _size6;
-						const m = (_size6 = scene.nodes[it.id].size) === null || _size6 === void 0 ? void 0 : _size6.maxWidth;
+						var _size8;
+						const m = (_size8 = scene.nodes[it.id].size) === null || _size8 === void 0 ? void 0 : _size8.maxWidth;
 						if (it.col === col && it.colSpan === 1 && m !== void 0) maxW = Math.min(maxW, Math.round(m));
 					}
 					return maxW;
@@ -3730,16 +5251,16 @@ var VF = (function(exports) {
 				const rowMins = Array.from({ length: numRows }, (_, row) => {
 					let minH = 0;
 					for (const it of items) {
-						var _size$minHeight2, _size7;
-						if (it.row === row && it.rowSpan === 1) minH = Math.max(minH, Math.round((_size$minHeight2 = (_size7 = scene.nodes[it.id].size) === null || _size7 === void 0 ? void 0 : _size7.minHeight) !== null && _size$minHeight2 !== void 0 ? _size$minHeight2 : 0));
+						var _size$minHeight2, _size9;
+						if (it.row === row && it.rowSpan === 1) minH = Math.max(minH, Math.round((_size$minHeight2 = (_size9 = scene.nodes[it.id].size) === null || _size9 === void 0 ? void 0 : _size9.minHeight) !== null && _size$minHeight2 !== void 0 ? _size$minHeight2 : 0));
 					}
 					return minH;
 				});
 				const rowMaxs = Array.from({ length: numRows }, (_, row) => {
 					let maxH = Infinity;
 					for (const it of items) {
-						var _size8;
-						const m = (_size8 = scene.nodes[it.id].size) === null || _size8 === void 0 ? void 0 : _size8.maxHeight;
+						var _size10;
+						const m = (_size10 = scene.nodes[it.id].size) === null || _size10 === void 0 ? void 0 : _size10.maxHeight;
 						if (it.row === row && it.rowSpan === 1 && m !== void 0) maxH = Math.min(maxH, Math.round(m));
 					}
 					return maxH;
@@ -3777,9 +5298,9 @@ var VF = (function(exports) {
 				return;
 			}
 			if (layout.kind === "form") {
-				var _ref19, _layout$columnGap2, _ref20, _layout$rowGap2, _layout$labelWidth;
-				const colGap = (_ref19 = (_layout$columnGap2 = layout.columnGap) !== null && _layout$columnGap2 !== void 0 ? _layout$columnGap2 : layout.gap) !== null && _ref19 !== void 0 ? _ref19 : 8;
-				const rowGap = (_ref20 = (_layout$rowGap2 = layout.rowGap) !== null && _layout$rowGap2 !== void 0 ? _layout$rowGap2 : layout.gap) !== null && _ref20 !== void 0 ? _ref20 : 8;
+				var _ref25, _layout$columnGap5, _ref26, _layout$rowGap5, _layout$labelWidth;
+				const colGap = (_ref25 = (_layout$columnGap5 = layout.columnGap) !== null && _layout$columnGap5 !== void 0 ? _layout$columnGap5 : layout.gap) !== null && _ref25 !== void 0 ? _ref25 : 8;
+				const rowGap = (_ref26 = (_layout$rowGap5 = layout.rowGap) !== null && _layout$rowGap5 !== void 0 ? _layout$rowGap5 : layout.gap) !== null && _ref26 !== void 0 ? _ref26 : 8;
 				const labelW = (_layout$labelWidth = layout.labelWidth) !== null && _layout$labelWidth !== void 0 ? _layout$labelWidth : 96;
 				const fieldW = Math.max(0, innerW - labelW - colGap);
 				let curY = innerY;
@@ -3825,9 +5346,9 @@ var VF = (function(exports) {
 				return;
 			}
 			if (layout.kind === "stack") {
-				var _ref21, _getProp8, _parent$props2, _ref22, _getProp9, _parent$props3;
-				const activeIdx = Number((_ref21 = (_getProp8 = getProp(parentId, "currentIndex")) !== null && _getProp8 !== void 0 ? _getProp8 : (_parent$props2 = parent.props) === null || _parent$props2 === void 0 ? void 0 : _parent$props2.currentIndex) !== null && _ref21 !== void 0 ? _ref21 : 0);
-				const activePage = String((_ref22 = (_getProp9 = getProp(parentId, "currentPage")) !== null && _getProp9 !== void 0 ? _getProp9 : (_parent$props3 = parent.props) === null || _parent$props3 === void 0 ? void 0 : _parent$props3.currentPage) !== null && _ref22 !== void 0 ? _ref22 : "");
+				var _ref27, _getProp8, _parent$props2, _ref28, _getProp9, _parent$props3;
+				const activeIdx = Number((_ref27 = (_getProp8 = getProp(parentId, "currentIndex")) !== null && _getProp8 !== void 0 ? _getProp8 : (_parent$props2 = parent.props) === null || _parent$props2 === void 0 ? void 0 : _parent$props2.currentIndex) !== null && _ref27 !== void 0 ? _ref27 : 0);
+				const activePage = String((_ref28 = (_getProp9 = getProp(parentId, "currentPage")) !== null && _getProp9 !== void 0 ? _getProp9 : (_parent$props3 = parent.props) === null || _parent$props3 === void 0 ? void 0 : _parent$props3.currentPage) !== null && _ref28 !== void 0 ? _ref28 : "");
 				children.forEach((cid, idx) => {
 					const active = activePage ? cid === activePage : idx === activeIdx;
 					const box = {
@@ -4429,6 +5950,7 @@ var VF = (function(exports) {
 		if (leaf.type === "boolean") return false;
 		if (leaf.type === "enum") return (_leaf$values$ = (_leaf$values = leaf.values) === null || _leaf$values === void 0 ? void 0 : _leaf$values[0]) !== null && _leaf$values$ !== void 0 ? _leaf$values$ : "";
 		if (leaf.type === "array") return [];
+		if (leaf.type === "object") return {};
 		return "";
 	}
 	function readTailValue(base, tail) {
@@ -4461,6 +5983,8 @@ var VF = (function(exports) {
 			_defineProperty(this, "lastSceneDockLayouts", /* @__PURE__ */ new Map());
 			_defineProperty(this, "floatBoxes", /* @__PURE__ */ new Map());
 			_defineProperty(this, "lastSceneFloatBoxProps", /* @__PURE__ */ new Map());
+			_defineProperty(this, "menuChecked", /* @__PURE__ */ new Map());
+			_defineProperty(this, "clockMs", 0);
 			_defineProperty(this, "actionSims", /* @__PURE__ */ new Map());
 			_defineProperty(this, "runningActions", /* @__PURE__ */ new Set());
 			_defineProperty(this, "hoveredControls", /* @__PURE__ */ new Set());
@@ -4511,6 +6035,9 @@ var VF = (function(exports) {
 					this.lastSceneFloatBoxProps.set(id, JSON.stringify((_n$props9 = n.props) !== null && _n$props9 !== void 0 ? _n$props9 : null));
 				}
 			}
+			this.menuChecked.clear();
+			for (const { item } of allMenuItems(this.project.scene)) if (item.checked !== void 0) this.menuChecked.set(item.id, Boolean(item.checked));
+			this.clockMs = 0;
 			for (const [name, def] of Object.entries((_this$project$logic$a = this.project.logic.actions) !== null && _this$project$logic$a !== void 0 ? _this$project$logic$a : {})) if (!this.actionSims.has(name)) this.actionSims.set(name, {
 				mode: "real",
 				delayMs: 0,
@@ -4742,6 +6269,8 @@ var VF = (function(exports) {
 			if (path in scope) return scope[path];
 			for (const key of Object.keys(scope)) if (path.startsWith(key + ".")) return readTailValue(scope[key], path.slice(key.length + 1).split("."));
 			if (state.has(path)) return state.get(path);
+			if (path === "clock" || path === "clock.ms") return this.clockMs;
+			if (path === "clock.sec") return Math.floor(this.clockMs / 1e3);
 			const parts = path.split(".");
 			for (let i = parts.length - 1; i >= 1; i--) {
 				const prefix = parts.slice(0, i).join(".");
@@ -4834,6 +6363,38 @@ var VF = (function(exports) {
 			for (const cid of childrenOfNode(n)) if (this.isInsideSubtree(cid, targetId)) return true;
 			return false;
 		}
+		getClock() {
+			return this.clockMs;
+		}
+		setClock(ms) {
+			const next = Math.max(0, Math.round(Number(ms) || 0));
+			const prev = this.clockMs;
+			this.clockMs = next;
+			const tickSteps = globalSteps(this.project.logic, "clock.tick");
+			this.runBatch(`预览时钟 ${prev}ms → ${next}ms`, false, false, (batch) => {
+				if (batch.work.has("clock")) batch.work.set("clock", next);
+				if (batch.work.has("clock.ms")) batch.work.set("clock.ms", next);
+				batch.lines.push(`clock: ${prev}ms → ${next}ms`);
+				if (tickSteps) this.runSteps(tickSteps, batch, 0, {
+					value: next,
+					$value: next,
+					param: {
+						ms: next,
+						prevMs: prev,
+						deltaMs: next - prev
+					},
+					$event: {
+						ms: next,
+						prevMs: prev,
+						deltaMs: next - prev
+					},
+					ms: next,
+					prevMs: prev,
+					deltaMs: next - prev
+				});
+			});
+			this.hooks.onChange();
+		}
 		stateSnapshot() {
 			return [...this.state].map(([k, v]) => [k, cloneValue(v)]);
 		}
@@ -4846,11 +6407,11 @@ var VF = (function(exports) {
 			var _this$project$logic$o3, _decl$props, _node$props, _object$props2, _ref3, _props$selected;
 			const menuItem = findMenuItem(this.project.scene, id);
 			if (menuItem && !this.project.scene.nodes[id]) {
-				var _this$project$logic$o2, _menuItem$checked, _object$props;
+				var _this$project$logic$o2, _this$menuChecked$get, _menuItem$checked, _object$props;
 				const object = (_this$project$logic$o2 = this.project.logic.objects) === null || _this$project$logic$o2 === void 0 ? void 0 : _this$project$logic$o2[id];
 				const props = {
 					text: menuItem.text,
-					checked: menuItem.dock ? this.view(menuItem.dock).visible : Boolean((_menuItem$checked = menuItem.checked) !== null && _menuItem$checked !== void 0 ? _menuItem$checked : false),
+					checked: menuItem.dock ? this.view(menuItem.dock).visible : (_this$menuChecked$get = this.menuChecked.get(id)) !== null && _this$menuChecked$get !== void 0 ? _this$menuChecked$get : Boolean((_menuItem$checked = menuItem.checked) !== null && _menuItem$checked !== void 0 ? _menuItem$checked : false),
 					enabled: true
 				};
 				let visible = true;
@@ -4973,7 +6534,18 @@ var VF = (function(exports) {
 					return;
 				}
 				this.runBatch(`${nodeId}.${event}`, false, false, (batch) => {
-					if (steps) this.runSteps(steps, batch, 0, this.scopeForValue(value));
+					let nextChecked = Boolean(view.props.checked);
+					if (menuItem.group || menuItem.kind === "radio") {
+						nextChecked = true;
+						batch.menuChecked.set(nodeId, true);
+						if (menuItem.group) {
+							for (const { item } of allMenuItems(scene)) if (item.group === menuItem.group && item.id !== nodeId) batch.menuChecked.set(item.id, false);
+						}
+					} else if ((menuItem.checkable || menuItem.kind === "check") && !menuItem.dock) {
+						nextChecked = !nextChecked;
+						batch.menuChecked.set(nodeId, nextChecked);
+					}
+					if (steps) this.runSteps(steps, batch, 0, this.scopeForValue(value !== void 0 ? value : nextChecked));
 					else if (menuItem.emit) this.runSteps([{ emit: menuItem.emit }], batch, 0, {});
 					else if (menuItem.dock) this.toggleDockInBatch(batch, menuItem.dock);
 				});
@@ -5057,15 +6629,15 @@ var VF = (function(exports) {
 					});
 					return;
 				}
-				if ((node === null || node === void 0 ? void 0 : node.type) === "SpinBox" && event === "change" && typeof value === "number" && Number.isFinite(value)) {
+				if (((node === null || node === void 0 ? void 0 : node.type) === "SpinBox" || (node === null || node === void 0 ? void 0 : node.type) === "Slider" || (node === null || node === void 0 ? void 0 : node.type) === "ScrollBar") && event === "change" && typeof value === "number" && Number.isFinite(value)) {
 					var _view$props$min, _view$props$max;
 					const min = Number((_view$props$min = view.props.min) !== null && _view$props$min !== void 0 ? _view$props$min : 0);
-					const max = Number((_view$props$max = view.props.max) !== null && _view$props$max !== void 0 ? _view$props$max : 9999);
+					const max = Number((_view$props$max = view.props.max) !== null && _view$props$max !== void 0 ? _view$props$max : node.type === "SpinBox" ? 9999 : 100);
 					value = Math.max(min, Math.min(max, value));
 				} else if ((node === null || node === void 0 ? void 0 : node.type) === "ComboBox" && event === "change" && typeof value === "string") {
 					var _view$props$options;
 					if (!String((_view$props$options = view.props.options) !== null && _view$props$options !== void 0 ? _view$props$options : "").split(",").map((s) => s.trim()).filter(Boolean).includes(value)) return;
-				} else if ((node === null || node === void 0 ? void 0 : node.type) === "List" && (event === "change" || event === "select") && typeof value === "number") {
+				} else if (((node === null || node === void 0 ? void 0 : node.type) === "List" || (node === null || node === void 0 ? void 0 : node.type) === "Tree") && (event === "change" || event === "select") && typeof value === "number") {
 					const items = Array.isArray(view.props.items) ? view.props.items : [];
 					if (!Number.isInteger(value) || value < 0 || value >= items.length) return;
 				}
@@ -5078,7 +6650,11 @@ var VF = (function(exports) {
 		}
 		scopeForValue(value) {
 			if (value === void 0) return {};
-			const scope = { value };
+			const scope = {
+				value,
+				$value: value,
+				$event: value
+			};
 			if (typeof value === "object" && value !== null && !Array.isArray(value)) {
 				scope.param = value;
 				for (const [k, v] of Object.entries(value)) scope[k] = v;
@@ -5184,6 +6760,7 @@ var VF = (function(exports) {
 				work,
 				windows,
 				docks: new Map(this.docks),
+				menuChecked: new Map(this.menuChecked),
 				lines: [],
 				pending: [],
 				calls: [],
@@ -5203,9 +6780,11 @@ var VF = (function(exports) {
 				if (!before || before.open !== next.open || before.modal !== next.modal) changed = true;
 			}
 			for (const [id, next] of batch.docks) if (this.docks.get(id) !== next) changed = true;
+			for (const [id, next] of batch.menuChecked) if (this.menuChecked.get(id) !== next) changed = true;
 			this.state = batch.work;
 			this.windows = batch.windows;
 			this.docks = batch.docks;
+			this.menuChecked = batch.menuChecked;
 			if (this.syncActiveTabsWithVisibility()) changed = true;
 			if (batch.lines.length > 0 || !quietWhenEmpty) {
 				if (batch.lines.length === 0) batch.lines.push("（没有状态变化）");
@@ -5370,7 +6949,7 @@ var VF = (function(exports) {
 			return fn;
 		}
 		buildStateObject(work) {
-			const obj = {};
+			const obj = { clock: this.clockMs };
 			for (const [path, val] of work) {
 				obj[path] = cloneValue(val);
 				const parts = path.split(".");
@@ -5463,7 +7042,7 @@ var VF = (function(exports) {
 					if (!source) batch.lines.push(`错误：找不到函数“${spec.name}”`);
 					else {
 						var _spec$args;
-						const evalArgs = {};
+						const evalArgs = _objectSpread2({}, scope);
 						for (const [k, v] of Object.entries((_spec$args = spec.args) !== null && _spec$args !== void 0 ? _spec$args : {})) evalArgs[k] = this.evaluateStructured(v, batch.work, scope);
 						const result = this.compileFunction(`fn:${spec.name}`, source)(this.buildStateObject(batch.work), evalArgs);
 						this.applyFnResult(batch, result);
@@ -5549,6 +7128,7 @@ var VF = (function(exports) {
 			var _leaf$values2;
 			if (leaf.type === "enum") return typeof value === "string" && ((_leaf$values2 = leaf.values) !== null && _leaf$values2 !== void 0 ? _leaf$values2 : []).includes(value);
 			if (leaf.type === "array") return Array.isArray(value);
+			if (leaf.type === "object") return typeof value === "object" && value !== null && !Array.isArray(value);
 			return typeof value === leaf.type;
 		}
 		expected(leaf) {
@@ -5742,6 +7322,13 @@ var VF = (function(exports) {
 	function closeWindow(id) {
 		runtime.closeWindow(id);
 		return take();
+	}
+	function setClock(ms) {
+		runtime.setClock(ms);
+		return take();
+	}
+	function getClock() {
+		return runtime.getClock();
 	}
 	function setActionSim(name, mode, delayMs) {
 		runtime.setActionSimulation(name, _objectSpread2({ mode }, delayMs !== void 0 && Number.isFinite(delayMs) ? { delayMs: Math.max(0, delayMs) } : {}));
@@ -6218,11 +7805,13 @@ var VF = (function(exports) {
 	exports.finishActionError = finishActionError;
 	exports.finishActionSuccess = finishActionSuccess;
 	exports.fireTimer = fireTimer;
+	exports.getClock = getClock;
 	exports.getState = getState;
 	exports.graphics = graphics;
 	exports.init = init;
 	exports.request = request;
 	exports.setActionSim = setActionSim;
+	exports.setClock = setClock;
 	exports.setState = setState;
 	exports.simulate = simulate;
 	exports.simulateAction = simulateAction;

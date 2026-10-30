@@ -4,7 +4,7 @@
 //    从浮窗恢复（restore）、关闭后从菜单重新打开、拖动分隔条调整停靠区或并排面板大小；
 // 3. 提供预览模式下的 DOM 交互（拖动标题栏或页签吸附/并排/叠页签/浮出、分隔条拖拽改大小、浮窗拖拽与缩放）。
 
-import { prefHeight, prefWidth, type ComputedBox, type Scene, type SceneNode } from "./model.ts";
+import { dockHeightForWidth, prefHeight, prefWidth, type ComputedBox, type Scene, type SceneNode } from "./model.ts";
 
 export type DockArea = "left" | "right" | "top" | "bottom";
 export type DockSplitOrientation = "horizontal" | "vertical";
@@ -807,8 +807,12 @@ export function computeDockWindowLayout(
   if (topGroups.length > 0) {
     const orient = layout.areas.top.splitOrientation ?? "horizontal";
     if (orient === "horizontal") {
-      topH = Math.max(40, Math.round(layout.areas.top.size ?? prefHeight(topGroups[0].activeDock)));
       const widths = distributeGroupAxisSizes(W, topGroups, "horizontal");
+      const baseTopH = Math.max(40, Math.round(layout.areas.top.size ?? prefHeight(topGroups[0].activeDock)));
+      topH = Math.max(
+        baseTopH,
+        ...topGroups.map((g, idx) => dockHeightForWidth(scene, g.activeDock, widths[idx], isVisible)),
+      );
       let curX = 0;
       topGroups.forEach((g, idx) => {
         const gw = widths[idx];
@@ -831,7 +835,11 @@ export function computeDockWindowLayout(
     } else {
       let curY = midY;
       topGroups.forEach((g, idx) => {
-        const gh = Math.max(40, Math.round(g.group.size ?? layout.areas.top.size ?? prefHeight(g.activeDock)));
+        const gh = Math.max(
+          40,
+          Math.round(g.group.size ?? layout.areas.top.size ?? prefHeight(g.activeDock)),
+          dockHeightForWidth(scene, g.activeDock, W, isVisible),
+        );
         assignGroupBoxes("top", g, 0, curY, W, gh);
         curY += gh;
         topH += gh;
@@ -868,9 +876,13 @@ export function computeDockWindowLayout(
   if (bottomGroups.length > 0) {
     const orient = layout.areas.bottom.splitOrientation ?? "horizontal";
     if (orient === "horizontal") {
-      bottomH = Math.max(40, Math.round(layout.areas.bottom.size ?? prefHeight(bottomGroups[0].activeDock)));
-      const bY = midY + midH - bottomH;
       const widths = distributeGroupAxisSizes(W, bottomGroups, "horizontal");
+      const baseBottomH = Math.max(40, Math.round(layout.areas.bottom.size ?? prefHeight(bottomGroups[0].activeDock)));
+      bottomH = Math.max(
+        baseBottomH,
+        ...bottomGroups.map((g, idx) => dockHeightForWidth(scene, g.activeDock, widths[idx], isVisible)),
+      );
+      const bY = midY + midH - bottomH;
       let curX = 0;
       bottomGroups.forEach((g, idx) => {
         const gw = widths[idx];
@@ -891,7 +903,13 @@ export function computeDockWindowLayout(
         }
       });
     } else {
-      const ghList = bottomGroups.map((g) => Math.max(40, Math.round(g.group.size ?? layout.areas.bottom.size ?? prefHeight(g.activeDock))));
+      const ghList = bottomGroups.map((g) =>
+        Math.max(
+          40,
+          Math.round(g.group.size ?? layout.areas.bottom.size ?? prefHeight(g.activeDock)),
+          dockHeightForWidth(scene, g.activeDock, W, isVisible),
+        ),
+      );
       bottomH = ghList.reduce((a, b) => a + b, 0);
       let curY = midY + midH - bottomH;
       bottomGroups.forEach((g, idx) => {
