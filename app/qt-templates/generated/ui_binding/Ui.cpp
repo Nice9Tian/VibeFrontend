@@ -1,11 +1,16 @@
 // 界面绑定层。由 VibeFrontend 导出，不要手改：下次导出会整个覆盖。
 //
 // 这个文件分两部分：
-//   文件末尾“生成的部分”随设计项目变化：控件树、位置、事件的连接、业务接口的实现、效果的调用；
+//   文件末尾“生成的部分”随设计项目变化：控件树、位置、排版、事件的连接、业务接口的实现、效果的调用；
 //   其余是固定的：把逻辑脚本放进 Qt 自带的 JS 引擎运行，把鼠标事件交给它，再把算出的结果写到控件上。
 #include "Ui.h"
 
 #include <QAbstractAnimation>
+#include <QAction>
+#include <QApplication>
+#include <QComboBox>
+#include <QDialog>
+#include <QDockWidget>
 #include <QEvent>
 #include <QFile>
 #include <QFrame>
@@ -16,10 +21,15 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QLabel>
+#include <QListWidget>
 #include <QMainWindow>
+#include <QMenu>
+#include <QMenuBar>
 #include <QMetaMethod>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QSignalBlocker>
+#include <QStatusBar>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -31,6 +41,12 @@ namespace {
 
 // 过渡动画超过它自己的时长这么多毫秒还没有结束，就不再等它
 const int kTransitionGraceMs = 300;
+
+struct PendingEvent
+{
+    QString name;
+    QJSValue args;
+};
 
 // 设计项目里的一个控件
 struct Control
@@ -63,12 +79,18 @@ QString readResource(const QString &path)
     return QString::fromUtf8(file.readAll());
 }
 
-QStringList toStringList(const QJSValue &array)
+QList<PendingEvent> toPendingList(const QJSValue &array)
 {
-    QStringList list;
+    QList<PendingEvent> list;
     const int count = array.property(QStringLiteral("length")).toInt();
-    for (int i = 0; i < count; ++i)
-        list.append(array.property(quint32(i)).toString());
+    for (int i = 0; i < count; ++i) {
+        const QJSValue item = array.property(quint32(i));
+        if (item.isString()) {
+            list.append({ item.toString(), QJSValue() });
+        } else if (item.isObject()) {
+            list.append({ item.property(QStringLiteral("name")).toString(), item.property(QStringLiteral("args")) });
+        }
+    }
     return list;
 }
 
@@ -98,6 +120,8 @@ struct Ui::Private
     QJSValue api;
     UiEffects effects;
     QList<Control> controls;          // 第 0 个是窗口本身
+    QList<QWidget *> dialogs;         // 弹出窗口与模态对话框
+    QList<QPair<QString, QAction *>> menuActions;
     QHash<QObject *, int> byWidget;
     int pressed = -1;                 // 鼠标左键是在哪个控件上按下的
     bool doubleClick = false;
@@ -108,6 +132,7 @@ struct Ui::Private
     QJSValue call(const char *function, const QJSValueList &args = {});
     int add(const QString &id, QWidget *widget, QList<QPair<QString, QByteArray>> props = {}, int effect = -1);
     int addExternal(const QString &id, QFrame *frame, const QString &text);
+    void addMenuAction(const QString &id, QAction *action);
     int controlAt(const QPoint &globalPos) const;
 
     void dispatch(const QString &control, const QString &event, const QJSValue &value = QJSValue());
@@ -117,11 +142,12 @@ struct Ui::Private
     void clearTransition(int index);
     void finishTransition(int index, int generation);
     void setBusinessState(const QString &path, const QJSValue &value);
+    void requestEvent(const QString &name, const QJSValue &args);
     void setExternal(const QString &id, QWidget *widget);
 
     // 生成的部分，见文件末尾
     void build();
-    bool raiseBusinessEvent(const QString &name);
+    bool raiseBusinessEvent(const QString &name, const QJSValue &args);
     QAbstractAnimation *createVisibility(int effect, QWidget *target, bool showing);
 };
 
@@ -145,6 +171,16 @@ Ui::Ui(QObject *parent)
 Ui::~Ui()
 {
     *d->alive = false;
+    for (const Control &control : d->controls) {
+        if (control.widget)
+            control.widget->removeEventFilter(this);
+    }
+    d->byWidget.clear();
+    d->dialogs.clear();
+    d->menuActions.clear();
+    d->controls.clear();
+    d->api = QJSValue();
+    d->window.hide();
 }
 
 void Ui::show()
@@ -192,6 +228,69 @@ QString Ui::widgetDump() const
         all.insert(control.id, one);
     }
     return QString::fromUtf8(QJsonDocument(all).toJson(QJsonDocument::Compact));
+}
+
+QString Ui::layoutDump() const
+{
+    QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    if (d->window.layout())
+        d->window.layout()->activate();
+    if (QStatusBar *sb = d->window.findChild<QStatusBar *>(QString(), Qt::FindDirectChildrenOnly)) {
+        for (int index = 1; index < d->controls.size(); ++index) {
+            QWidget *w = d->controls.at(index).widget;
+            if (w && w->parentWidget() == sb) {
+                w->setGeometry(0, 0, sb->width(), sb->height());
+                if (w->layout())
+                    w->layout()->activate();
+            }
+        }
+    }
+    for (QWidget *dlg : d->dialogs) {
+        if (dlg && !dlg->isHidden() && dlg->layout())
+            dlg->layout()->activate();
+    }
+    QJsonObject all;
+    for (int index = 1; index < d->controls.size(); ++index) {
+        const Control &control = d->controls.at(index);
+        QWidget *w = control.widget;
+        if (!w || w->isHidden())
+            continue;
+        QWidget *topWin = w->window();
+        if (topWin && topWin != &d->window && topWin->isHidden())
+            continue;
+        bool ancestorHidden = false;
+        for (QWidget *cur = w; cur && cur != topWin; cur = cur->parentWidget()) {
+            if (cur->isHidden()) {
+                ancestorHidden = true;
+                break;
+            }
+        }
+        if (ancestorHidden)
+            continue;
+        const QPoint pos = (w == topWin) ? QPoint(0, 0) : w->mapTo(topWin, QPoint(0, 0));
+        QJsonObject box;
+        box.insert(QStringLiteral("x"), pos.x());
+        box.insert(QStringLiteral("y"), pos.y());
+        box.insert(QStringLiteral("width"), w->width());
+        box.insert(QStringLiteral("height"), w->height());
+        all.insert(control.id, box);
+    }
+    return QString::fromUtf8(QJsonDocument(all).toJson(QJsonDocument::Compact));
+}
+
+void Ui::triggerRequest(const QString &name, const QString &jsonArgs)
+{
+    QJSValue args = d->engine.newObject();
+    if (!jsonArgs.isEmpty()) {
+        const QJsonObject obj = QJsonDocument::fromJson(jsonArgs.toUtf8()).object();
+        args = d->engine.toScriptValue(obj.toVariantMap());
+    }
+    d->requestEvent(name, args);
+}
+
+void Ui::setActionSimulation(const QString &name, const QString &mode)
+{
+    d->call("setActionSim", { name, mode });
 }
 
 // ---- 鼠标事件 ----
@@ -292,9 +391,41 @@ int Ui::Private::addExternal(const QString &id, QFrame *frame, const QString &te
     return int(controls.size()) - 1;
 }
 
+void Ui::Private::addMenuAction(const QString &id, QAction *action)
+{
+    action->setObjectName(id);
+    menuActions.append({ id, action });
+    QObject::connect(action, &QAction::triggered, q, [this, id] {
+        dispatch(id, QStringLiteral("mousedown"));
+        dispatch(id, QStringLiteral("mouseup"));
+        dispatch(id, QStringLiteral("click"));
+        dispatch(QString(), QStringLiteral("window.click"));
+    });
+}
+
 // 某个位置上最里面的那个控件；不在任何控件上（包括窗口之外）时返回 -1，在窗口空白处返回 0。
 int Ui::Private::controlAt(const QPoint &globalPos) const
 {
+    for (int i = dialogs.size() - 1; i >= 0; --i) {
+        QWidget *dlg = dialogs.at(i);
+        if (!dlg || dlg->isHidden())
+            continue;
+        const QPoint local = dlg->mapFromGlobal(globalPos);
+        if (!dlg->rect().contains(local)) {
+            if (dlg->property("modal").toBool())
+                return -1;
+            continue;
+        }
+        QWidget *widget = dlg->childAt(local);
+        if (!widget)
+            widget = dlg;
+        while (widget) {
+            const int index = byWidget.value(widget, -1);
+            if (index >= 0)
+                return index;
+            widget = widget->parentWidget();
+        }
+    }
     QWidget *widget = window.childAt(window.mapFromGlobal(globalPos));
     while (widget) {
         const int index = byWidget.value(widget, -1);
@@ -316,11 +447,11 @@ void Ui::Private::dispatch(const QString &control, const QString &event, const Q
 // 没有连接，就执行设计项目里写的模拟步骤。模拟步骤可能再引出别的业务事件，所以是一个队列。
 void Ui::Private::drain(const QJSValue &pending)
 {
-    QStringList queue = toStringList(pending);
+    QList<PendingEvent> queue = toPendingList(pending);
     for (int guard = 0; !queue.isEmpty() && guard < 200; ++guard) {
-        const QString name = queue.takeFirst();
-        if (!raiseBusinessEvent(name))
-            queue += toStringList(call("simulate", { name }));
+        const PendingEvent ev = queue.takeFirst();
+        if (!raiseBusinessEvent(ev.name, ev.args))
+            queue += toPendingList(call("simulate", { ev.name, ev.args }));
     }
     applyView();
 }
@@ -329,22 +460,106 @@ void Ui::Private::drain(const QJSValue &pending)
 void Ui::Private::applyView()
 {
     const QJSValue views = call("views");
+    for (const auto &entry : menuActions) {
+        const QJSValue view = views.property(entry.first);
+        if (view.isUndefined())
+            continue;
+        QAction *act = entry.second;
+        const QSignalBlocker blocker(act);
+        act->setEnabled(view.property(QStringLiteral("enabled")).toBool());
+        act->setVisible(view.property(QStringLiteral("visible")).toBool());
+        const QJSValue p = view.property(QStringLiteral("props"));
+        if (p.hasProperty(QStringLiteral("text")))
+            act->setText(p.property(QStringLiteral("text")).toString());
+        if (p.hasProperty(QStringLiteral("checked")))
+            act->setChecked(p.property(QStringLiteral("checked")).toBool());
+    }
+
     for (int index = 1; index < controls.size(); ++index) {
         const Control &control = controls.at(index);
         const QJSValue view = views.property(control.id);
         control.widget->setEnabled(view.property(QStringLiteral("enabled")).toBool());
         const QJSValue props = view.property(QStringLiteral("props"));
-        for (const auto &link : control.props) {
-            const QJSValue value = props.property(link.first);
-            if (value.isUndefined() || value.isNull())
-                continue;
-            // 值没变就不写，免得输入框的光标被重置
-            const QVariant wanted = value.toVariant();
-            if (control.widget->property(link.second.constData()) != wanted)
-                control.widget->setProperty(link.second.constData(), wanted);
+        {
+            const QSignalBlocker blocker(control.widget);
+            for (const auto &link : control.props) {
+                const QJSValue value = props.property(link.first);
+                if (value.isUndefined() || value.isNull())
+                    continue;
+                const QVariant wanted = value.toVariant();
+                if (link.second == "vfOptions") {
+                    if (auto *combo = qobject_cast<QComboBox *>(control.widget)) {
+                        if (combo->property("vfOptions") != wanted) {
+                            combo->clear();
+                            const QString raw = wanted.toString();
+                            for (const QString &part : raw.split(QLatin1Char(','), Qt::SkipEmptyParts))
+                                combo->addItem(part.trimmed());
+                            const QString curVal = props.property(QStringLiteral("value")).toString();
+                            const int idx = combo->findText(curVal);
+                            if (idx >= 0)
+                                combo->setCurrentIndex(idx);
+                        }
+                    }
+                } else if (link.second == "currentText") {
+                    if (auto *combo = qobject_cast<QComboBox *>(control.widget)) {
+                        const int idx = combo->findText(wanted.toString());
+                        if (idx >= 0 && combo->currentIndex() != idx)
+                            combo->setCurrentIndex(idx);
+                    }
+                } else if (link.second == "vfItems") {
+                    if (auto *list = qobject_cast<QListWidget *>(control.widget)) {
+                        if (list->property("vfItems") != wanted) {
+                            list->clear();
+                            const QVariantList items = wanted.toList();
+                            for (const QVariant &it : items) {
+                                if (it.typeId() == QMetaType::QVariantMap) {
+                                    const QVariantMap map = it.toMap();
+                                    const QString name = map.value(QStringLiteral("name"), map.value(QStringLiteral("label"))).toString();
+                                    const bool vis = map.value(QStringLiteral("visible"), true).toBool();
+                                    list->addItem((vis ? QStringLiteral("● ") : QStringLiteral("○ ")) + name);
+                                } else {
+                                    list->addItem(it.toString());
+                                }
+                            }
+                            const int curRow = props.property(QStringLiteral("value")).toInt();
+                            if (curRow >= 0 && curRow < list->count())
+                                list->setCurrentRow(curRow);
+                        }
+                    }
+                } else if (link.second == "currentRow") {
+                    if (auto *list = qobject_cast<QListWidget *>(control.widget)) {
+                        const int row = wanted.toInt();
+                        if (row >= -1 && row < list->count() && list->currentRow() != row)
+                            list->setCurrentRow(row);
+                    }
+                } else if (link.second == "vfOrientation") {
+                    if (auto *frame = qobject_cast<QFrame *>(control.widget)) {
+                        frame->setFrameShape(wanted.toString() == QLatin1String("vertical") ? QFrame::VLine : QFrame::HLine);
+                    }
+                } else if (link.second == "vfAlign") {
+                    if (auto *label = qobject_cast<QLabel *>(control.widget)) {
+                        const QString align = wanted.toString();
+                        if (align == QLatin1String("center"))
+                            label->setAlignment(Qt::AlignCenter);
+                        else if (align == QLatin1String("right"))
+                            label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                        else
+                            label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+                    }
+                } else if (link.second == "windowTitle") {
+                    if (auto *dock = qobject_cast<QDockWidget *>(control.widget)) {
+                        if (auto *hdr = qobject_cast<QLabel *>(dock->titleBarWidget()))
+                            hdr->setText(wanted.toString());
+                    }
+                }
+                // 值没变就不写，免得输入框的光标被重置
+                if (control.widget->property(link.second.constData()) != wanted)
+                    control.widget->setProperty(link.second.constData(), wanted);
+            }
         }
         setShown(index, view.property(QStringLiteral("visible")).toBool());
     }
+    QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
 }
 
 // 显示或隐藏一个控件。指定了效果、并且有人提供了实现时，带着过渡动画做：
@@ -364,6 +579,8 @@ void Ui::Private::setShown(int index, bool shown)
     QWidget *widget = control.widget;
     if (!started || control.effect < 0) {
         widget->setVisible(shown);
+        if (shown && widget->layout())
+            widget->layout()->activate();
         return;
     }
 
@@ -427,6 +644,11 @@ void Ui::Private::setBusinessState(const QString &path, const QJSValue &value)
     if (problem.isString())
         qWarning("业务写回状态失败：%s", qPrintable(problem.toString()));
     applyView();
+}
+
+void Ui::Private::requestEvent(const QString &name, const QJSValue &args)
+{
+    drain(call("request", { name, args }));
 }
 
 void Ui::Private::setExternal(const QString &id, QWidget *widget)

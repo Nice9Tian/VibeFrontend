@@ -1,5 +1,6 @@
 // 工具界面里读取设计项目：在 loader.ts 读出的内容之上，把控件和效果的实现文件加载成可以运行的模块，
 // 并把控件的样式注入页面。数据结构和查找函数在 model.ts 里，这里原样转出，界面代码只需要引用这一个文件。
+import { STANDARD_COMPONENT_LIST } from "../standard/index.ts";
 import { listDir, projectRoot, readText } from "./fs";
 import { loadProjectFiles } from "./loader.ts";
 import type { ComponentCreate, EffectPlay, Project } from "./model.ts";
@@ -26,9 +27,13 @@ async function importSource(cacheKey: string, source: string): Promise<{ module?
   return cached;
 }
 
-/** 把所有控件的 style.css 限定在各自的类型范围内，合并注入页面。 */
+/** 把所有控件（含标准控件与项目控件）的 style.css 限定在各自的类型范围内，合并注入页面。 */
 async function injectComponentStyles(project: Project): Promise<string> {
   let css = "";
+  for (const std of STANDARD_COMPONENT_LIST) {
+    if (project.components.has(std.decl.type)) continue;
+    if (std.styleText) css += `@scope ([data-vf-type="${std.decl.type}"]) {\n${std.styleText}\n}\n`;
+  }
   for (const [type, component] of project.components) {
     if (!component.folder) continue;
     const text = await readText(`components/${component.folder}/${component.decl.style ?? "style.css"}`);

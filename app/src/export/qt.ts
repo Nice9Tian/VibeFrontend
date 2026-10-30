@@ -6,13 +6,22 @@ import type { Value } from "../expr.ts";
 import {
   allStateLeaves,
   allConditions,
+  allWindowIds,
   BUILTIN_TYPES,
   businessEvent,
   isBusinessState,
+  isPartitionedWindow,
+  layoutOf,
+  requestEvent,
+  STANDARD_COMPONENTS,
   type ComponentDecl,
+  type DockArea,
+  type LayoutSpec,
+  type MenuBarSpec,
   type Problem,
   type Project,
   type QtMapping,
+  type SizePolicy,
 } from "../model.ts";
 import * as code from "./qt-code.ts";
 import type { RuntimeData } from "./qt-runtime.ts";
@@ -32,11 +41,16 @@ export interface QtAssets {
 export interface BusinessState {
   /** 状态路径，例如 layer.visible */
   path: string;
-  type: "string" | "number" | "boolean" | "enum";
+  type: "string" | "number" | "boolean" | "enum" | "array";
   values?: string[];
   /** 生成的函数名 */
   setter: string;
   getter: string;
+}
+
+export interface EventParam {
+  name: string;
+  type: "string" | "number" | "boolean";
 }
 
 export interface BusinessEvent {
@@ -44,6 +58,15 @@ export interface BusinessEvent {
   text: string;
   /** 生成的信号名 */
   signal: string;
+  params?: EventParam[];
+}
+
+export interface RequestEvent {
+  name: string;
+  text: string;
+  /** 生成的函数名 */
+  method: string;
+  params: EventParam[];
 }
 
 export interface ExternalContainer {
@@ -70,6 +93,7 @@ export interface EffectSlot {
 export interface InterfaceSummary {
   states: BusinessState[];
   events: BusinessEvent[];
+  requests?: RequestEvent[];
   externals: ExternalContainer[];
   effects: EffectSlot[];
 }
@@ -104,8 +128,10 @@ export interface ControlPlan {
   id: string;
   /** C++ 里的变量名 */
   variable: string;
+  /** 子控件挂载的父变量名（例如 QDockWidget 内部装内容的 QWidget） */
+  bodyVariable: string;
   parentVariable: string;
-  kind: "component" | "container" | "external" | "placeholder";
+  kind: "component" | "container" | "external" | "placeholder" | "dock" | "dialog";
   /** 设计项目里的类型名 */
   type: string;
   qtClass: string;
@@ -124,6 +150,19 @@ export interface ControlPlan {
   /** 占位时显示的文字 */
   placeholder: string | null;
   hasChildren: boolean;
+  childIds: string[];
+  layout?: LayoutSpec;
+  size?: SizePolicy;
+  row?: number;
+  column?: number;
+  rowSpan?: number;
+  columnSpan?: number;
+  dockArea?: DockArea;
+  headerHeight?: number;
+  title?: string;
+  modal?: boolean;
+  isStatusBar?: boolean;
+  isCentral?: boolean;
 }
 
 export interface WindowPlan {
@@ -132,6 +171,13 @@ export interface WindowPlan {
   title: string;
   width: number;
   height: number;
+  partitioned: boolean;
+  menuBar?: MenuBarSpec;
+  statusBarId?: string;
+  centralId?: string;
+  dockIds: string[];
+  layout?: LayoutSpec;
+  childIds: string[];
 }
 
 const IDENTIFIER = /^[A-Za-z][A-Za-z0-9_]*$/;
@@ -140,9 +186,9 @@ const QT_CLASS = /^Q[A-Za-z0-9]+$/;
 const RESERVED = new Set([
   "blockSignals", "children", "connect", "deleteLater", "destroyed", "disconnect", "dumpObjectInfo", "dumpObjectTree",
   "dynamicPropertyNames", "effects", "event", "eventFilter", "findChild", "findChildren", "inherits", "installEventFilter",
-  "isWidgetType", "isWindowType", "killTimer", "metaObject", "moveToThread", "objectName", "objectNameChanged", "parent",
-  "property", "removeEventFilter", "sender", "setObjectName", "setParent", "setProperty", "show", "signalsBlocked",
-  "startTimer", "stateDump", "thread", "widgetDump", "window",
+  "isWidgetType", "isWindowType", "killTimer", "layoutDump", "metaObject", "moveToThread", "objectName", "objectNameChanged", "parent",
+  "property", "removeEventFilter", "sender", "setActionSimulation", "setObjectName", "setParent", "setProperty", "show", "signalsBlocked",
+  "start", "startTimer", "stateDump", "thread", "triggerRequest", "widgetDump", "window",
 ]);
 
 function upperFirst(text: string): string {
@@ -200,9 +246,39 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
     const def = businessEvent(logic, name);
     if (!def) continue;
     if (!needIdentifier(name, `业务事件 ${name}`)) continue;
-    const event: BusinessEvent = { name, text: def.text ?? "", signal: `${lowerFirst(pascal(name))}Requested` };
+    const params: EventParam[] = [];
+    for (const [pName, pType] of Object.entries(def.params ?? {})) {
+      if (!needIdentifier(pName, `业务事件 ${name} 的参数 ${pName}`)) continue;
+      params.push({ name: pName, type: pType });
+    }
+    const event: BusinessEvent = {
+      name,
+      text: def.text ?? "",
+      signal: `${lowerFirst(pascal(name))}Requested`,
+      ...(params.length > 0 ? { params } : {}),
+    };
     claim(event.signal, `业务事件 ${name}`);
     events.push(event);
+  }
+
+  const requests: RequestEvent[] = [];
+  for (const name of Object.keys(logic.events ?? {})) {
+    const def = requestEvent(logic, name);
+    if (!def) continue;
+    if (!needIdentifier(name, `请求事件 ${name}`)) continue;
+    const params: EventParam[] = [];
+    for (const [pName, pType] of Object.entries(def.params ?? {})) {
+      if (!needIdentifier(pName, `请求事件 ${name} 的参数 ${pName}`)) continue;
+      params.push({ name: pName, type: pType });
+    }
+    const req: RequestEvent = {
+      name,
+      text: def.text ?? "",
+      method: `request${pascal(name)}`,
+      params,
+    };
+    claim(req.method, `请求事件 ${name}`);
+    requests.push(req);
   }
 
   // ---- 界面接口 ----
@@ -231,20 +307,32 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
   // ---- 控件树 ----
   const root = scene.nodes[scene.root];
   if (!root) error(`画布里找不到根窗口 ${scene.root}`);
+  const partitioned = isPartitionedWindow(root) || (root?.children ?? []).some((cid) => scene.nodes[cid]?.type === "Dock");
+  const dockIds = root?.docks ?? (root?.children ?? []).filter((cid) => scene.nodes[cid]?.type === "Dock");
   const window: WindowPlan = {
     id: scene.root,
     variable: `w_${sanitize(scene.root)}`,
     title: root?.title ?? scene.root,
     width: root?.width ?? 480,
     height: root?.height ?? 320,
+    partitioned,
+    menuBar: root?.menuBar,
+    statusBarId: root?.statusBar,
+    centralId: root?.central,
+    dockIds,
+    layout: layoutOf(root) ?? undefined,
+    childIds: root?.children ?? [],
   };
   const controls: ControlPlan[] = [];
   const externals: ExternalContainer[] = [];
   const variables = new Set<string>([window.variable]);
+  const visited = new Set<string>([scene.root]);
   const unmappedTypes = new Set<string>();
   const unmappedProps = new Set<string>();
 
   const visit = (id: string, parentVariable: string) => {
+    if (visited.has(id)) return;
+    visited.add(id);
     const node = scene.nodes[id];
     if (!node) return error(`画布里找不到节点 ${id}`);
     let variable = `w_${sanitize(id)}`;
@@ -253,10 +341,13 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
 
     const object = logic.objects?.[id];
     const effectName = object?.effects?.visible;
+    const isStatusBar = id === root?.statusBar;
+    const isCentral = id === root?.central;
     const plan: ControlPlan = {
       id,
       variable,
-      parentVariable,
+      bodyVariable: variable,
+      parentVariable: node.type === "Dialog" || node.type === "Dock" ? "&window" : parentVariable,
       kind: "container",
       type: node.type,
       qtClass: "QFrame",
@@ -270,6 +361,15 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
       effect: effectName ? effects.findIndex((effect) => effect.name === effectName) : -1,
       placeholder: null,
       hasChildren: (node.children?.length ?? 0) > 0,
+      childIds: [...(node.children ?? [])],
+      layout: layoutOf(node) ?? undefined,
+      size: node.size,
+      row: node.row,
+      column: node.column,
+      rowSpan: node.rowSpan,
+      columnSpan: node.columnSpan,
+      isStatusBar,
+      isCentral,
     };
 
     if (node.type === "External") {
@@ -280,11 +380,34 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
         claim(external.setter, `外部容器 ${id}`);
         externals.push(external);
       }
-    } else if (node.type === "Container") {
+    } else if (node.type === "Dock") {
+      plan.kind = "dock";
+      plan.qtClass = "QDockWidget";
+      plan.bodyVariable = `body_${variable}`;
+      variables.add(plan.bodyVariable);
+      plan.dockArea = node.dockArea ?? "left";
+      plan.headerHeight = node.headerHeight ?? 26;
+      plan.title = node.title ?? (typeof node.props?.title === "string" ? node.props.title : id);
+      plan.props = [["title", "windowTitle"]];
+    } else if (node.type === "Dialog") {
+      plan.kind = "dialog";
+      plan.qtClass = "QDialog";
+      plan.title = node.title ?? (typeof node.props?.title === "string" ? node.props.title : id);
+      plan.modal = node.modal !== false;
+    } else if (
+      node.type === "Container" ||
+      node.type === "VBox" ||
+      node.type === "HBox" ||
+      node.type === "Grid" ||
+      node.type === "Form" ||
+      node.type === "Stack"
+    ) {
       // 没有转换、里面也没有东西的容器，和工具里一样显示自己的 ID
-      if (!plan.hasChildren) plan.placeholder = id;
+      if (node.type === "Container" && !plan.hasChildren && !plan.layout && !isStatusBar && !isCentral) {
+        plan.placeholder = id;
+      }
     } else {
-      const decl: ComponentDecl | undefined = project.components.get(node.type)?.decl;
+      const decl: ComponentDecl | undefined = project.components.get(node.type)?.decl ?? STANDARD_COMPONENTS.get(node.type)?.decl;
       const qt: QtMapping | undefined = decl?.qt;
       if (qt && QT_CLASS.test(qt.widget)) {
         plan.kind = "component";
@@ -319,9 +442,22 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
       }
     }
     controls.push(plan);
-    for (const child of node.children ?? []) visit(child, variable);
+    for (const child of node.children ?? []) visit(child, plan.bodyVariable);
   };
-  for (const child of root?.children ?? []) visit(child, window.variable);
+
+  const rootParentVar = partitioned ? "&window" : window.variable;
+  const topIds: string[] = [];
+  const addTop = (id: string | undefined) => {
+    if (id && id !== scene.root && scene.nodes[id] && !topIds.includes(id)) topIds.push(id);
+  };
+  for (const cid of root?.children ?? []) addTop(cid);
+  for (const did of root?.docks ?? []) addTop(did);
+  addTop(root?.central);
+  addTop(root?.statusBar);
+  for (const wid of allWindowIds(scene)) {
+    if (wid !== scene.root) addTop(wid);
+  }
+  for (const child of topIds) visit(child, rootParentVar);
 
   for (const type of [...unmappedTypes].sort()) {
     if (type === "Shape" || type === "Line") {
@@ -337,10 +473,18 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
     if (def?.type === "text") hint(`文字条件 ${id} 还没有改写成符号条件，导出后它固定为 ${def.preview === true ? "真" : "假"}`);
   }
   for (const type of new Set(controls.map((control) => control.type))) {
-    if (!BUILTIN_TYPES.includes(type) && !project.components.has(type)) error(`控件类型 ${type} 在 components/ 中找不到`);
+    if (!BUILTIN_TYPES.includes(type) && !project.components.has(type) && !STANDARD_COMPONENTS.has(type)) {
+      error(`控件类型 ${type} 在 components/ 中找不到`);
+    }
   }
 
-  const summary: InterfaceSummary = { states, events, externals, effects };
+  const summary: InterfaceSummary = {
+    states,
+    events,
+    ...(requests.length > 0 ? { requests } : {}),
+    externals,
+    effects,
+  };
   const changes = diffInterface(previous?.interface ?? null, summary);
   const manifest: Manifest = {
     generator: "VibeFrontend",
@@ -356,8 +500,18 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
   if (problems.some((problem) => problem.level === "error")) return { files, scaffold, manifest, changes, problems };
 
   const components: Record<string, ComponentDecl> = {};
+  const usedTypes = new Set(controls.map((c) => c.type));
+  for (const [type, std] of STANDARD_COMPONENTS) {
+    if (usedTypes.has(type) && !project.components.has(type)) components[type] = std.decl;
+  }
   for (const type of [...project.components.keys()].sort()) components[type] = project.components.get(type)!.decl;
-  const data: RuntimeData = { scene, logic, components };
+  const data: RuntimeData = {
+    scene,
+    logic,
+    components,
+    ...(Object.keys(project.functions ?? {}).length > 0 ? { functions: project.functions } : {}),
+    ...(Object.keys(project.actionSources ?? {}).length > 0 ? { actionSources: project.actionSources } : {}),
+  };
 
   const context: code.Context = { projectName: project.name, window, controls, summary, lastChanges: manifest.lastChanges };
   // 固定的文件原样放进去，其中带标记的行换成生成的内容
@@ -418,6 +572,7 @@ export function diffInterface(before: InterfaceSummary | null, after: InterfaceS
   compare("业务管的状态", before.states, after.states, (s) => s.path, (s) => `${s.path}（${stateType(s)}）`,
     (a, b) => (stateType(a) !== stateType(b) ? `类型从 ${stateType(a)} 变成 ${stateType(b)}，业务那边的读写要跟着改` : null));
   compare("业务事件", before.events, after.events, (e) => e.name, (e) => e.name, () => null);
+  compare("请求事件", before.requests ?? [], after.requests ?? [], (r) => r.name, (r) => r.name, () => null);
   compare("外部容器", before.externals, after.externals, (e) => e.id, (e) => e.id, () => null);
   compare("效果", before.effects, after.effects, (e) => e.name, (e) => `${e.name}（哈希 ${e.hash}）`,
     (a, b) =>

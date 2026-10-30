@@ -88,15 +88,19 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
   let name = "未命名项目";
   let pageDoc = "docs/page.md";
   let qtExportDir: string | null = null;
+  const extraWindowDocs: string[] = [];
   const configText = (await io.readText("project.json")) ?? "{}";
   try {
     const config = JSON.parse(configText) as {
       name?: string;
-      windows?: Array<{ doc?: string }>;
+      windows?: Array<{ id?: string; doc?: string }>;
       export?: { qt?: string };
     };
     name = config.name ?? name;
     pageDoc = config.windows?.[0]?.doc ?? pageDoc;
+    for (const win of config.windows ?? []) {
+      if (win?.doc) extraWindowDocs.push(win.doc);
+    }
     qtExportDir = config.export?.qt ?? null;
   } catch (e) {
     problems.push({ level: "error", message: `project.json 不是有效的 JSON：${(e as Error).message}` });
@@ -142,6 +146,48 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
     fingerprints.push(JSON.stringify(effect.files));
   }
 
+  // 纯计算 JS 函数（functions/*.js）
+  const functions: Record<string, string> = {};
+  for (const entry of await io.listDir("functions")) {
+    if (entry.isDir || !entry.name.endsWith(".js")) continue;
+    const fnName = entry.name.slice(0, -3);
+    const text = await io.readText(`functions/${entry.name}`);
+    if (text !== null) {
+      functions[fnName] = text;
+      fingerprints.push(`fn:${fnName}:${text}`);
+    }
+  }
+  for (const [fnName, def] of Object.entries(logic.functions ?? {})) {
+    if (functions[fnName] !== undefined) continue;
+    const handlerPath = def?.handler ?? `functions/${fnName}.js`;
+    const text = await io.readText(handlerPath);
+    if (text !== null) {
+      functions[fnName] = text;
+      fingerprints.push(`fn:${fnName}:${text}`);
+    }
+  }
+
+  // 动作实现文件（actions/*.js）
+  const actionSources: Record<string, string> = {};
+  for (const entry of await io.listDir("actions")) {
+    if (entry.isDir || !entry.name.endsWith(".js")) continue;
+    const actName = entry.name.slice(0, -3);
+    const text = await io.readText(`actions/${entry.name}`);
+    if (text !== null) {
+      actionSources[actName] = text;
+      fingerprints.push(`act:${actName}:${text}`);
+    }
+  }
+  for (const [actName, def] of Object.entries(logic.actions ?? {})) {
+    if (actionSources[actName] !== undefined) continue;
+    const handlerPath = def?.handler ?? `actions/${actName}.js`;
+    const text = await io.readText(handlerPath);
+    if (text !== null) {
+      actionSources[actName] = text;
+      fingerprints.push(`act:${actName}:${text}`);
+    }
+  }
+
   // 用户存下来的图形预设
   let presets: ShapePreset[] = [];
   const presetsText = await io.readText(PRESETS_PATH);
@@ -155,7 +201,7 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
   }
 
   const docs = new Map<string, string>();
-  const docPaths = new Set<string>([pageDoc]);
+  const docPaths = new Set<string>([pageDoc, ...extraWindowDocs]);
   for (const object of Object.values(logic.objects ?? {})) {
     if (object?.doc) docPaths.add(parseDocRef(object.doc).path);
   }
@@ -166,7 +212,22 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
 
   const signature = JSON.stringify([sceneText, logicText, [...docs], fingerprints, configText, presetsText]);
   const project: Project = {
-    root, name, pageDoc, qtExportDir, presets, scene, sceneText: sceneText ?? "", logic, logicText, docs, components, effects, problems, signature,
+    root,
+    name,
+    pageDoc,
+    qtExportDir,
+    presets,
+    scene,
+    sceneText: sceneText ?? "",
+    logic,
+    logicText,
+    docs,
+    components,
+    effects,
+    functions,
+    actionSources,
+    problems,
+    signature,
   };
   problems.push(...check(project));
   return project;

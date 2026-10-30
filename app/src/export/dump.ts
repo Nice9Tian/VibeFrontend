@@ -10,13 +10,21 @@ function sorted<T>(entries: Array<[string, T]>): Record<string, T> {
   return result;
 }
 
+function canonicalValue(val: Value): Value {
+  if (val === null || typeof val !== "object") return val;
+  if (Array.isArray(val)) return val.map(canonicalValue);
+  const entries: Array<[string, Value]> = Object.keys(val).map((k) => [k, canonicalValue((val as Record<string, Value>)[k])]);
+  return sorted(entries);
+}
+
 export function dumpRuntime(runtime: Runtime, scene: Scene): string {
   const views: Array<[string, unknown]> = [];
   for (const id of Object.keys(scene.nodes)) {
     if (id === scene.root) continue;
     const view = runtime.view(id);
-    const props: Array<[string, Value]> = Object.keys(view.props).map((key) => [key, view.props[key]]);
+    const props: Array<[string, Value]> = Object.keys(view.props).map((key) => [key, canonicalValue(view.props[key])]);
     views.push([id, { enabled: view.enabled, props: sorted(props), visible: view.visible }]);
   }
-  return JSON.stringify({ state: sorted(runtime.stateSnapshot()), views: sorted(views) });
+  const stateEntries: Array<[string, Value]> = runtime.stateSnapshot().map(([k, v]) => [k, canonicalValue(v)]);
+  return JSON.stringify({ state: sorted(stateEntries), views: sorted(views) });
 }

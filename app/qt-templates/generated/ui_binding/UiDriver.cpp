@@ -3,13 +3,20 @@
 
 #include "Ui.h"
 
+#include <QAction>
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QEnterEvent>
 #include <QEventLoop>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
+#include <QLineEdit>
+#include <QListWidget>
 #include <QMouseEvent>
+#include <QPushButton>
+#include <QSpinBox>
 #include <QTimer>
 #include <QWidget>
 
@@ -34,8 +41,12 @@ void sendMouse(QWidget *widget, QEvent::Type type, Qt::MouseButtons buttons)
 
 void click(QWidget *widget)
 {
+    auto *cb = qobject_cast<QCheckBox *>(widget);
+    const bool cbBefore = cb ? cb->isChecked() : false;
     sendMouse(widget, QEvent::MouseButtonPress, Qt::LeftButton);
     sendMouse(widget, QEvent::MouseButtonRelease, Qt::NoButton);
+    if (cb && cb->isEnabled() && !cb->isHidden() && cb->isChecked() == cbBefore)
+        cb->toggle();
 }
 
 QString toText(const QJsonValue &value)
@@ -80,11 +91,18 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
     waitMs(100);
     for (const QString &raw : steps) {
         const QString step = raw.trimmed();
+        if (step.isEmpty())
+            continue;
         const QString verb = step.section(QLatin1Char(':'), 0, 0);
         const QString id = step.section(QLatin1Char(':'), 1, 1);
 
         if (verb == QLatin1String("state")) {
             output.append(QStringLiteral("state ") + ui.stateDump());
+            continue;
+        }
+        if (verb == QLatin1String("layout")) {
+            QApplication::processEvents();
+            output.append(QStringLiteral("layout ") + ui.layoutDump());
             continue;
         }
         if (verb == QLatin1String("check")) {
@@ -93,6 +111,29 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
         }
         if (verb == QLatin1String("wait")) {
             waitMs(id.toInt());
+            continue;
+        }
+        if (verb == QLatin1String("resize")) {
+            const int w = id.section(QLatin1Char('x'), 0, 0).toInt();
+            const int h = id.section(QLatin1Char('x'), 1, 1).toInt();
+            if (w > 0 && h > 0) {
+                ui.window()->resize(w, h);
+                QApplication::processEvents();
+                waitMs(30);
+                QApplication::processEvents();
+            }
+            continue;
+        }
+        if (verb == QLatin1String("request")) {
+            const QString jsonArgs = step.section(QLatin1Char(':'), 2);
+            ui.triggerRequest(id, jsonArgs);
+            QApplication::processEvents();
+            continue;
+        }
+        if (verb == QLatin1String("mock")) {
+            const QString mode = step.section(QLatin1Char(':'), 2);
+            ui.setActionSimulation(id, mode);
+            QApplication::processEvents();
             continue;
         }
         if (verb == QLatin1String("shot")) {
@@ -105,6 +146,13 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
 
         QWidget *widget = ui.window()->findChild<QWidget *>(id);
         if (!widget) {
+            if (QAction *action = ui.window()->findChild<QAction *>(id)) {
+                if (verb == QLatin1String("click")) {
+                    action->trigger();
+                    QApplication::processEvents();
+                    continue;
+                }
+            }
             output.append(QStringLiteral("error 找不到控件 %1（步骤 %2）").arg(id, step));
             continue;
         }
@@ -133,6 +181,36 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                 QApplication::sendEvent(widget, &press);
                 QKeyEvent release(QEvent::KeyRelease, 0, Qt::NoModifier, QString(ch));
                 QApplication::sendEvent(widget, &release);
+            }
+        } else if (verb == QLatin1String("input")) {
+            const QString rawVal = step.section(QLatin1Char(':'), 2);
+            if (auto *spin = qobject_cast<QSpinBox *>(widget)) {
+                spin->setValue(rawVal.toInt());
+            } else if (auto *edit = qobject_cast<QLineEdit *>(widget)) {
+                edit->setText(rawVal);
+                emit edit->textEdited(rawVal);
+            }
+        } else if (verb == QLatin1String("select")) {
+            const QString rawVal = step.section(QLatin1Char(':'), 2);
+            if (auto *combo = qobject_cast<QComboBox *>(widget)) {
+                int idx = combo->findText(rawVal);
+                if (idx < 0) {
+                    bool ok = false;
+                    const int n = rawVal.toInt(&ok);
+                    if (ok && n >= 0 && n < combo->count())
+                        idx = n;
+                }
+                if (idx >= 0)
+                    combo->setCurrentIndex(idx);
+            } else if (auto *list = qobject_cast<QListWidget *>(widget)) {
+                list->setCurrentRow(rawVal.toInt());
+            }
+        } else if (verb == QLatin1String("toggle")) {
+            if (auto *cb = qobject_cast<QCheckBox *>(widget)) {
+                cb->toggle();
+            } else if (auto *btn = qobject_cast<QPushButton *>(widget)) {
+                if (btn->isCheckable())
+                    btn->toggle();
             }
         } else {
             output.append(QStringLiteral("error 不认识的步骤 %1").arg(step));

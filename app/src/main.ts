@@ -2,12 +2,15 @@
 import { isMap, parseDocument, type Document } from "yaml";
 import { watchProject, writeText } from "./fs";
 import {
+  allWindowIds,
   appendSection,
   BUILTIN_TYPES,
+  computeSceneLayout,
   CONTAINER_DECL,
   declFor,
   EXTERNAL_DECL,
   getSection,
+  LAYOUT_TYPE_KINDS,
   loadProject,
   LOGIC_PATH,
   MOUSE_EVENTS,
@@ -16,6 +19,7 @@ import {
   SCENE_PATH,
   sectionNameFor,
   sectionOffsets,
+  STANDARD_COMPONENTS,
   type ComponentInstance,
   type Project,
   type SceneNode,
@@ -113,15 +117,35 @@ function node(id: string): SceneNode | undefined {
   return project.scene.nodes[id];
 }
 
+function childrenOf(n: SceneNode | undefined): string[] {
+  if (!n) return [];
+  const list: string[] = [];
+  const add = (cid: string | undefined) => {
+    if (cid && !list.includes(cid)) list.push(cid);
+  };
+  for (const cid of n.docks ?? []) add(cid);
+  add(n.central);
+  add(n.statusBar);
+  for (const cid of n.children ?? []) add(cid);
+  return list;
+}
+
 function parentOf(id: string): string | null {
   for (const [parentId, parent] of Object.entries(project.scene.nodes)) {
-    if (parent.children?.includes(id)) return parentId;
+    if (childrenOf(parent).includes(id)) return parentId;
   }
   return null;
 }
 
 /** 节点相对于设计窗口左上角的位置。根窗口在 (0, 0)。 */
 function absRect(id: string): { x: number; y: number; width: number; height: number } {
+  const runtime = activeRuntime();
+  const boxes = computeSceneLayout(project.scene, {
+    isVisible: (nid) => runtime.view(nid).visible,
+    getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
+  });
+  const box = boxes.get(id);
+  if (box) return { x: box.absX, y: box.absY, width: box.width, height: box.height };
   const n = node(id)!;
   let x = 0;
   let y = 0;
@@ -265,16 +289,31 @@ function buildNode(id: string, parentEl: HTMLElement): void {
   const entry: Mounted = { wrapper, body, generation: 0 };
   mounted.set(id, entry);
 
-  if (n.type === "Container") {
-    // 未转换的容器：没有子节点时显示自己的 ID，作为占位
-    if (!n.children?.length) body.textContent = id;
+  if (n.type === "Dock") {
+    const header = document.createElement("div");
+    header.className = "vf-dock-header";
+    header.style.cssText = `height:${n.headerHeight ?? 26}px;display:flex;align-items:center;padding:0 10px;font-size:12px;font-weight:600;background:#182030;color:#cbd5e1;border-bottom:1px solid #2b3548;box-sizing:border-box;user-select:none;`;
+    header.textContent = String(activeRuntime().view(id).props.title ?? n.title ?? id);
+    wrapper.prepend(header);
+    wrapper.style.background = "#111726";
+    wrapper.style.border = "1px solid #263042";
+    wrapper.style.boxSizing = "border-box";
+  } else if (n.type === "Dialog") {
+    wrapper.style.background = "#151c2c";
+    wrapper.style.border = "1px solid #334155";
+    wrapper.style.borderRadius = "8px";
+    wrapper.style.boxShadow = "0 20px 50px rgba(0,0,0,0.6)";
+    wrapper.style.zIndex = "50";
+  } else if (n.type === "Container" || n.type in LAYOUT_TYPE_KINDS) {
+    // 未转换的容器或布局容器：没有子节点时显示自己的 ID，作为占位
+    if (!childrenOf(n).length) body.textContent = id;
   } else if (n.type === "External") {
     // 外部容器：工具里只是占位，导出后由业务把自己的控件放进来
     body.textContent = `外部容器 ${id}\n导出后由业务放入控件`;
   } else if (n.type === "Shape" || n.type === "Line") {
     paintGraphic(id, entry, activeRuntime().view(id).props);
   } else {
-    const component = project.components.get(n.type);
+    const component = project.components.get(n.type) ?? STANDARD_COMPONENTS.get(n.type);
     if (!component?.create) {
       showNodeError(body, component?.error ?? `找不到控件 ${n.type}`);
     } else {
@@ -311,7 +350,7 @@ function buildNode(id: string, parentEl: HTMLElement): void {
     });
   }
 
-  for (const child of n.children ?? []) buildNode(child, wrapper);
+  for (const child of childrenOf(n)) buildNode(child, wrapper);
 }
 
 /**
@@ -344,17 +383,48 @@ function setShown(id: string, entry: Mounted, shown: boolean): void {
 /** 按当前运行层的计算结果更新每个节点的可见性和属性。 */
 function applyViews(): void {
   const runtime = activeRuntime();
+  const boxes = computeSceneLayout(project.scene, {
+    isVisible: (nid) => runtime.view(nid).visible,
+    getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
+  });
+  const rootNode = node(project.scene.root);
   for (const [id, entry] of mounted) {
     const view = runtime.view(id);
+    const n = node(id);
+    const box = boxes.get(id);
+    if (box && n?.type !== "Line") {
+      if (n?.type === "Dialog" && id !== project.scene.root && rootNode) {
+        const dx = Math.round((rootNode.width - box.width) / 2);
+        const dy = Math.round((rootNode.height - box.height) / 2);
+        Object.assign(entry.wrapper.style, {
+          left: `${dx}px`,
+          top: `${dy}px`,
+          width: `${box.width}px`,
+          height: `${box.height}px`,
+        });
+      } else {
+        Object.assign(entry.wrapper.style, {
+          left: `${box.x}px`,
+          top: `${box.y}px`,
+          width: `${box.width}px`,
+          height: `${box.height}px`,
+        });
+      }
+    }
+    const effectiveVis = box ? box.visible : view.visible;
     if (mode === "preview") {
-      setShown(id, entry, view.visible);
+      setShown(id, entry, effectiveVis);
       entry.wrapper.classList.remove("vf-ghost");
     } else {
-      entry.wrapper.style.display = "";
-      entry.wrapper.classList.toggle("vf-ghost", !view.visible);
+      entry.wrapper.style.display = n?.type === "Dialog" && selectedId !== id && !selectedIds.includes(id) && !effectiveVis ? "none" : "";
+      entry.wrapper.classList.toggle("vf-ghost", !effectiveVis);
     }
     entry.wrapper.toggleAttribute("data-vf-disabled", !view.enabled);
-    const type = node(id)?.type;
+    const type = n?.type;
+    if (type === "Dock") {
+      const header = entry.wrapper.querySelector(".vf-dock-header");
+      if (header) header.textContent = String(view.props.title ?? n?.title ?? id);
+    }
     if (type === "Shape" || type === "Line") {
       paintGraphic(id, entry, view.props);
       continue;
@@ -387,7 +457,42 @@ function renderStage(): void {
   $("stage-title").textContent = (root.title ?? project.scene.root) + (mode === "preview" ? "　·　预览中" : "");
   $("window-size").textContent = `窗口 ${root.width}×${root.height}`;
 
-  for (const child of root.children ?? []) buildNode(child, stage);
+  if (root.menuBar) {
+    const bar = document.createElement("div");
+    const mh = root.menuBar.height ?? 28;
+    bar.style.cssText = `position:absolute;left:0;top:0;width:100%;height:${mh}px;display:flex;align-items:center;gap:4px;padding:0 8px;background:#111827;border-bottom:1px solid #263042;box-sizing:border-box;z-index:20;font-size:12px;color:#e2e8f0;`;
+    for (const menu of root.menuBar.menus ?? []) {
+      const group = document.createElement("div");
+      group.style.cssText = "display:flex;align-items:center;gap:2px;margin-right:8px;";
+      const titleSpan = document.createElement("span");
+      titleSpan.style.cssText = "font-weight:600;color:#94a3b8;padding:0 4px;";
+      titleSpan.textContent = menu.title;
+      group.append(titleSpan);
+      for (const item of menu.items ?? []) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.dataset.vfMenuItem = item.id;
+        btn.style.cssText = "background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;";
+        btn.textContent = item.text;
+        btn.addEventListener("click", () => {
+          if (mode === "preview" && previewRuntime) {
+            previewRuntime.dispatch(item.id, "mousedown");
+            previewRuntime.dispatch(item.id, "mouseup");
+            previewRuntime.dispatch(item.id, "click");
+            previewRuntime.dispatch(null, "window.click");
+          }
+        });
+        group.append(btn);
+      }
+      bar.append(group);
+    }
+    stage.append(bar);
+  }
+
+  for (const child of childrenOf(root)) buildNode(child, stage);
+  for (const winId of allWindowIds(project.scene)) {
+    if (winId !== project.scene.root) buildNode(winId, stage);
+  }
   applyViews();
   if (mode === "edit") {
     stage.append(overlay);
@@ -2653,10 +2758,21 @@ function renderPalette(): void {
   $("palette-basic").replaceChildren(
     make("Container", "□ 容器", "拖进设计窗口，再交给 Agent 做成具体控件"),
     make("External", "⧉ 外部容器", EXTERNAL_DECL.description ?? ""),
+    make("VBox", "▤ 竖排布局", "子控件从上往下排列"),
+    make("HBox", "▥ 横排布局", "子控件从左往右排列"),
+    make("Grid", "⊞ 网格布局", "子控件按行列网格排列"),
+    make("Form", "☰ 表单布局", "左列标签、右列控件的表单排列"),
+    make("Stack", "❐ 层叠布局", "多个页面叠放，按 currentIndex 切换"),
+    make("Dock", "◧ 停靠面板", "停靠在主窗口四侧的面板"),
+    make("Dialog", "🗔 对话框", "弹出窗口或模态对话框"),
   );
-  const items = [...project.components.values()]
+  const stdItems = [...STANDARD_COMPONENTS.values()].map((component) =>
+    make(component.decl.type, `${component.decl.label ?? component.decl.type}（标准）`, component.decl.description ?? ""),
+  );
+  const projectItems = [...project.components.values()]
     .filter((component) => !component.error)
     .map((component) => make(component.decl.type, component.decl.label ?? component.decl.type, component.decl.description ?? ""));
+  const items = [...stdItems, ...projectItems];
   if (items.length === 0) {
     const empty = document.createElement("div");
     empty.className = "palette-empty";
@@ -2730,9 +2846,9 @@ function renderLayers(): void {
     });
     rows.push(row);
     // 列表里越靠上的在画面里越靠前
-    for (const child of [...(n.children ?? [])].reverse()) visit(child, depth + 1);
+    for (const child of [...childrenOf(n)].reverse()) visit(child, depth + 1);
   };
-  visit(project.scene.root, 0);
+  for (const winId of allWindowIds(project.scene)) visit(winId, 0);
   $("layers").replaceChildren(...rows);
 }
 
@@ -3046,7 +3162,7 @@ function renderLog(): void {
 // ---------- 预览 ----------
 
 function renderConditions(): void {
-  const chips = (previewRuntime?.conditions() ?? []).map((condition) => {
+  const chips: HTMLElement[] = (previewRuntime?.conditions() ?? []).map((condition) => {
     const isText = condition.kind === "text";
     const chip = document.createElement(isText ? "button" : "span");
     chip.className = "condition" + (condition.value ? " on" : "");
@@ -3055,6 +3171,30 @@ function renderConditions(): void {
     if (isText) chip.addEventListener("click", () => previewRuntime?.toggleTextCondition(condition.id));
     return chip;
   });
+  for (const action of previewRuntime?.actions() ?? []) {
+    const wrap = document.createElement("label");
+    wrap.className = "condition";
+    wrap.title = `动作 ${action.name} 的模拟方式`;
+    wrap.textContent = `动作 ${action.name}：`;
+    const sel = document.createElement("select");
+    sel.style.cssText = "margin-left:4px;font-size:11px;";
+    for (const [val, label] of [
+      ["real", "真实实现"],
+      ["success", "模拟成功"],
+      ["error", "模拟失败"],
+    ] as const) {
+      const opt = document.createElement("option");
+      opt.value = val;
+      opt.textContent = label;
+      opt.selected = action.sim.mode === val;
+      sel.append(opt);
+    }
+    sel.addEventListener("change", () => {
+      previewRuntime?.setActionSimulation(action.name, { mode: sel.value as "real" | "success" | "error" });
+    });
+    wrap.append(sel);
+    chips.push(wrap);
+  }
   $("conditions").replaceChildren(...chips);
 }
 

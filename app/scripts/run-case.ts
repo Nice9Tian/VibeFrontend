@@ -3,15 +3,19 @@
 //   npm run case -- <设计项目文件夹> "click:toggleButton;state;click:expandButton;state"
 //
 // 步骤的写法和导出的 Qt 程序的 --steps 相同（见导出工程里的 ui_binding/UiDriver.h）。
-// 两边以 "state " 开头的行应该逐字相同。这里没有界面，wait 和 check 两种步骤直接跳过。
+// 两边以 "state " 开头的行应该逐字相同。这里没有界面，wait、check、size、shot、resize、layout 直接跳过。
 import path from "node:path";
 import { dumpRuntime } from "../src/export/dump.ts";
+import type { Value } from "../src/expr.ts";
 import { loadProjectFiles } from "../src/loader.ts";
-import { Runtime } from "../src/runtime.ts";
+import { findMenuItem } from "../src/model.ts";
+import { Runtime, type ActionSimMode } from "../src/runtime.ts";
 import { nodeIO } from "./node-io.ts";
 
 async function main(): Promise<number> {
-  const [projectArg, stepsArg] = process.argv.slice(2);
+  const projectArg = process.argv[2];
+  const restArgs = process.argv.slice(3);
+  const stepsArg = restArgs.length > 0 ? restArgs.join(";") : undefined;
   if (!projectArg || stepsArg === undefined) {
     console.log('用法：npm run case -- <设计项目文件夹> "步骤;步骤;..."');
     return 2;
@@ -26,14 +30,28 @@ async function main(): Promise<number> {
     const step = raw.trim();
     if (!step) continue;
     const [verb, id = ""] = step.split(":");
+    const rest = step.split(":").slice(2).join(":");
     if (verb === "state") {
       console.log(`state ${dumpRuntime(runtime, project.scene)}`);
-    } else if (verb === "wait" || verb === "check" || verb === "size" || verb === "shot") {
+    } else if (verb === "wait" || verb === "check" || verb === "size" || verb === "shot" || verb === "resize" || verb === "layout") {
       continue;
-    } else if (!project.scene.nodes[id]) {
+    } else if (verb === "request") {
+      let args: Record<string, Value> = {};
+      if (rest) {
+        try {
+          args = JSON.parse(rest) as Record<string, Value>;
+        } catch {
+          // 忽略格式错误
+        }
+      }
+      runtime.request(id, args);
+    } else if (verb === "mock") {
+      runtime.setActionSimulation(id, { mode: (rest || "real") as ActionSimMode });
+    } else if (!project.scene.nodes[id] && !findMenuItem(project.scene, id)) {
       console.log(`error 找不到控件 ${id}（步骤 ${step}）`);
     } else if (verb === "click" || verb === "dblclick") {
-      // 和网页里的顺序相同：按下、松开、点击，然后是全局的 window.click
+      const node = project.scene.nodes[id];
+      const cbBefore = node?.type === "CheckBox" ? Boolean(runtime.view(id).props.value) : false;
       const once = () => {
         runtime.dispatch(id, "mousedown");
         runtime.dispatch(id, "mouseup");
@@ -45,15 +63,55 @@ async function main(): Promise<number> {
         once();
         runtime.dispatch(id, "dblclick");
       }
+      if (node?.type === "CheckBox") {
+        const view = runtime.view(id);
+        if (view.visible && view.enabled && Boolean(view.props.value) === cbBefore) {
+          runtime.dispatch(id, "change", !cbBefore);
+        }
+      }
     } else if (verb === "enter") {
       runtime.dispatch(id, "mouseenter");
     } else if (verb === "leave") {
       runtime.dispatch(id, "mouseleave");
     } else if (verb === "type") {
-      for (const ch of step.split(":").slice(2).join(":")) {
+      for (const ch of rest) {
         const next = (typed.get(id) ?? "") + ch;
         typed.set(id, next);
         runtime.dispatch(id, "change", next);
+      }
+    } else if (verb === "input") {
+      const node = project.scene.nodes[id];
+      if (node?.type === "SpinBox") {
+        runtime.dispatch(id, "change", Number(rest));
+      } else {
+        typed.set(id, rest);
+        runtime.dispatch(id, "change", rest);
+      }
+    } else if (verb === "select") {
+      const node = project.scene.nodes[id];
+      if (node?.type === "ComboBox") {
+        const options = String(runtime.view(id).props.options ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        let chosen = rest;
+        if (!options.includes(rest)) {
+          const idx = Number(rest);
+          if (Number.isInteger(idx) && idx >= 0 && idx < options.length) chosen = options[idx];
+        }
+        runtime.dispatch(id, "change", chosen);
+      } else if (node?.type === "List") {
+        const row = Number(rest);
+        runtime.dispatch(id, "change", row);
+        runtime.dispatch(id, "select", row);
+      }
+    } else if (verb === "toggle") {
+      const node = project.scene.nodes[id];
+      const view = runtime.view(id);
+      if (node?.type === "CheckBox") {
+        runtime.dispatch(id, "change", !view.props.value);
+      } else if (node?.type === "Button" && view.props.checkable) {
+        runtime.dispatch(id, "toggle", !view.props.checked);
       }
     } else {
       console.log(`error 不认识的步骤 ${step}`);
@@ -63,9 +121,11 @@ async function main(): Promise<number> {
 }
 
 main().then(
-  (code) => process.exit(code),
+  (code) => {
+    process.exitCode = code;
+  },
   (e) => {
     console.error(e);
-    process.exit(1);
+    process.exitCode = 1;
   },
 );
