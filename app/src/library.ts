@@ -85,6 +85,16 @@ export function statusBadgeText(status: LibraryStatus): string {
   }
 }
 
+/** 校验单个路径段（控件类型名、收藏 ID、文件名）是否安全，拒绝 `.`、`..`、斜杠、冒号及控制字符。 */
+export function isSafePathSegment(seg: string): boolean {
+  if (!seg || typeof seg !== "string") return false;
+  const trimmed = seg.trim();
+  if (!trimmed || trimmed !== seg) return false;
+  if (seg === "." || seg === "..") return false;
+  if (/[/\\:\u0000-\u001f<>|?*]/.test(seg)) return false;
+  return true;
+}
+
 /** 从控件文件表中解析 component.json。 */
 export function parseComponentDecl(files: Record<string, string>, fallbackType: string): ComponentDecl {
   try {
@@ -95,8 +105,25 @@ export function parseComponentDecl(files: Record<string, string>, fallbackType: 
   }
 }
 
+/** 计算控件声明的接口签名（忽略 type/label/description，仅保留 props/events/children/entry/defaultSize），用于改名且改实现后找回来源。 */
+function componentInterfaceSignature(files: Record<string, string>): string | null {
+  const raw = files["component.json"];
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const filtered: Record<string, unknown> = {};
+    for (const key of Object.keys(parsed).sort()) {
+      if (key === "type" || key === "label" || key === "description") continue;
+      filtered[key] = parsed[key];
+    }
+    return JSON.stringify(filtered);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * 复制控件文件时修改其 component.json 中的 type（以及可选的 label）。
+ * 复制控件文件时修改其 component.json 中的 type（以及可选的 label），并过滤掉非法文件名。
  * 因为结构哈希忽略 type、label、description，改名后结构哈希保持不变。
  */
 export function rewriteComponentIdentity(
@@ -106,6 +133,7 @@ export function rewriteComponentIdentity(
 ): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [name, content] of Object.entries(files)) {
+    if (!isSafePathSegment(name)) continue;
     result[name] = normalizeLf(content);
   }
   try {
@@ -145,8 +173,9 @@ export interface ReconcileResult {
 
 /**
  * 对账本项目的控件、收藏列表与来源记录：
+ * 0. 若收藏库当前为空（例如在浏览器开发模式或另一台机器尚未同步素材库），保留已有 origins.json 不清空；
  * 1. 已取消收藏的来源记录自动失效；
- * 2. 如果 Agent 在工具外把控件文件夹改了名，按结构哈希（等于基准哈希或收藏当前哈希）重新关联；
+ * 2. 如果 Agent 在工具外把控件文件夹改了名，按结构哈希、原声明 type 或接口签名重新关联；
  * 3. 两边哈希恰好相同时，把基准哈希同步为当前哈希；
  * 4. 没有来源记录但结构哈希与某个收藏当前哈希相同的控件（第 2 条规则），认定为该收藏并补写来源记录。
  */
@@ -155,17 +184,28 @@ export function reconcileProjectLibrary(
   library: LibraryItem[],
   origins: OriginsFile,
 ): ReconcileResult {
-  const libById = new Map<string, LibraryItem>(library.map((item) => [item.id, item]));
-  const localHashes = new Map<string, string>();
-  for (const [type, files] of Object.entries(projectComponents)) {
-    localHashes.set(type, structHashFromFiles(files));
-  }
-
   const nextOrigins: Record<string, OriginRecord> = {};
   for (const [type, rec] of Object.entries(origins.origins ?? {})) {
     if (rec && typeof rec.libraryId === "string" && typeof rec.baseHash === "string") {
       nextOrigins[type] = { libraryId: rec.libraryId, baseHash: rec.baseHash };
     }
+  }
+
+  // 当素材库为空时，绝不抹掉项目中已有的 .designer/origins.json
+  if (library.length === 0) {
+    return {
+      origins: { version: 1, origins: nextOrigins },
+      originsChanged: false,
+      matchedByLibraryId: new Map(),
+      linkedLocalTypes: new Set(),
+      orphaned: [],
+    };
+  }
+
+  const libById = new Map<string, LibraryItem>(library.map((item) => [item.id, item]));
+  const localHashes = new Map<string, string>();
+  for (const [type, files] of Object.entries(projectComponents)) {
+    localHashes.set(type, structHashFromFiles(files));
   }
 
   let originsChanged = false;
@@ -192,17 +232,34 @@ export function reconcileProjectLibrary(
     }
   }
 
-  // 第二步：处理文件夹被改名的来源记录，尝试用哈希重新匹配
+  // 第二步：处理文件夹或类型被改名的来源记录
   for (const [type, rec] of Object.entries({ ...nextOrigins })) {
     if (localHashes.has(type)) continue;
     const fav = libById.get(rec.libraryId);
     if (!fav) continue;
     let renamedTo: string | null = null;
+    // 优先按结构哈希或保留的原声明 type 精确匹配
     for (const [candidateType, candidateHash] of localHashes) {
       if (usedLocalTypes.has(candidateType)) continue;
-      if (candidateHash === rec.baseHash || candidateHash === fav.hash) {
+      const candidateFiles = projectComponents[candidateType];
+      const declaredType = candidateFiles ? parseComponentDecl(candidateFiles, candidateType).type : candidateType;
+      if (candidateHash === rec.baseHash || candidateHash === fav.hash || declaredType === type) {
         renamedTo = candidateType;
         break;
+      }
+    }
+    // 次选：若用户既改了控件实现（哈希已变）又改了文件夹/type 名，按 component.json 的接口签名匹配
+    if (!renamedTo) {
+      const favSig = componentInterfaceSignature(fav.files);
+      if (favSig) {
+        for (const [candidateType] of localHashes) {
+          if (usedLocalTypes.has(candidateType)) continue;
+          const candidateSig = componentInterfaceSignature(projectComponents[candidateType] ?? {});
+          if (candidateSig === favSig) {
+            renamedTo = candidateType;
+            break;
+          }
+        }
       }
     }
     if (renamedTo) {
@@ -249,6 +306,8 @@ export function reconcileProjectLibrary(
       status,
     });
     linkedLocalTypes.add(type);
+    const declType = parseComponentDecl(projectComponents[type] ?? {}, type).type;
+    if (declType) linkedLocalTypes.add(declType);
   }
 
   return {
@@ -258,6 +317,27 @@ export function reconcileProjectLibrary(
     linkedLocalTypes,
     orphaned,
   };
+}
+
+/** 手动把找不到控件的孤儿来源记录重新关联到本项目中的某个控件。 */
+export function relinkOrphanedOrigin(
+  origins: OriginsFile,
+  missingType: string,
+  targetLocalType: string,
+): OriginsFile {
+  const next: Record<string, OriginRecord> = { ...origins.origins };
+  const rec = next[missingType];
+  if (!rec || !isSafePathSegment(targetLocalType)) return origins;
+  delete next[missingType];
+  next[targetLocalType] = { ...rec };
+  return { version: 1, origins: next };
+}
+
+/** 删除一条失效的孤儿来源记录。 */
+export function removeOrphanedOrigin(origins: OriginsFile, missingType: string): OriginsFile {
+  const next: Record<string, OriginRecord> = { ...origins.origins };
+  delete next[missingType];
+  return { version: 1, origins: next };
 }
 
 export interface PrepareDragResult {
@@ -292,13 +372,14 @@ export function prepareLibraryComponentForProject(
   projectComponents: Record<string, Record<string, string>>,
   origins: OriginsFile,
 ): PrepareDragResult {
+  const safeFavType = isSafePathSegment(fav.type.trim()) ? fav.type.trim() : "Component";
   const nextComponents: Record<string, Record<string, string>> = { ...projectComponents };
   const nextOrigins: Record<string, OriginRecord> = {};
   for (const [k, v] of Object.entries(origins.origins ?? {})) {
     nextOrigins[k] = { ...v };
   }
 
-  // 规则 1：检查是否有来源记录指向 fav.id（含文件夹改名后按基准哈希找回的情况）
+  // 规则 1：检查是否有来源记录指向 fav.id（含文件夹改名后按基准哈希或接口签名找回的情况）
   for (const [type, rec] of Object.entries(nextOrigins)) {
     if (rec.libraryId !== fav.id) continue;
     if (nextComponents[type]) {
@@ -315,11 +396,12 @@ export function prepareLibraryComponentForProject(
         hint: null,
       };
     }
-    // 来源记录中的类型已被改名，尝试按基准哈希或收藏哈希找回
+    // 来源记录中的类型已被改名，尝试按基准哈希、收藏哈希或原声明 type 找回
     for (const [candidateType, files] of Object.entries(nextComponents)) {
       if (nextOrigins[candidateType]) continue;
       const h = structHashFromFiles(files);
-      if (h === rec.baseHash || h === fav.hash) {
+      const declType = parseComponentDecl(files, candidateType).type;
+      if (h === rec.baseHash || h === fav.hash || declType === type) {
         delete nextOrigins[type];
         nextOrigins[candidateType] = { libraryId: fav.id, baseHash: h === fav.hash ? fav.hash : rec.baseHash };
         return {
@@ -354,13 +436,13 @@ export function prepareLibraryComponentForProject(
   }
 
   // 规则 3：本项目中没有同名控件
-  if (!nextComponents[fav.type]) {
-    const copiedFiles = rewriteComponentIdentity(fav.files, fav.type, fav.label);
-    nextComponents[fav.type] = copiedFiles;
-    nextOrigins[fav.type] = { libraryId: fav.id, baseHash: fav.hash };
+  if (!nextComponents[safeFavType]) {
+    const copiedFiles = rewriteComponentIdentity(fav.files, safeFavType, fav.label);
+    nextComponents[safeFavType] = copiedFiles;
+    nextOrigins[safeFavType] = { libraryId: fav.id, baseHash: fav.hash };
     return {
       action: "copy",
-      localType: fav.type,
+      localType: safeFavType,
       copiedFiles,
       origins: { version: 1, origins: nextOrigins },
       projectComponents: nextComponents,
@@ -370,12 +452,12 @@ export function prepareLibraryComponentForProject(
 
   // 规则 4：本项目中有同名控件，但结构不同且无对应来源记录 → 以新名字（如 Button_2）复制进来
   let index = 2;
-  while (nextComponents[`${fav.type}_${index}`]) index++;
-  const newType = `${fav.type}_${index}`;
+  while (nextComponents[`${safeFavType}_${index}`]) index++;
+  const newType = `${safeFavType}_${index}`;
   const copiedFiles = rewriteComponentIdentity(fav.files, newType, `${fav.label}（收藏）`);
   nextComponents[newType] = copiedFiles;
   nextOrigins[newType] = { libraryId: fav.id, baseHash: fav.hash };
-  const hint = `收藏的控件“${fav.label}”与本项目中已有的 ${fav.type} 不是同一个控件，已以新名字 ${newType} 复制进 components/${newType}/，可右键重命名`;
+  const hint = `收藏的控件“${fav.label}”与本项目中已有的 ${safeFavType} 不是同一个控件，已以新名字 ${newType} 复制进 components/${newType}/，可右键重命名`;
   return {
     action: "copy-renamed",
     localType: newType,
@@ -398,17 +480,19 @@ export function collectComponentInLibrary(
   origins: OriginsFile,
   makeId: () => string = () => `fav-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
 ): { item: LibraryItem; library: LibraryItem[]; origins: OriginsFile } {
-  const decl = parseComponentDecl(files, type);
-  const hash = structHashFromFiles(files);
-  const normalizedFiles = rewriteComponentIdentity(files, type, decl.label ?? type);
-  const existingOrigin = origins.origins[type];
+  const safeType = isSafePathSegment(type.trim()) ? type.trim() : "Component";
+  const decl = parseComponentDecl(files, safeType);
+  const normalizedFiles = rewriteComponentIdentity(files, safeType, decl.label ?? safeType);
+  const hash = structHashFromFiles(normalizedFiles);
+  const existingOrigin = origins.origins[safeType] ?? origins.origins[type];
   const existingIdx = existingOrigin ? library.findIndex((i) => i.id === existingOrigin.libraryId) : -1;
 
-  const id = existingIdx >= 0 ? library[existingIdx].id : makeId();
+  const rawId = existingIdx >= 0 ? library[existingIdx].id : makeId();
+  const id = isSafePathSegment(rawId) ? rawId : `fav-${Date.now().toString(36)}`;
   const item: LibraryItem = {
     id,
-    type,
-    label: decl.label ?? type,
+    type: safeType,
+    label: decl.label ?? safeType,
     description: decl.description ?? "",
     hash,
     sourceProjectId,
@@ -422,7 +506,7 @@ export function collectComponentInLibrary(
     version: 1,
     origins: {
       ...origins.origins,
-      [type]: { libraryId: id, baseHash: hash },
+      [safeType]: { libraryId: id, baseHash: hash },
     },
   };
   return { item, library: nextLibrary, origins: nextOrigins };
@@ -442,8 +526,8 @@ export function updateLibraryItemFromProject(
   const idx = library.findIndex((i) => i.id === rec.libraryId);
   if (idx < 0) return null;
   const prev = library[idx];
-  const hash = structHashFromFiles(localFiles);
   const updatedFiles = rewriteComponentIdentity(localFiles, prev.type, prev.label);
+  const hash = structHashFromFiles(updatedFiles);
   const item: LibraryItem = {
     ...prev,
     hash,
@@ -462,15 +546,17 @@ export function updateLibraryItemFromProject(
 }
 
 /**
- * “更新为收藏版本”：用收藏的当前版本替换本项目中的副本，并把基准哈希更新为收藏当前哈希。
+ * “更新为收藏版本”：用收藏的当前版本替换本项目中的副本，清理本地多出的额外文件，并把基准哈希更新为收藏当前哈希。
  */
 export function replaceProjectComponentWithLibrary(
   localType: string,
   fav: LibraryItem,
   origins: OriginsFile,
-): { writtenFiles: Record<string, string>; origins: OriginsFile } {
+  localFiles: Record<string, string> = {},
+): { writtenFiles: Record<string, string>; removedFiles: string[]; origins: OriginsFile } {
   const label = localType === fav.type ? fav.label : `${fav.label}（收藏）`;
   const writtenFiles = rewriteComponentIdentity(fav.files, localType, label);
+  const removedFiles = Object.keys(localFiles).filter((name) => isSafePathSegment(name) && !(name in writtenFiles));
   const nextOrigins: OriginsFile = {
     version: 1,
     origins: {
@@ -478,7 +564,7 @@ export function replaceProjectComponentWithLibrary(
       [localType]: { libraryId: fav.id, baseHash: fav.hash },
     },
   };
-  return { writtenFiles, origins: nextOrigins };
+  return { writtenFiles, removedFiles, origins: nextOrigins };
 }
 
 /**
@@ -503,6 +589,14 @@ function isTauriEnv(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+function isPreviewWindowLocation(): boolean {
+  try {
+    return typeof window !== "undefined" && new URLSearchParams(window.location.search).get("preview") === "1";
+  } catch {
+    return false;
+  }
+}
+
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   return invoke<T>(cmd, args);
 }
@@ -521,7 +615,10 @@ async function loadUserLibrary(): Promise<LibraryItem[]> {
   if (!isTauriEnv()) {
     try {
       const raw = localStorage.getItem(LOCAL_STORAGE_LIB_KEY);
-      return raw ? (JSON.parse(raw) as LibraryItem[]) : [];
+      const parsed = raw ? (JSON.parse(raw) as LibraryItem[]) : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((item) => item && isSafePathSegment(item.id) && isSafePathSegment(item.type))
+        : [];
     } catch {
       return [];
     }
@@ -532,9 +629,11 @@ async function loadUserLibrary(): Promise<LibraryItem[]> {
     const parsed = JSON.parse(indexText) as { items?: LibraryIndexEntry[] };
     const items: LibraryItem[] = [];
     for (const entry of parsed.items ?? []) {
+      if (!entry || !isSafePathSegment(entry.id) || !isSafePathSegment(entry.type)) continue;
       const files: Record<string, string> = {};
       const names = entry.fileNames?.length ? entry.fileNames : ["component.json", "index.js", "style.css"];
       for (const name of names) {
+        if (!isSafePathSegment(name)) continue;
         const content = await tauriInvoke<string | null>("library_read_text", { path: `${entry.id}/${name}` });
         if (content !== null) files[name] = normalizeLf(content);
       }
@@ -565,6 +664,7 @@ async function saveUserLibrary(items: LibraryItem[], removedIds: string[] = []):
     return;
   }
   for (const id of removedIds) {
+    if (!isSafePathSegment(id)) continue;
     try {
       await tauriInvoke("library_remove_dir", { path: id });
     } catch {
@@ -573,7 +673,8 @@ async function saveUserLibrary(items: LibraryItem[], removedIds: string[] = []):
   }
   const indexEntries: LibraryIndexEntry[] = [];
   for (const item of items) {
-    const fileNames = Object.keys(item.files).sort();
+    if (!isSafePathSegment(item.id) || !isSafePathSegment(item.type)) continue;
+    const fileNames = Object.keys(item.files).filter(isSafePathSegment).sort();
     for (const name of fileNames) {
       await tauriInvoke("library_write_text", { path: `${item.id}/${name}`, content: item.files[name] });
     }
@@ -608,6 +709,7 @@ export interface LibraryHost {
   copyComponentRef(type: string): void;
   setSelection(ids: string[]): void;
   setNodeTool(type: string): void;
+  getActiveNodeTool?: () => string | null;
   addNodeAt(type: string, px: number, py: number): Promise<void>;
   renderProblems(): void;
 }
@@ -615,6 +717,8 @@ export interface LibraryHost {
 let host: LibraryHost | null = null;
 /** 拖入同名不同结构控件时产生的提示，保留在当前项目的提示列表中 */
 const renameHints: Problem[] = [];
+/** 浏览器开发模式下标记已删除的额外文件，避免无 remove_file 接口时残留空文件影响哈希 */
+const deletedProjectFiles = new Set<string>();
 let renderVersion = 0;
 
 async function readOrigins(): Promise<OriginsFile> {
@@ -633,7 +737,7 @@ async function readOrigins(): Promise<OriginsFile> {
 }
 
 async function writeOrigins(origins: OriginsFile): Promise<void> {
-  if (!host) return;
+  if (!host || isPreviewWindowLocation()) return;
   await host.writeText(ORIGINS_PATH, JSON.stringify(origins, null, 2) + "\n");
 }
 
@@ -649,29 +753,124 @@ async function readProjectId(): Promise<string> {
   }
 }
 
+function resolveComponentFolder(project: Project, typeOrFolder: string): string {
+  const byType = project.components.get(typeOrFolder);
+  if (byType?.folder && isSafePathSegment(byType.folder)) return byType.folder;
+  for (const comp of project.components.values()) {
+    if ((comp.folder === typeOrFolder || comp.decl.type === typeOrFolder) && comp.folder && isSafePathSegment(comp.folder)) {
+      return comp.folder;
+    }
+  }
+  return typeOrFolder;
+}
+
 async function readAllProjectComponentFiles(project: Project): Promise<Record<string, Record<string, string>>> {
   const result: Record<string, Record<string, string>> = {};
   if (!host) return result;
-  for (const [type, comp] of project.components) {
-    if (comp.error || !comp.folder) continue;
+  // 注意：即使 comp.error 存在（如 Agent 改坏了 index.js），也必须读取其文件，避免当作不存在而覆盖！
+  // 同时以实际文件夹名 comp.folder 为主键（当文件夹改名而 component.json 尚未改时能准确写入原目录）。
+  for (const [_type, comp] of project.components) {
+    if (!comp.folder || !isSafePathSegment(comp.folder)) continue;
     const folder = comp.folder;
     const entries = await host.listDir(`components/${folder}`);
     const files: Record<string, string> = {};
     for (const entry of entries) {
-      if (entry.isDir) continue;
-      const text = await host.readText(`components/${folder}/${entry.name}`);
+      if (entry.isDir || !isSafePathSegment(entry.name)) continue;
+      const relPath = `components/${folder}/${entry.name}`;
+      if (deletedProjectFiles.has(relPath)) continue;
+      const text = await host.readText(relPath);
       if (text !== null) files[entry.name] = text;
     }
-    if (files["component.json"]) result[type] = files;
+    if (files["component.json"]) {
+      result[folder] = files;
+    }
   }
   return result;
 }
 
-async function writeComponentFolder(folder: string, files: Record<string, string>): Promise<void> {
-  if (!host) return;
-  for (const [name, content] of Object.entries(files)) {
-    await host.writeText(`components/${folder}/${name}`, content);
+async function writeComponentFolder(
+  folderOrType: string,
+  files: Record<string, string>,
+  removedFiles: string[] = [],
+): Promise<void> {
+  if (!host || isPreviewWindowLocation()) return;
+  const folder = resolveComponentFolder(host.getProject(), folderOrType);
+  if (!isSafePathSegment(folder)) {
+    throw new Error(`非法的控件目录名：${folder}`);
   }
+  for (const [name, content] of Object.entries(files)) {
+    if (!isSafePathSegment(name)) continue;
+    const relPath = `components/${folder}/${name}`;
+    deletedProjectFiles.delete(relPath);
+    await host.writeText(relPath, content);
+  }
+  for (const rmName of removedFiles) {
+    if (!isSafePathSegment(rmName) || rmName in files) continue;
+    const relPath = `components/${folder}/${rmName}`;
+    deletedProjectFiles.add(relPath);
+    if (isTauriEnv()) {
+      try {
+        await tauriInvoke("remove_file", { path: relPath });
+      } catch {
+        // 忽略
+      }
+    }
+  }
+}
+
+/** 重命名项目中的控件类型（修改控件目录、component.json、scene.json 中的节点 type 以及 origins.json）。 */
+async function promptRenameProjectComponent(
+  oldKey: string,
+  projectComponents: Record<string, Record<string, string>>,
+  origins: OriginsFile,
+): Promise<void> {
+  if (!host) return;
+  const rawNext = window.prompt("重命名控件类型（字母、数字、下划线）：", oldKey)?.trim() ?? "";
+  if (!rawNext || rawNext === oldKey) return;
+  if (!isSafePathSegment(rawNext) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(rawNext) || BUILTIN_TYPES.includes(rawNext)) {
+    host.toast("控件类型名不合法，只能使用字母、数字和下划线且不能与内置类型重名");
+    return;
+  }
+  const project = host.getProject();
+  if (projectComponents[rawNext] || project.components.has(rawNext)) {
+    host.toast(`控件类型“${rawNext}”已存在`);
+    return;
+  }
+  const files = projectComponents[oldKey];
+  if (!files) return;
+  const decl = parseComponentDecl(files, oldKey);
+  const oldType = decl.type || oldKey;
+  const nextLabel = decl.label && decl.label !== oldKey ? decl.label.replace(/（收藏）$/, "") : rawNext;
+  const rewritten = rewriteComponentIdentity(files, rawNext, nextLabel);
+
+  await writeComponentFolder(rawNext, rewritten);
+  // 清理旧目录中的文件
+  await writeComponentFolder(oldKey, {}, Object.keys(files));
+
+  // 同步更新 scene.json 中使用该控件类型的节点
+  let sceneChanged = false;
+  for (const n of Object.values(project.scene.nodes)) {
+    if (n.type === oldKey || n.type === oldType) {
+      n.type = rawNext;
+      sceneChanged = true;
+    }
+  }
+  if (sceneChanged) {
+    await host.writeText("ui/scene.json", JSON.stringify(project.scene, null, 2) + "\n");
+  }
+
+  // 同步更新 origins.json
+  const nextOriginsMap: Record<string, OriginRecord> = { ...origins.origins };
+  const oldRec = nextOriginsMap[oldKey] ?? nextOriginsMap[oldType];
+  if (oldRec) {
+    delete nextOriginsMap[oldKey];
+    delete nextOriginsMap[oldType];
+    nextOriginsMap[rawNext] = { ...oldRec };
+    await writeOrigins({ version: 1, origins: nextOriginsMap });
+  }
+
+  host.toast(`已将控件“${oldKey}”重命名为“${rawNext}”`);
+  await host.reload();
 }
 
 function ensureLibrarySectionDOM(): HTMLElement | null {
@@ -694,8 +893,20 @@ function ensureLibrarySectionDOM(): HTMLElement | null {
 function highlightComponentUsages(type: string): void {
   if (!host) return;
   const project = host.getProject();
+  const comp = project.components.get(type);
+  const matchTypes = new Set<string>([type]);
+  if (comp) {
+    matchTypes.add(comp.decl.type);
+    if (comp.folder) matchTypes.add(comp.folder);
+  }
+  for (const c of project.components.values()) {
+    if (c.folder === type || c.decl.type === type) {
+      matchTypes.add(c.decl.type);
+      if (c.folder) matchTypes.add(c.folder);
+    }
+  }
   const ids = Object.entries(project.scene.nodes)
-    .filter(([id, n]) => id !== project.scene.root && n.type === type)
+    .filter(([id, n]) => id !== project.scene.root && matchTypes.has(n.type))
     .map(([id]) => id);
   if (ids.length === 0) {
     host.toast(`本项目中还没有使用 ${type} 的节点`);
@@ -819,9 +1030,13 @@ async function ensureFavoriteInProject(fav: LibraryItem): Promise<string | null>
   if (prepared.copiedFiles) {
     await host.reload();
   } else {
-    void renderLibraryPalette();
+    await renderLibraryPalette();
   }
-  return prepared.localType;
+  const actualDecl = parseComponentDecl(
+    prepared.copiedFiles ?? projectComponents[prepared.localType] ?? fav.files,
+    prepared.localType,
+  );
+  return project.components.has(prepared.localType) ? prepared.localType : (actualDecl.type || prepared.localType);
 }
 
 /** 从“收藏的素材”拖出一项或点选为工具。 */
@@ -854,7 +1069,10 @@ function startLibraryDrag(down: PointerEvent, fav: LibraryItem, matchedLocalType
     const moved = Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) > 4;
     if (!moved) {
       const localType = await ensureFavoriteInProject(fav);
-      if (localType) host.setNodeTool(localType);
+      if (localType) {
+        host.setNodeTool(localType);
+        syncActivePaletteHighlight();
+      }
       return;
     }
     const stage = document.getElementById("stage");
@@ -872,9 +1090,17 @@ function startLibraryDrag(down: PointerEvent, fav: LibraryItem, matchedLocalType
   document.addEventListener("pointerup", up);
 }
 
+function syncActivePaletteHighlight(): void {
+  if (!host?.getActiveNodeTool) return;
+  const activeType = host.getActiveNodeTool();
+  for (const item of document.querySelectorAll<HTMLElement>(".palette-item")) {
+    item.classList.toggle("active", Boolean(activeType) && item.dataset.type === activeType);
+  }
+}
+
 /** 刷新素材栏中的“收藏的素材”和“项目素材”，并同步问题栏中的来源提示。 */
 export async function renderLibraryPalette(): Promise<void> {
-  if (!host) return;
+  if (!host || isPreviewWindowLocation()) return;
   const libContainer = ensureLibrarySectionDOM();
   const projContainer = document.getElementById("palette-project");
   if (!libContainer || !projContainer) return;
@@ -903,7 +1129,7 @@ export async function renderLibraryPalette(): Promise<void> {
   for (const orphan of reconciled.orphaned) {
     project.problems.push({
       level: "hint",
-      message: `${prefix}收藏控件“${orphan.libraryItem.label}”的来源记录（${orphan.missingType}）在本项目中找不到对应控件`,
+      message: `${prefix}收藏控件“${orphan.libraryItem.label}”的来源记录（${orphan.missingType}）在本项目中找不到对应控件（可在收藏素材右键菜单中重新关联或清理）`,
     });
   }
   host.renderProblems();
@@ -912,15 +1138,20 @@ export async function renderLibraryPalette(): Promise<void> {
   const libElements: HTMLElement[] = [];
   for (const fav of library) {
     const matched = reconciled.matchedByLibraryId.get(fav.id);
+    const orphanForFav = reconciled.orphaned.find((o) => o.libraryItem.id === fav.id);
     const el = document.createElement("div");
     el.className = "palette-item library-item";
-    el.dataset.type = matched?.localType ?? fav.type;
+    const matchedDeclType = matched
+      ? parseComponentDecl(projectComponents[matched.localType] ?? {}, matched.localType).type
+      : fav.type;
+    el.dataset.type = matchedDeclType;
     el.dataset.libraryId = fav.id;
 
     const nameSpan = document.createElement("span");
-    const displayLabel = matched
-      ? (project.components.get(matched.localType)?.decl.label ?? fav.label)
-      : fav.label;
+    const compEntry = matched
+      ? (project.components.get(matched.localType) ?? project.components.get(matchedDeclType))
+      : undefined;
+    const displayLabel = compEntry?.decl.label ?? fav.label;
     nameSpan.textContent = `★ ${displayLabel}`;
     el.append(nameSpan);
 
@@ -933,7 +1164,7 @@ export async function renderLibraryPalette(): Promise<void> {
 
     const desc = fav.description ? `${fav.description}\n` : "";
     el.title = `${desc}拖进设计窗口；或者点一下，再在设计窗口里拖出大小`;
-    el.addEventListener("pointerdown", (e) => startLibraryDrag(e, fav, matched?.localType));
+    el.addEventListener("pointerdown", (e) => startLibraryDrag(e, fav, matchedDeclType));
 
     el.addEventListener("contextmenu", (e) => {
       e.preventDefault();
@@ -963,8 +1194,14 @@ export async function renderLibraryPalette(): Promise<void> {
           label: "更新为收藏版本",
           action: () => {
             void (async () => {
-              const res = replaceProjectComponentWithLibrary(matched.localType, fav, reconciled.origins);
-              await writeComponentFolder(matched.localType, res.writtenFiles);
+              const localFiles = projectComponents[matched.localType] ?? {};
+              const targetDeclType = parseComponentDecl(localFiles, matched.localType).type || matched.localType;
+              const res = replaceProjectComponentWithLibrary(matched.localType, fav, reconciled.origins, localFiles);
+              const filesToWrite =
+                targetDeclType !== matched.localType
+                  ? rewriteComponentIdentity(res.writtenFiles, targetDeclType, displayLabel)
+                  : res.writtenFiles;
+              await writeComponentFolder(matched.localType, filesToWrite, res.removedFiles);
               await writeOrigins(res.origins);
               host?.toast(`已将“${matched.localType}”更新为收藏版本`);
               await host?.reload();
@@ -995,14 +1232,47 @@ export async function renderLibraryPalette(): Promise<void> {
               },
               () => {
                 void (async () => {
-                  const res = replaceProjectComponentWithLibrary(matched.localType, fav, reconciled.origins);
-                  await writeComponentFolder(matched.localType, res.writtenFiles);
+                  const targetDeclType = parseComponentDecl(localFiles, matched.localType).type || matched.localType;
+                  const res = replaceProjectComponentWithLibrary(matched.localType, fav, reconciled.origins, localFiles);
+                  const filesToWrite =
+                    targetDeclType !== matched.localType
+                      ? rewriteComponentIdentity(res.writtenFiles, targetDeclType, displayLabel)
+                      : res.writtenFiles;
+                  await writeComponentFolder(matched.localType, filesToWrite, res.removedFiles);
                   await writeOrigins(res.origins);
                   host?.toast(`已将“${matched.localType}”更新为收藏版本`);
                   await host?.reload();
                 })();
               },
             );
+          },
+        });
+      }
+
+      if (orphanForFav) {
+        const unlinkedCandidates = Object.keys(projectComponents).filter((k) => !reconciled.linkedLocalTypes.has(k));
+        for (const cand of unlinkedCandidates) {
+          menuItems.push({
+            label: `关联来源记录到“${cand}”`,
+            action: () => {
+              void (async () => {
+                const updated = relinkOrphanedOrigin(reconciled.origins, orphanForFav.missingType, cand);
+                await writeOrigins(updated);
+                host?.toast(`已将“${fav.label}”重新关联到 ${cand}`);
+                await renderLibraryPalette();
+              })();
+            },
+          });
+        }
+        menuItems.push({
+          label: `清理失效来源记录（${orphanForFav.missingType}）`,
+          action: () => {
+            void (async () => {
+              const updated = removeOrphanedOrigin(reconciled.origins, orphanForFav.missingType);
+              await writeOrigins(updated);
+              host?.toast(`已清理失效来源记录 ${orphanForFav.missingType}`);
+              await renderLibraryPalette();
+            })();
           },
         });
       }
@@ -1024,8 +1294,12 @@ export async function renderLibraryPalette(): Promise<void> {
         menuItems.push(
           "separator",
           {
+            label: "重命名控件",
+            action: () => void promptRenameProjectComponent(matched.localType, projectComponents, reconciled.origins),
+          },
+          {
             label: "复制引用",
-            action: () => host?.copyComponentRef(matched.localType),
+            action: () => host?.copyComponentRef(matchedDeclType),
           },
           {
             label: "查看使用位置",
@@ -1048,12 +1322,19 @@ export async function renderLibraryPalette(): Promise<void> {
   }
   libContainer.replaceChildren(...libElements);
 
-  // 2. 更新“项目素材”：过滤掉已经在“收藏的素材”中显示的控件，并增强右键菜单（收藏素材、复制引用、查看使用位置）
+  // 2. 更新“项目素材”：过滤掉已经在“收藏的素材”中显示的控件，并增强右键菜单（收藏素材、重命名控件、复制引用、查看使用位置）
   const projElements: HTMLElement[] = [];
   for (const component of project.components.values()) {
     if (component.error) continue;
     const type = component.decl.type;
-    if (BUILTIN_TYPES.includes(type) || reconciled.linkedLocalTypes.has(type)) continue;
+    const folder = component.folder ?? type;
+    if (
+      BUILTIN_TYPES.includes(type) ||
+      reconciled.linkedLocalTypes.has(type) ||
+      reconciled.linkedLocalTypes.has(folder)
+    ) {
+      continue;
+    }
 
     const el = document.createElement("div");
     el.className = "palette-item";
@@ -1087,6 +1368,7 @@ export async function renderLibraryPalette(): Promise<void> {
         if (!host) return;
         if (Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) <= 4) {
           host.setNodeTool(type);
+          syncActivePaletteHighlight();
           return;
         }
         const stage = document.getElementById("stage");
@@ -1103,14 +1385,15 @@ export async function renderLibraryPalette(): Promise<void> {
     el.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       if (!host) return;
+      const folderKey = projectComponents[folder] ? folder : type;
       host.openMenu(e.clientX, e.clientY, [
         {
           label: "收藏素材",
           action: () => {
             void (async () => {
-              const files = projectComponents[type];
+              const files = projectComponents[folderKey];
               if (!files) return;
-              const res = collectComponentInLibrary(type, files, projectId, library, reconciled.origins);
+              const res = collectComponentInLibrary(folderKey, files, projectId, library, reconciled.origins);
               await saveUserLibrary(res.library);
               await writeOrigins(res.origins);
               host?.toast(`已收藏“${res.item.label}”`);
@@ -1119,6 +1402,10 @@ export async function renderLibraryPalette(): Promise<void> {
           },
         },
         "separator",
+        {
+          label: "重命名控件",
+          action: () => void promptRenameProjectComponent(folderKey, projectComponents, reconciled.origins),
+        },
         {
           label: "复制引用",
           action: () => host?.copyComponentRef(type),
@@ -1140,9 +1427,11 @@ export async function renderLibraryPalette(): Promise<void> {
     projElements.push(empty);
   }
   projContainer.replaceChildren(...projElements);
+  syncActivePaletteHighlight();
 }
 
 export function initLibrary(libraryHost: LibraryHost): void {
+  if (isPreviewWindowLocation()) return;
   host = libraryHost;
   ensureLibrarySectionDOM();
 }

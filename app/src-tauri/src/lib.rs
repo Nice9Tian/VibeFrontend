@@ -40,16 +40,38 @@ fn library_dir() -> PathBuf {
     project_dir().join(".designer").join("library")
 }
 
-/// 把网页传来的相对路径解析到指定文件夹内，拒绝绝对路径和 `..`。
+/// 把网页传来的相对路径解析到指定文件夹内，拒绝绝对路径、`.` 和 `..`。
 fn resolve_in(base: PathBuf, rel: &str) -> Result<PathBuf, String> {
     let rel_path = Path::new(rel);
     for part in rel_path.components() {
         match part {
-            Component::Normal(_) | Component::CurDir => {}
+            Component::Normal(_) => {}
             _ => return Err(format!("路径不在文件夹内：{rel}")),
         }
     }
     Ok(base.join(rel_path))
+}
+
+fn ensure_non_empty_rel(rel: &str) -> Result<(), String> {
+    let rel_path = Path::new(rel);
+    let mut has_normal = false;
+    for part in rel_path.components() {
+        match part {
+            Component::Normal(_) => has_normal = true,
+            _ => return Err(format!("非法相对路径：{rel}")),
+        }
+    }
+    if !has_normal {
+        return Err("路径不能为空或当前目录".to_string());
+    }
+    Ok(())
+}
+
+fn ensure_writable_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() == "preview" {
+        return Err("独立预览窗口为只读权限，不允许写盘或删除文件".to_string());
+    }
+    Ok(())
 }
 
 /// 把网页传来的相对路径解析到项目文件夹内，拒绝绝对路径和 `..`。
@@ -79,6 +101,7 @@ fn project_root() -> Result<String, String> {
 
 #[tauri::command]
 fn read_text(path: String) -> Result<Option<String>, String> {
+    ensure_non_empty_rel(&path)?;
     let full = resolve(&path)?;
     match std::fs::read_to_string(&full) {
         Ok(text) => Ok(Some(text)),
@@ -88,12 +111,25 @@ fn read_text(path: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn write_text(path: String, content: String) -> Result<(), String> {
+fn write_text(window: tauri::WebviewWindow, path: String, content: String) -> Result<(), String> {
+    ensure_writable_window(&window)?;
+    ensure_non_empty_rel(&path)?;
     let full = resolve(&path)?;
     if let Some(parent) = full.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
     }
     std::fs::write(&full, content).map_err(|e| format!("写入 {path} 失败：{e}"))
+}
+
+#[tauri::command]
+fn remove_file(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
+    ensure_writable_window(&window)?;
+    ensure_non_empty_rel(&path)?;
+    let full = resolve(&path)?;
+    if full.is_file() {
+        std::fs::remove_file(&full).map_err(|e| format!("删除 {path} 失败：{e}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -125,6 +161,7 @@ fn library_root() -> Result<String, String> {
 
 #[tauri::command]
 fn library_read_text(path: String) -> Result<Option<String>, String> {
+    ensure_non_empty_rel(&path)?;
     let full = resolve_library(&path)?;
     match std::fs::read_to_string(&full) {
         Ok(text) => Ok(Some(text)),
@@ -134,7 +171,9 @@ fn library_read_text(path: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn library_write_text(path: String, content: String) -> Result<(), String> {
+fn library_write_text(window: tauri::WebviewWindow, path: String, content: String) -> Result<(), String> {
+    ensure_writable_window(&window)?;
+    ensure_non_empty_rel(&path)?;
     let full = resolve_library(&path)?;
     if let Some(parent) = full.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建素材库目录失败：{e}"))?;
@@ -162,11 +201,19 @@ fn library_list_dir(path: String) -> Result<Vec<DirEntry>, String> {
 }
 
 #[tauri::command]
-fn library_remove_dir(path: String) -> Result<(), String> {
-    if path.trim().is_empty() {
+fn library_remove_dir(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
+    ensure_writable_window(&window)?;
+    let rel_path = Path::new(&path);
+    let mut comps = rel_path.components();
+    match (comps.next(), comps.next()) {
+        (Some(Component::Normal(_)), None) => {}
+        _ => return Err(format!("只允许删除素材库下的一级子目录：{path}")),
+    }
+    let base = library_dir();
+    let full = resolve_library(&path)?;
+    if full == base {
         return Err("不能删除素材库根目录".to_string());
     }
-    let full = resolve_library(&path)?;
     if full.exists() {
         std::fs::remove_dir_all(&full).map_err(|e| format!("删除素材库 {path} 失败：{e}"))?;
     }
@@ -206,6 +253,7 @@ pub fn run() {
             project_root,
             read_text,
             write_text,
+            remove_file,
             list_dir,
             library_root,
             library_read_text,

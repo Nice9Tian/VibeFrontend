@@ -5,8 +5,11 @@ import {
   collectComponentInLibrary,
   compareLibraryStatus,
   emptyOrigins,
+  isSafePathSegment,
   prepareLibraryComponentForProject,
   reconcileProjectLibrary,
+  relinkOrphanedOrigin,
+  removeOrphanedOrigin,
   replaceProjectComponentWithLibrary,
   rewriteComponentIdentity,
   statusBadgeText,
@@ -230,6 +233,124 @@ test("来源记录对账、四种状态标记、更新收藏、更新为收藏�
   const unfav = unfavoriteFromLibrary("fav-input", lib1, recRenamed.origins);
   assert.equal(unfav.library.length, 0);
   assert.equal(Object.keys(unfav.origins.origins).length, 0);
+});
+
+// 6. [回归测试 - 阻塞问题 4.2] 素材库为空时（如在 localStorage 为空的浏览器或新机器打开项目），不清空已有的 .designer/origins.json
+test("回归：素材库为空时 reconcileProjectLibrary 不清空已有的来源记录", () => {
+  const existingOrigins = {
+    version: 1 as const,
+    origins: {
+      TransparentInput: { libraryId: "fav-from-another-machine", baseHash: structHashFromFiles(baseFiles) },
+    },
+  };
+  const rec = reconcileProjectLibrary({ TransparentInput: baseFiles }, [], existingOrigins);
+  assert.equal(rec.originsChanged, false);
+  assert.equal(rec.origins.origins.TransparentInput?.libraryId, "fav-from-another-machine");
+});
+
+// 7. [回归测试 - 阻塞问题 4.3 & 4.5] Agent 只改控件文件夹名而不改 component.json，或修改实现后再改文件夹名，来源记录仍能找回
+test("回归：只改控件文件夹名不改 component.json，以及修改实现后再改文件夹名，均能找回来源记录", () => {
+  const { library, origins } = collectComponentInLibrary(
+    "TransparentInput",
+    baseFiles,
+    "proj-1",
+    [],
+    emptyOrigins(),
+    () => "fav-input",
+  );
+
+  // 情况 A：只把文件夹改名为 FancyInput，component.json 里的 type 仍为 TransparentInput
+  const recFolderOnly = reconcileProjectLibrary({ FancyInput: baseFiles }, library, origins);
+  assert.equal(recFolderOnly.origins.origins.FancyInput?.libraryId, "fav-input");
+  assert.equal(recFolderOnly.matchedByLibraryId.get("fav-input")?.localType, "FancyInput");
+
+  // 情况 B：先修改了 index.js（哈希已变），再把文件夹和 type 改名为 ModifiedFancyInput
+  const modifiedAndRenamed = rewriteComponentIdentity(
+    {
+      ...baseFiles,
+      "index.js": baseFiles["index.js"] + "// local edit before rename\n",
+    },
+    "ModifiedFancyInput",
+    "改过的花式输入框",
+  );
+  const recModifiedRenamed = reconcileProjectLibrary({ ModifiedFancyInput: modifiedAndRenamed }, library, origins);
+  assert.equal(recModifiedRenamed.origins.origins.ModifiedFancyInput?.libraryId, "fav-input");
+  assert.equal(recModifiedRenamed.matchedByLibraryId.get("fav-input")?.localType, "ModifiedFancyInput");
+  assert.equal(recModifiedRenamed.matchedByLibraryId.get("fav-input")?.status, "modified");
+});
+
+// 8. [回归测试 - 阻塞问题 4.4] “更新为收藏版本”清理本地多出的额外文件，更新后状态回到 clean
+test("回归：更新为收藏版本时清理本地新增的额外文件，状态立即回到 clean", () => {
+  const filesWithoutStyle: Record<string, string> = {
+    "component.json": baseFiles["component.json"],
+    "index.js": baseFiles["index.js"],
+  };
+  const { item: fav, library, origins } = collectComponentInLibrary(
+    "TransparentInput",
+    filesWithoutStyle,
+    "proj-1",
+    [],
+    emptyOrigins(),
+    () => "fav-nostyle",
+  );
+
+  // 本地多出了 style.css 和 helper.txt
+  const localWithExtra: Record<string, string> = {
+    ...filesWithoutStyle,
+    "style.css": ":scope { color: red; }\n",
+    "helper.txt": "extra file\n",
+  };
+  assert.notEqual(structHashFromFiles(localWithExtra), fav.hash);
+
+  const replaced = replaceProjectComponentWithLibrary("TransparentInput", fav, origins, localWithExtra) as {
+    writtenFiles: Record<string, string>;
+    removedFiles?: string[];
+    origins: ReturnType<typeof emptyOrigins>;
+  };
+  assert.ok(Array.isArray(replaced.removedFiles));
+  assert.deepEqual(replaced.removedFiles.sort(), ["helper.txt", "style.css"]);
+
+  // 模拟按 removedFiles 删除本地残留文件后重新计算状态
+  const diskFilesAfterReplace: Record<string, string> = { ...localWithExtra, ...replaced.writtenFiles };
+  for (const rm of replaced.removedFiles) delete diskFilesAfterReplace[rm];
+  const rec = reconcileProjectLibrary({ TransparentInput: diskFilesAfterReplace }, library, replaced.origins);
+  assert.equal(rec.matchedByLibraryId.get("fav-nostyle")?.status, "clean");
+});
+
+// 9. [回归测试 - 阻塞问题 3.2] 拒绝包含路径穿越（.. / 斜杠）的非法控件名或文件名
+test("回归：过滤或拒绝包含 ../ 或路径分隔符的非法文件名", () => {
+  const maliciousFav = {
+    id: "fav-bad",
+    type: " SafeButton",
+    label: "按钮",
+    description: "",
+    hash: structHashFromFiles(baseFiles),
+    sourceProjectId: "p1",
+    files: {
+      ...baseFiles,
+      "../ui/scene.json": '{"hacked":true}',
+      "sub/evil.js": "alert(1)",
+    },
+  };
+  const res = prepareLibraryComponentForProject(maliciousFav, {}, emptyOrigins());
+  assert.ok(res.copiedFiles);
+  assert.equal("../ui/scene.json" in res.copiedFiles, false);
+  assert.equal("sub/evil.js" in res.copiedFiles, false);
+  assert.equal(isSafePathSegment("."), false);
+  assert.equal(isSafePathSegment(".."), false);
+  assert.equal(isSafePathSegment("a/b"), false);
+  assert.equal(isSafePathSegment("Valid_Name-1.json"), true);
+
+  // 孤儿来源记录手动重关联与清理
+  const orphanOrigins = {
+    version: 1 as const,
+    origins: { OldDeletedInput: { libraryId: "fav-bad", baseHash: maliciousFav.hash } },
+  };
+  const relinked = relinkOrphanedOrigin(orphanOrigins, "OldDeletedInput", "NewInput");
+  assert.equal(relinked.origins.OldDeletedInput, undefined);
+  assert.equal(relinked.origins.NewInput?.libraryId, "fav-bad");
+  const removed = removeOrphanedOrigin(relinked, "NewInput");
+  assert.equal(Object.keys(removed.origins).length, 0);
 });
 
 console.log(`全部 ${passed} 项测试通过`);

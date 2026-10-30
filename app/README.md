@@ -110,6 +110,8 @@ npm run case -- <设计项目文件夹> "click:某个控件;state"
 | `qt-templates/` | 导出工程里固定不变的文件（CMake、界面绑定层的固定部分、给 Agent 的规则） |
 | `scripts/export-qt.ts` | 导出的命令行入口：读项目、打包逻辑、写文件 |
 | `scripts/run-case.ts` | 在工具这一侧按步骤跑逻辑的命令行入口 |
+| `scripts/test-library.ts` | 结构哈希、素材库复制、来源对账与安全路径校验的单元测试（`npm run test:library`） |
+| `scripts/test-docview.ts` | 文档所见即所得预览分块往返、XSS 防护与小节锁定的单元测试（`npm run test:docview`） |
 | `src/refs.ts` | 生成引用：算出控件、条目、小节和选区在文件中的行号 |
 | `src/fs.ts` | 文件读写接口，桌面窗口里调用 Rust，浏览器里调用开发接口 |
 | `src-tauri/src/lib.rs` | Rust 系统层：读、写、列目录、监听 |

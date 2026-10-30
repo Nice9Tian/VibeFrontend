@@ -30,6 +30,8 @@ interface DocBlock {
   trailingNewlines: string;
   /** 是否在预览模式中被用户改动过 */
   dirty: boolean;
+  /** 该块是否处于锁定只读范围（由小节内或顶层 <!-- 🔒 ... --> 标记决定） */
+  locked?: boolean;
   /** heading 级别 1..6 */
   level?: number;
   /** list 是否为有序列表 */
@@ -53,8 +55,8 @@ const SECTION_OPEN_RE = /^<!--\s*ui-section:\s*([^\s-]+?)\s*-->[ \t]*$/;
 const SECTION_CLOSE_RE = /^<!--\s*\/ui-section\s*-->[ \t]*$/;
 const LOCK_MARKER_RE = /^<!--\s*🔒[\s\S]*?-->[ \t]*$/;
 const HEADING_RE = /^(#{1,6})[ \t]+(.*)$/;
-const UL_ITEM_RE = /^[ \t]*[-*+][ \t]+(.*)$/;
-const OL_ITEM_RE = /^[ \t]*\d+\.[ \t]+(.*)$/;
+const UL_ITEM_RE = /^([ \t]*)[-*+][ \t]+(.*)$/;
+const OL_ITEM_RE = /^([ \t]*)\d+\.[ \t]+(.*)$/;
 const HR_RE = /^(?:---+|\*\*\*+|___+)[ \t]*$/;
 const CODE_FENCE_RE = /^```([^\n`]*)$/;
 const TABLE_ROW_RE = /^\|.*\|[ \t]*$/;
@@ -106,7 +108,7 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
       i++;
       const blanks = collectTrailingBlankLines();
       const raw = firstLine + blanks;
-      const eol = (firstLine.match(/\r?\n$/)?.[0] ?? "\n") + blanks;
+      const eol = (firstLine.match(/\r?\n$/)?.[0] ?? "") + blanks;
       blocks.push({
         id: nextBlockId(),
         kind: "section-open",
@@ -123,7 +125,7 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
       i++;
       const blanks = collectTrailingBlankLines();
       const raw = firstLine + blanks;
-      const eol = (firstLine.match(/\r?\n$/)?.[0] ?? "\n") + blanks;
+      const eol = (firstLine.match(/\r?\n$/)?.[0] ?? "") + blanks;
       blocks.push({
         id: nextBlockId(),
         kind: "section-close",
@@ -139,7 +141,7 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
       i++;
       const blanks = collectTrailingBlankLines();
       const raw = firstLine + blanks;
-      const eol = (firstLine.match(/\r?\n$/)?.[0] ?? "\n") + blanks;
+      const eol = (firstLine.match(/\r?\n$/)?.[0] ?? "") + blanks;
       blocks.push({
         id: nextBlockId(),
         kind: "lock-marker",
@@ -162,7 +164,7 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
         if (/^```[ \t]*$/.test(stripEol(l))) break;
       }
       const blanks = collectTrailingBlankLines();
-      const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "\n") + blanks;
+      const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "") + blanks;
       blocks.push({
         id: nextBlockId(),
         kind: "code",
@@ -179,7 +181,7 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
     if (heading) {
       i++;
       const blanks = collectTrailingBlankLines();
-      const eol = (firstLine.match(/\r?\n$/)?.[0] ?? "\n") + blanks;
+      const eol = (firstLine.match(/\r?\n$/)?.[0] ?? "") + blanks;
       blocks.push({
         id: nextBlockId(),
         kind: "heading",
@@ -195,7 +197,7 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
     if (HR_RE.test(trimmed)) {
       i++;
       const blanks = collectTrailingBlankLines();
-      const eol = (firstLine.match(/\r?\n$/)?.[0] ?? "\n") + blanks;
+      const eol = (firstLine.match(/\r?\n$/)?.[0] ?? "") + blanks;
       blocks.push({
         id: nextBlockId(),
         kind: "hr",
@@ -214,7 +216,7 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
         i++;
       }
       const blanks = collectTrailingBlankLines();
-      const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "\n") + blanks;
+      const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "") + blanks;
       blocks.push({
         id: nextBlockId(),
         kind: "table",
@@ -240,7 +242,7 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
         }
       }
       const blanks = collectTrailingBlankLines();
-      const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "\n") + blanks;
+      const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "") + blanks;
       blocks.push({
         id: nextBlockId(),
         kind: "list",
@@ -260,7 +262,7 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
         i++;
       }
       const blanks = collectTrailingBlankLines();
-      const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "\n") + blanks;
+      const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "") + blanks;
       blocks.push({
         id: nextBlockId(),
         kind: "blockquote",
@@ -281,7 +283,7 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
         i++;
       }
       const blanks = collectTrailingBlankLines();
-      const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "\n") + blanks;
+      const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "") + blanks;
       blocks.push({
         id: nextBlockId(),
         kind: "raw-html",
@@ -317,7 +319,7 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
       i++;
     }
     const blanks = collectTrailingBlankLines();
-    const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "\n") + blanks;
+    const eol = (rawBody.match(/\r?\n$/)?.[0] ?? "") + blanks;
     blocks.push({
       id: nextBlockId(),
       kind: containsRawHtml ? "raw-html" : "paragraph",
@@ -325,6 +327,35 @@ export function parseMarkdownBlocks(input: string): DocBlock[] {
       trailingNewlines: eol,
       dirty: false,
     });
+  }
+
+  // 计算锁定状态：
+  // - 若 lock-marker 出现在所有 ui-section 外部（顶层），整份文档所有块均为 locked；
+  // - 若 lock-marker 出现在某个 ui-section 内部，仅锁定该小节内的所有块，不影响其他小节。
+  let globalLocked = false;
+  let inSection: string | null = null;
+  const lockedSections = new Set<string>();
+  for (const b of blocks) {
+    if (b.kind === "section-open") {
+      inSection = b.sectionName ?? "";
+    } else if (b.kind === "section-close") {
+      inSection = null;
+    } else if (b.kind === "lock-marker") {
+      if (inSection !== null) lockedSections.add(inSection);
+      else globalLocked = true;
+    }
+  }
+  inSection = null;
+  for (const b of blocks) {
+    if (b.kind === "section-open") {
+      inSection = b.sectionName ?? "";
+      b.locked = globalLocked || lockedSections.has(inSection);
+    } else if (b.kind === "section-close") {
+      b.locked = globalLocked || (inSection !== null && lockedSections.has(inSection));
+      inSection = null;
+    } else {
+      b.locked = globalLocked || (inSection !== null && lockedSections.has(inSection));
+    }
   }
 
   return blocks;
@@ -340,31 +371,112 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function unescapeHtmlEntities(text: string): string {
+  return text
+    .replace(/&quot;/g, '"')
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * 过滤并校验链接或图片地址，拦截 javascript: / vbscript: / data:text/html 等危险协议。
+ * 安全时返回去掉首尾空白的地址，不安全时返回空字符串。
+ */
+export function sanitizeUrl(rawUrl: string, isImage = false): string {
+  const decoded = unescapeHtmlEntities(rawUrl).replace(/[\u0000-\u001f\u007f]+/g, "").trim();
+  if (!decoded) return "";
+  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(decoded.replace(/\s+/g, ""));
+  if (schemeMatch) {
+    const scheme = schemeMatch[1].toLowerCase();
+    if (scheme === "http" || scheme === "https" || scheme === "mailto") {
+      return decoded;
+    }
+    if (isImage && scheme === "data") {
+      if (/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[a-z0-9+/=\s]+$/i.test(decoded)) {
+        return decoded;
+      }
+      return "";
+    }
+    return "";
+  }
+  return decoded;
+}
+
+/**
+ * 把相对于文档所在目录的图片路径解析为浏览器可加载的地址，
+ * 同时在 data-md-src 中保留原始相对路径以便往返。
+ */
+export function resolveDocImageSrc(safeSrc: string, docPath?: string): string {
+  if (!safeSrc) return "";
+  if (/^(?:https?:|mailto:|data:|blob:|\/|#)/i.test(safeSrc)) return safeSrc;
+  const effectiveDocPath = docPath ?? getCurrentDocPath();
+  const baseParts = effectiveDocPath
+    ? effectiveDocPath.replace(/\\/g, "/").split("/").slice(0, -1).filter(Boolean)
+    : [];
+  for (const part of safeSrc.replace(/\\/g, "/").split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (baseParts.length === 0) return "";
+      baseParts.pop();
+    } else {
+      baseParts.push(part);
+    }
+  }
+  const relPath = baseParts.join("/");
+  if (!relPath) return "";
+  return `/__fs/read?path=${encodeURIComponent(relPath)}`;
+}
+
 /** 把行内 Markdown（图片、链接、行内代码、加粗、斜体）转为安全的 HTML。 */
-export function inlineMarkdownToHtml(md: string): string {
-  let html = escapeHtml(md);
-  // 行内代码 `code`
-  const codeTokens: string[] = [];
-  html = html.replace(/`([^`\n]+)`/g, (_m, code: string) => {
-    const idx = codeTokens.push(`<code>${code}</code>`) - 1;
-    return `\u0000CODE${idx}\u0000`;
+export function inlineMarkdownToHtml(md: string, docPath?: string): string {
+  // 用占位符隔离已生成的 HTML 片段，防止二次正则替换污染标签属性或破坏 URL 中的 *
+  const cleanMd = md.replace(/\u0000/g, "");
+  let html = escapeHtml(cleanMd);
+  const tokens: string[] = [];
+  const pushToken = (fragment: string): string => {
+    const idx = tokens.push(fragment) - 1;
+    return `\u0000TOK${idx}\u0000`;
+  };
+  const stripTokens = (s: string): string =>
+    s.replace(/\u0000TOK(\d+)\u0000/g, (_m, idx: string) => {
+      const tok = tokens[Number(idx)] ?? "";
+      return tok.replace(/<[^>]*>/g, "");
+    });
+
+  // 1. 行内代码 `code`
+  html = html.replace(/`([^`\n]+)`/g, (_m, code: string) => pushToken(`<code>${code}</code>`));
+
+  // 2. 图片 ![alt](src)
+  html = html.replace(/!\[([^\]]*)\]\(([^)\n]+)\)/g, (_m, alt: string, src: string) => {
+    const rawAlt = unescapeHtmlEntities(stripTokens(alt));
+    const rawSrc = unescapeHtmlEntities(stripTokens(src));
+    const safeSrc = sanitizeUrl(rawSrc, true);
+    const resolvedSrc = safeSrc ? resolveDocImageSrc(safeSrc, docPath) : "";
+    return pushToken(
+      `<img class="doc-img" alt="${escapeHtml(rawAlt)}" src="${escapeHtml(resolvedSrc)}" data-md-src="${escapeHtml(safeSrc)}" />`,
+    );
   });
-  // 图片 ![alt](src)
-  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt: string, src: string) => {
-    return `<img class="doc-img" alt="${alt}" src="${src}" data-md-src="${src}" />`;
+
+  // 3. 链接 [text](href)
+  html = html.replace(/\[([^\]]+)\]\(([^)\n]+)\)/g, (_m, label: string, href: string) => {
+    const rawHref = unescapeHtmlEntities(stripTokens(href));
+    const safeHref = sanitizeUrl(rawHref, false);
+    return pushToken(
+      `<a href="${escapeHtml(safeHref)}" data-md-href="${escapeHtml(safeHref)}" target="_blank" rel="noreferrer">${label}</a>`,
+    );
   });
-  // 链接 [text](href)
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, href: string) => {
-    return `<a href="${href}" data-md-href="${href}" target="_blank" rel="noreferrer">${label}</a>`;
-  });
-  // 加粗 **bold**
+
+  // 4. 加粗 **bold**
   html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-  // 斜体 *italic*
+  // 5. 斜体 *italic*
   html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<em>$1</em>");
-  // 换行
+  // 6. 换行
   html = html.replace(/\n/g, "<br>");
-  // 还原行内代码
-  html = html.replace(/\u0000CODE(\d+)\u0000/g, (_m, idx: string) => codeTokens[Number(idx)] ?? "");
+  // 7. 还原占位符（可含链接 label 内的行内代码，最多展开两层，但绝不递归解析 Markdown）
+  for (let pass = 0; pass < 2 && html.includes("\u0000TOK"); pass++) {
+    html = html.replace(/\u0000TOK(\d+)\u0000/g, (_m, idx: string) => tokens[Number(idx)] ?? "");
+  }
   return html;
 }
 
@@ -379,7 +491,8 @@ export function domToInlineMarkdown(root: Node): string {
   if (tag === "br") return "\n";
   if (tag === "img") {
     const alt = el.getAttribute("alt") ?? "";
-    const src = el.getAttribute("data-md-src") ?? el.getAttribute("src") ?? "";
+    const rawSrc = el.getAttribute("data-md-src") ?? el.getAttribute("src") ?? "";
+    const src = sanitizeUrl(rawSrc, true);
     return `![${alt}](${src})`;
   }
   const inner = Array.from(el.childNodes).map(domToInlineMarkdown).join("");
@@ -387,8 +500,12 @@ export function domToInlineMarkdown(root: Node): string {
   if (tag === "em" || tag === "i") return inner ? `*${inner}*` : "";
   if (tag === "code") return `\`${el.textContent ?? ""}\``;
   if (tag === "a") {
-    const href = el.getAttribute("data-md-href") ?? el.getAttribute("href") ?? "";
+    const rawHref = el.getAttribute("data-md-href") ?? el.getAttribute("href") ?? "";
+    const href = sanitizeUrl(rawHref, false);
     return `[${inner}](${href})`;
+  }
+  if (tag === "li") {
+    return (el.previousElementSibling ? "\n" : "") + inner;
   }
   if (tag === "div" || tag === "p") {
     return (el.previousSibling ? "\n" : "") + inner;
@@ -400,9 +517,12 @@ function trimTrailingNewlines(raw: string): string {
   return raw.replace(/(?:\r?\n)+$/, "");
 }
 
-function parseTableCells(line: string): string[] {
-  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  return trimmed.split("|").map((c) => c.trim());
+/**
+ * 拆分 Markdown 表格的一行单元格，识别转义竖线 `\|` 并将其还原为 `|`。
+ */
+export function parseTableCells(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
+  return trimmed.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
 }
 
 /**
@@ -412,7 +532,7 @@ function parseTableCells(line: string): string[] {
  */
 export function serializeBlock(block: DocBlock): string {
   if (!block.dirty || !block.el) return block.raw;
-  const tail = block.trailingNewlines || "\n";
+  const tail = block.trailingNewlines;
 
   switch (block.kind) {
     case "section-open":
@@ -443,8 +563,9 @@ export function serializeBlock(block: DocBlock): string {
     case "list": {
       const items = Array.from(block.el.querySelectorAll<HTMLElement>(":scope > li"));
       const lines = items.map((li, idx) => {
+        const indent = li.dataset.indent ?? "";
         const content = domToInlineMarkdown(li).replace(/\n+/g, " ").trim();
-        return block.ordered ? `${idx + 1}. ${content}` : `- ${content}`;
+        return block.ordered ? `${indent}${idx + 1}. ${content}` : `${indent}- ${content}`;
       });
       return `${lines.join("\n")}${tail}`;
     }
@@ -457,18 +578,29 @@ export function serializeBlock(block: DocBlock): string {
     case "table": {
       const table = block.el.querySelector("table");
       if (!table) return block.raw;
-      const headerCells = Array.from(table.querySelectorAll<HTMLElement>("thead th")).map((th) =>
+      const thEls = Array.from(table.querySelectorAll<HTMLElement>("thead th"));
+      const headerCells = thEls.map((th) =>
         domToInlineMarkdown(th).replace(/\n+/g, " ").replace(/\|/g, "\\|").trim(),
       );
       if (headerCells.length === 0) return block.raw;
-      const sepLine = `| ${headerCells.map(() => "---").join(" | ")} |`;
+      const trEls = Array.from(table.querySelectorAll<HTMLTableRowElement>("tbody tr"));
+      const colCount = Math.max(
+        headerCells.length,
+        ...trEls.map((tr) => tr.querySelectorAll("td").length),
+      );
+      while (headerCells.length < colCount) headerCells.push("");
+      const sepCells = Array.from({ length: colCount }, (_, idx) => {
+        const rawAlign = thEls[idx]?.dataset.align?.trim() ?? "";
+        return /^:?-+:?$/.test(rawAlign) ? rawAlign : "---";
+      });
+      const sepLine = `| ${sepCells.join(" | ")} |`;
       const headLine = `| ${headerCells.join(" | ")} |`;
-      const bodyRows = Array.from(table.querySelectorAll<HTMLTableRowElement>("tbody tr")).map((tr) => {
+      const bodyRows = trEls.map((tr) => {
         const cells = Array.from(tr.querySelectorAll<HTMLElement>("td")).map((td) =>
           domToInlineMarkdown(td).replace(/\n+/g, " ").replace(/\|/g, "\\|").trim(),
         );
-        while (cells.length < headerCells.length) cells.push("");
-        return `| ${cells.slice(0, headerCells.length).join(" | ")} |`;
+        while (cells.length < colCount) cells.push("");
+        return `| ${cells.slice(0, colCount).join(" | ")} |`;
       });
       return `${[headLine, sepLine, ...bodyRows].join("\n")}${tail}`;
     }
@@ -504,6 +636,26 @@ let previewContainer: HTMLElement | null = null;
 let floatingBar: HTMLElement | null = null;
 let modeBtnSource: HTMLButtonElement | null = null;
 let modeBtnPreview: HTMLButtonElement | null = null;
+
+function isPreviewWindowLocation(): boolean {
+  try {
+    return typeof window !== "undefined" && new URLSearchParams(window.location.search).get("preview") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function getCurrentDocPath(): string | undefined {
+  if (!docHost) return undefined;
+  const proj = docHost.getProject();
+  const selId = docHost.getSelectedId();
+  if (!selId) return proj.pageDoc;
+  const rawRef = proj.logic.objects?.[selId]?.doc;
+  if (!rawRef) return proj.pageDoc;
+  const hashIdx = rawRef.indexOf("#");
+  const filePath = (hashIdx >= 0 ? rawRef.slice(0, hashIdx) : rawRef).trim();
+  return filePath || proj.pageDoc;
+}
 
 function loadSavedMode(): DocEditMode {
   try {
@@ -557,12 +709,27 @@ function syncSelectionToTextarea(block: DocBlock): void {
 }
 
 function isDocumentLocked(blocks: DocBlock[], disabled: boolean): boolean {
-  return disabled || blocks.some((b) => b.kind === "lock-marker");
+  if (disabled) return true;
+  const editableKinds = blocks.filter(
+    (b) =>
+      b.kind !== "blank" &&
+      b.kind !== "section-open" &&
+      b.kind !== "section-close" &&
+      b.kind !== "lock-marker" &&
+      b.kind !== "raw-html" &&
+      b.kind !== "hr",
+  );
+  if (editableKinds.length > 0 && editableKinds.every((b) => Boolean(b.locked))) {
+    return true;
+  }
+  return blocks.some((b) => b.kind === "lock-marker") && !blocks.some((b) => b.kind === "section-open");
 }
 
 /** 构建单个块在文档预览模式下的 DOM 元素。 */
 function renderBlockElement(block: DocBlock, readOnly: boolean): HTMLElement {
+  const blockReadOnly = readOnly || Boolean(block.locked);
   const bodyRaw = trimTrailingNewlines(block.raw);
+  const docPath = getCurrentDocPath();
 
   if (block.kind === "blank") {
     const span = document.createElement("div");
@@ -635,11 +802,11 @@ function renderBlockElement(block: DocBlock, readOnly: boolean): HTMLElement {
     const tag = `h${level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
     const el = document.createElement(tag);
     el.className = `doc-heading doc-h${level}`;
-    el.contentEditable = String(!readOnly);
+    el.contentEditable = String(!blockReadOnly);
     const match = HEADING_RE.exec(bodyRaw);
     const contentMd = match ? match[2] : bodyRaw;
-    el.innerHTML = inlineMarkdownToHtml(contentMd);
-    bindEditableBlockEvents(block, el, readOnly);
+    el.innerHTML = inlineMarkdownToHtml(contentMd, docPath);
+    bindEditableBlockEvents(block, el, blockReadOnly);
     block.el = el;
     return el;
   }
@@ -647,13 +814,13 @@ function renderBlockElement(block: DocBlock, readOnly: boolean): HTMLElement {
   if (block.kind === "blockquote") {
     const el = document.createElement("blockquote");
     el.className = "doc-blockquote";
-    el.contentEditable = String(!readOnly);
+    el.contentEditable = String(!blockReadOnly);
     const innerMd = bodyRaw
       .split(/\r?\n/)
       .map((l) => l.replace(/^>[ \t]?/, ""))
       .join("\n");
-    el.innerHTML = inlineMarkdownToHtml(innerMd);
-    bindEditableBlockEvents(block, el, readOnly);
+    el.innerHTML = inlineMarkdownToHtml(innerMd, docPath);
+    bindEditableBlockEvents(block, el, blockReadOnly);
     block.el = el;
     return el;
   }
@@ -666,7 +833,7 @@ function renderBlockElement(block: DocBlock, readOnly: boolean): HTMLElement {
     head.textContent = block.codeLang ? `代码（${block.codeLang}）` : "代码块";
     const pre = document.createElement("pre");
     const code = document.createElement("code");
-    code.contentEditable = String(!readOnly);
+    code.contentEditable = String(!blockReadOnly);
     const codeLines = bodyRaw.split(/\r?\n/);
     const inner = codeLines.slice(1, codeLines[codeLines.length - 1]?.startsWith("```") ? -1 : undefined).join("\n");
     code.textContent = inner;
@@ -675,6 +842,7 @@ function renderBlockElement(block: DocBlock, readOnly: boolean): HTMLElement {
       syncSelectionToTextarea(block);
     });
     code.addEventListener("input", () => {
+      if (blockReadOnly) return;
       block.dirty = true;
       commitPreviewChanges();
     });
@@ -689,10 +857,10 @@ function renderBlockElement(block: DocBlock, readOnly: boolean): HTMLElement {
     listEl.className = "doc-list";
     const lines = bodyRaw.split(/\r?\n/);
     for (const line of lines) {
-      const itemMd = block.ordered
-        ? (OL_ITEM_RE.exec(line)?.[1] ?? line)
-        : (UL_ITEM_RE.exec(line)?.[1] ?? line);
-      const li = createListItemElement(block, listEl, itemMd, readOnly);
+      const m = block.ordered ? OL_ITEM_RE.exec(line) : UL_ITEM_RE.exec(line);
+      const indent = m?.[1] ?? "";
+      const itemMd = m?.[2] ?? line;
+      const li = createListItemElement(block, listEl, itemMd, blockReadOnly, indent);
       listEl.append(li);
     }
     block.el = listEl;
@@ -706,40 +874,48 @@ function renderBlockElement(block: DocBlock, readOnly: boolean): HTMLElement {
     table.className = "doc-table";
     const lines = bodyRaw.split(/\r?\n/);
     const headers = parseTableCells(lines[0] ?? "| 列 1 | 列 2 |");
+    const sepCells = parseTableCells(lines[1] ?? "");
     const rows = lines.slice(2).map(parseTableCells);
+    const colCount = Math.max(headers.length, ...rows.map((r) => r.length));
+    while (headers.length < colCount) headers.push(`列 ${headers.length + 1}`);
 
     const thead = document.createElement("thead");
     const headTr = document.createElement("tr");
-    for (const h of headers) {
-      headTr.append(createTableCellElement(block, table, "th", h, readOnly));
+    for (let c = 0; c < colCount; c++) {
+      const th = createTableCellElement(block, table, "th", headers[c] ?? "", blockReadOnly);
+      const rawAlign = sepCells[c]?.trim() ?? "";
+      if (/^:?-+:?$/.test(rawAlign)) {
+        th.dataset.align = rawAlign;
+      }
+      headTr.append(th);
     }
     thead.append(headTr);
 
     const tbody = document.createElement("tbody");
     for (const r of rows) {
       const tr = document.createElement("tr");
-      for (let c = 0; c < headers.length; c++) {
-        tr.append(createTableCellElement(block, table, "td", r[c] ?? "", readOnly));
+      for (let c = 0; c < colCount; c++) {
+        tr.append(createTableCellElement(block, table, "td", r[c] ?? "", blockReadOnly));
       }
       tbody.append(tr);
     }
     table.append(thead, tbody);
     wrap.append(table);
 
-    if (!readOnly) {
+    if (!blockReadOnly) {
       const actions = document.createElement("div");
       actions.className = "doc-table-actions";
       const addRowBtn = document.createElement("button");
       addRowBtn.type = "button";
       addRowBtn.textContent = "+ 添加行";
       addRowBtn.addEventListener("click", () => {
-        addTableRow(block, table, readOnly);
+        addTableRow(block, table, blockReadOnly);
       });
       const addColBtn = document.createElement("button");
       addColBtn.type = "button";
       addColBtn.textContent = "+ 添加列";
       addColBtn.addEventListener("click", () => {
-        addTableColumn(block, table, readOnly);
+        addTableColumn(block, table, blockReadOnly);
       });
       actions.append(addRowBtn, addColBtn);
       wrap.append(actions);
@@ -752,9 +928,9 @@ function renderBlockElement(block: DocBlock, readOnly: boolean): HTMLElement {
   // 默认：paragraph
   const p = document.createElement("p");
   p.className = "doc-p";
-  p.contentEditable = String(!readOnly);
-  p.innerHTML = inlineMarkdownToHtml(bodyRaw);
-  bindEditableBlockEvents(block, p, readOnly);
+  p.contentEditable = String(!blockReadOnly);
+  p.innerHTML = inlineMarkdownToHtml(bodyRaw, docPath);
+  bindEditableBlockEvents(block, p, blockReadOnly);
   block.el = p;
   return p;
 }
@@ -764,15 +940,22 @@ function createListItemElement(
   listEl: HTMLElement,
   itemMd: string,
   readOnly: boolean,
+  indent = "",
 ): HTMLLIElement {
   const li = document.createElement("li");
   li.contentEditable = String(!readOnly);
-  li.innerHTML = inlineMarkdownToHtml(itemMd);
+  if (indent) {
+    li.dataset.indent = indent;
+    const spaces = indent.replace(/\t/g, "  ").length;
+    li.style.marginLeft = `${Math.min(6, Math.floor(spaces / 2)) * 18}px`;
+  }
+  li.innerHTML = inlineMarkdownToHtml(itemMd, getCurrentDocPath());
   li.addEventListener("focus", () => {
     activeEditableBlock = block;
     syncSelectionToTextarea(block);
   });
   li.addEventListener("input", () => {
+    if (readOnly) return;
     block.dirty = true;
     commitPreviewChanges();
   });
@@ -780,7 +963,7 @@ function createListItemElement(
     if (readOnly) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      const nextLi = createListItemElement(block, listEl, "", readOnly);
+      const nextLi = createListItemElement(block, listEl, "", readOnly, li.dataset.indent ?? "");
       li.after(nextLi);
       block.dirty = true;
       commitPreviewChanges();
@@ -798,6 +981,7 @@ function createListItemElement(
 }
 
 function addTableRow(block: DocBlock, table: HTMLTableElement, readOnly: boolean): HTMLTableCellElement | null {
+  if (readOnly || block.locked) return null;
   const colCount = table.querySelectorAll("thead th").length || 2;
   const tbody = table.querySelector("tbody") ?? table.appendChild(document.createElement("tbody"));
   const tr = document.createElement("tr");
@@ -815,6 +999,7 @@ function addTableRow(block: DocBlock, table: HTMLTableElement, readOnly: boolean
 }
 
 function addTableColumn(block: DocBlock, table: HTMLTableElement, readOnly: boolean): void {
+  if (readOnly || block.locked) return;
   const headTr = table.querySelector("thead tr");
   if (!headTr) return;
   const colIndex = headTr.children.length + 1;
@@ -835,12 +1020,13 @@ function createTableCellElement(
 ): HTMLTableCellElement {
   const cell = document.createElement(tag);
   cell.contentEditable = String(!readOnly);
-  cell.innerHTML = inlineMarkdownToHtml(cellMd);
+  cell.innerHTML = inlineMarkdownToHtml(cellMd, getCurrentDocPath());
   cell.addEventListener("focus", () => {
     activeEditableBlock = block;
     syncSelectionToTextarea(block);
   });
   cell.addEventListener("input", () => {
+    if (readOnly) return;
     block.dirty = true;
     commitPreviewChanges();
   });
@@ -871,7 +1057,7 @@ function bindEditableBlockEvents(block: DocBlock, el: HTMLElement, readOnly: boo
   });
 
   el.addEventListener("input", () => {
-    if (readOnly) return;
+    if (readOnly || block.locked) return;
     const rawText = (el.textContent ?? "").replace(/\u00a0/g, " ");
 
     // 行首输入 Markdown 语法时当场转换：# ~ ###### 转为标题，- / * 转为无序列表，1. 转为有序列表
@@ -898,10 +1084,25 @@ function bindEditableBlockEvents(block: DocBlock, el: HTMLElement, readOnly: boo
   });
 
   el.addEventListener("keydown", (e) => {
-    if (readOnly) return;
+    if (readOnly || block.locked) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      insertNewParagraphAfter(block, readOnly);
+      // 支持在光标处切分段落：提取光标之后的 DOM 内容到新段落中
+      let afterMd = "";
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0 && el.contains(sel.anchorNode)) {
+        const range = sel.getRangeAt(0);
+        if (!range.collapsed) range.deleteContents();
+        const tailRange = document.createRange();
+        tailRange.selectNodeContents(el);
+        tailRange.setStart(range.endContainer, range.endOffset);
+        const frag = tailRange.extractContents();
+        const holder = document.createElement("div");
+        holder.append(frag);
+        afterMd = domToInlineMarkdown(holder).trim();
+        block.dirty = true;
+      }
+      insertNewParagraphAfter(block, readOnly, afterMd);
     }
   });
 }
@@ -913,6 +1114,17 @@ function placeCaretAtEnd(el: HTMLElement): void {
   const range = document.createRange();
   range.selectNodeContents(el);
   range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function placeCaretAtStart(el: HTMLElement): void {
+  el.focus();
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(true);
   sel.removeAllRanges();
   sel.addRange(range);
 }
@@ -933,19 +1145,22 @@ export function convertBlockToHeading(
   overrideText?: string,
   readOnly = false,
 ): void {
+  if (readOnly || block.locked || lastRenderedDisabled) return;
   const currentText = overrideText !== undefined
     ? overrideText
     : block.el
-      ? domToInlineMarkdown(block.el).replace(/\n+/g, " ").trim()
+      ? domToInlineMarkdown(block.el).replace(/\n+/g, level === null ? "\n" : " ").trim()
       : trimTrailingNewlines(block.raw).replace(/^#{1,6}\s+/, "");
-  const tail = block.trailingNewlines || "\n\n";
+  const tail = block.trailingNewlines;
   if (level === null || level <= 0) {
     block.kind = "paragraph";
     delete block.level;
+    delete block.ordered;
     block.raw = `${currentText}${tail}`;
   } else {
     block.kind = "heading";
     block.level = level;
+    delete block.ordered;
     block.raw = `${"#".repeat(level)} ${currentText}${tail}`;
   }
   block.dirty = true;
@@ -961,15 +1176,30 @@ export function convertBlockToList(
   overrideText?: string,
   readOnly = false,
 ): void {
-  const currentText = overrideText !== undefined
-    ? overrideText
-    : block.el
-      ? domToInlineMarkdown(block.el).replace(/\n+/g, " ").trim()
-      : trimTrailingNewlines(block.raw);
-  const tail = block.trailingNewlines || "\n\n";
+  if (readOnly || block.locked || lastRenderedDisabled) return;
+  let itemLines: Array<{ indent: string; text: string }>;
+  if (overrideText !== undefined) {
+    itemLines = [{ indent: "", text: overrideText }];
+  } else if (block.kind === "list" && block.el) {
+    const lis = Array.from(block.el.querySelectorAll<HTMLElement>(":scope > li"));
+    itemLines = lis.map((li) => ({
+      indent: li.dataset.indent ?? "",
+      text: domToInlineMarkdown(li).replace(/\n+/g, " ").trim(),
+    }));
+  } else if (block.el) {
+    const rawLines = domToInlineMarkdown(block.el).split("\n").map((l) => l.trim()).filter(Boolean);
+    itemLines = (rawLines.length > 0 ? rawLines : [""]).map((text) => ({ indent: "", text }));
+  } else {
+    itemLines = [{ indent: "", text: trimTrailingNewlines(block.raw) }];
+  }
+  const tail = block.trailingNewlines;
   block.kind = "list";
   block.ordered = ordered;
-  block.raw = `${ordered ? `1. ${currentText}` : `- ${currentText}`}${tail}`;
+  delete block.level;
+  const formatted = itemLines
+    .map((item, idx) => (ordered ? `${item.indent}${idx + 1}. ${item.text}` : `${item.indent}- ${item.text}`))
+    .join("\n");
+  block.raw = `${formatted}${tail}`;
   block.dirty = true;
   const newEl = replaceBlockInDOM(block, readOnly);
   commitPreviewChanges();
@@ -977,41 +1207,76 @@ export function convertBlockToList(
   if (firstLi) placeCaretAtEnd(firstLi);
 }
 
-function insertNewParagraphAfter(target: DocBlock, readOnly: boolean): void {
+function insertNewParagraphAfter(target: DocBlock, readOnly: boolean, initialMd = ""): void {
+  if (readOnly || target.locked || lastRenderedDisabled) return;
   const idx = currentBlocks.indexOf(target);
   if (idx < 0) return;
+  const nextBlockAfterTarget = currentBlocks[idx + 1];
+  const oldTail = target.trailingNewlines;
+  // target 现在后面紧跟新段落，确保 target 块尾有两个换行（即空一行分段）
+  target.trailingNewlines = "\n\n";
+  target.raw = `${trimTrailingNewlines(target.raw)}\n\n`;
+  target.dirty = true;
+  // 新段落继承 target 原本的块尾换行（若后面还有普通内容块，确保至少空一行）
+  const newTail =
+    nextBlockAfterTarget && nextBlockAfterTarget.kind !== "section-close"
+      ? (oldTail.length >= 2 ? oldTail : "\n\n")
+      : oldTail;
   const newBlock: DocBlock = {
     id: nextBlockId(),
     kind: "paragraph",
-    raw: "\n\n",
-    trailingNewlines: "\n\n",
+    raw: `${initialMd}${newTail}`,
+    trailingNewlines: newTail,
     dirty: true,
+    locked: Boolean(target.locked),
   };
   currentBlocks.splice(idx + 1, 0, newBlock);
   const newEl = renderBlockElement(newBlock, readOnly);
   target.el?.after(newEl);
   commitPreviewChanges();
-  newEl.focus();
+  if (initialMd) placeCaretAtStart(newEl);
+  else newEl.focus();
 }
 
 function insertTableAfterActive(readOnly: boolean): void {
-  if (readOnly) return;
-  const tableMd = "| 列 1 | 列 2 |\n| --- | --- |\n| 内容 1 | 内容 2 |\n\n";
-  const newBlock: DocBlock = {
-    id: nextBlockId(),
-    kind: "table",
-    raw: tableMd,
-    trailingNewlines: "\n\n",
-    dirty: true,
-  };
+  if (readOnly || lastRenderedDisabled || activeEditableBlock?.locked) return;
+  const tableBody = "| 列 1 | 列 2 |\n| --- | --- |\n| 内容 1 | 内容 2 |";
   const idx = activeEditableBlock ? currentBlocks.indexOf(activeEditableBlock) : -1;
   if (idx >= 0 && activeEditableBlock?.el) {
+    const oldTail = activeEditableBlock.trailingNewlines;
+    activeEditableBlock.trailingNewlines = "\n\n";
+    activeEditableBlock.raw = `${trimTrailingNewlines(activeEditableBlock.raw)}\n\n`;
+    activeEditableBlock.dirty = true;
+    const nextBlk = currentBlocks[idx + 1];
+    const newTail = nextBlk && nextBlk.kind !== "section-close" ? (oldTail.length >= 2 ? oldTail : "\n\n") : oldTail;
+    const newBlock: DocBlock = {
+      id: nextBlockId(),
+      kind: "table",
+      raw: `${tableBody}${newTail}`,
+      trailingNewlines: newTail,
+      dirty: true,
+    };
     currentBlocks.splice(idx + 1, 0, newBlock);
     const newEl = renderBlockElement(newBlock, readOnly);
     activeEditableBlock.el.after(newEl);
   } else if (previewContainer) {
-    // 如果末尾是 /ui-section，插在它前面
     const closeIdx = currentBlocks.findIndex((b) => b.kind === "section-close");
+    const prevIdx = closeIdx >= 0 ? closeIdx - 1 : currentBlocks.length - 1;
+    const prevBlk = prevIdx >= 0 ? currentBlocks[prevIdx] : undefined;
+    let newTail = "\n\n";
+    if (prevBlk) {
+      newTail = prevBlk.trailingNewlines;
+      prevBlk.trailingNewlines = "\n\n";
+      prevBlk.raw = `${trimTrailingNewlines(prevBlk.raw)}\n\n`;
+      prevBlk.dirty = true;
+    }
+    const newBlock: DocBlock = {
+      id: nextBlockId(),
+      kind: "table",
+      raw: `${tableBody}${newTail}`,
+      trailingNewlines: newTail,
+      dirty: true,
+    };
     if (closeIdx >= 0 && currentBlocks[closeIdx].el) {
       currentBlocks.splice(closeIdx, 0, newBlock);
       const newEl = renderBlockElement(newBlock, readOnly);
@@ -1028,7 +1293,7 @@ function insertTableAfterActive(readOnly: boolean): void {
 /** 选中文字时浮出的小工具条：加粗、斜体、标题、列表、行内代码、链接、表格。 */
 function applyInlineFormat(kind: "bold" | "italic" | "code" | "link"): void {
   const block = activeEditableBlock;
-  if (!block || !block.el) return;
+  if (!block || !block.el || block.locked || lastRenderedDisabled) return;
   if (kind === "bold") {
     document.execCommand("bold");
   } else if (kind === "italic") {
@@ -1044,8 +1309,22 @@ function applyInlineFormat(kind: "bold" | "italic" | "code" | "link"): void {
       range.insertNode(codeNode);
     }
   } else if (kind === "link") {
-    const url = window.prompt("链接地址：", "https://") ?? "";
-    if (url) document.execCommand("createLink", false, url);
+    const rawUrl = window.prompt("链接地址：", "https://") ?? "";
+    const safeHref = sanitizeUrl(rawUrl, false);
+    if (!safeHref) return;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+      const range = sel.getRangeAt(0);
+      const text = range.toString();
+      const a = document.createElement("a");
+      a.href = safeHref;
+      a.setAttribute("data-md-href", safeHref);
+      a.target = "_blank";
+      a.rel = "noreferrer";
+      a.textContent = text;
+      range.deleteContents();
+      range.insertNode(a);
+    }
   }
   block.dirty = true;
   commitPreviewChanges();
@@ -1070,16 +1349,16 @@ function buildFloatingToolbar(): HTMLElement {
   addBtn("B", "加粗", () => applyInlineFormat("bold"));
   addBtn("I", "斜体", () => applyInlineFormat("italic"));
   addBtn("H2", "二级标题", () => {
-    if (activeEditableBlock) convertBlockToHeading(activeEditableBlock, 2);
+    if (activeEditableBlock && !activeEditableBlock.locked) convertBlockToHeading(activeEditableBlock, 2);
   });
   addBtn("H3", "三级标题", () => {
-    if (activeEditableBlock) convertBlockToHeading(activeEditableBlock, 3);
+    if (activeEditableBlock && !activeEditableBlock.locked) convertBlockToHeading(activeEditableBlock, 3);
   });
   addBtn("正文", "转为普通段落", () => {
-    if (activeEditableBlock) convertBlockToHeading(activeEditableBlock, null);
+    if (activeEditableBlock && !activeEditableBlock.locked) convertBlockToHeading(activeEditableBlock, null);
   });
   addBtn("• 列表", "转为无序列表", () => {
-    if (activeEditableBlock) convertBlockToList(activeEditableBlock, false);
+    if (activeEditableBlock && !activeEditableBlock.locked) convertBlockToList(activeEditableBlock, false);
   });
   addBtn("<>", "行内代码", () => applyInlineFormat("code"));
   addBtn("链接", "插入链接", () => applyInlineFormat("link"));
@@ -1090,7 +1369,14 @@ function buildFloatingToolbar(): HTMLElement {
 }
 
 function updateFloatingToolbarPosition(): void {
-  if (!floatingBar || !previewContainer || currentMode !== "preview") {
+  if (
+    !floatingBar ||
+    !previewContainer ||
+    currentMode !== "preview" ||
+    lastRenderedDisabled ||
+    previewContainer.classList.contains("readonly") ||
+    activeEditableBlock?.locked
+  ) {
     if (floatingBar) floatingBar.hidden = true;
     return;
   }
@@ -1101,6 +1387,11 @@ function updateFloatingToolbarPosition(): void {
   }
   const anchor = sel.anchorNode;
   if (!anchor || !previewContainer.contains(anchor)) {
+    floatingBar.hidden = true;
+    return;
+  }
+  const anchorEl = anchor.nodeType === Node.ELEMENT_NODE ? (anchor as HTMLElement) : anchor.parentElement;
+  if (!anchorEl || !anchorEl.closest('[contenteditable="true"]')) {
     floatingBar.hidden = true;
     return;
   }
@@ -1128,6 +1419,7 @@ function renderPreviewFromSource(markdown: string, disabled: boolean): void {
   const readOnly = isDocumentLocked(currentBlocks, disabled);
   previewContainer.classList.toggle("readonly", readOnly);
   previewContainer.replaceChildren();
+  if (readOnly && floatingBar) floatingBar.hidden = true;
 
   if (disabled && markdown.trim() === "") {
     const empty = document.createElement("div");
@@ -1151,25 +1443,33 @@ function renderPreviewFromSource(markdown: string, disabled: boolean): void {
       b.addEventListener("click", fn);
       quickBar.append(b);
     };
+    const pickTarget = (kinds: Array<DocBlock["kind"]>): DocBlock | undefined => {
+      if (activeEditableBlock && !activeEditableBlock.locked && kinds.includes(activeEditableBlock.kind)) {
+        return activeEditableBlock;
+      }
+      return currentBlocks.find((b) => !b.locked && kinds.includes(b.kind));
+    };
     mkQuick("H2", "把当前段设为二级标题", () => {
-      const target = activeEditableBlock ?? currentBlocks.find((b) => b.kind === "paragraph" || b.kind === "heading");
+      const target = pickTarget(["paragraph", "heading"]);
       if (target) convertBlockToHeading(target, 2);
     });
     mkQuick("H3", "把当前段设为三级标题", () => {
-      const target = activeEditableBlock ?? currentBlocks.find((b) => b.kind === "paragraph" || b.kind === "heading");
+      const target = pickTarget(["paragraph", "heading"]);
       if (target) convertBlockToHeading(target, 3);
     });
     mkQuick("正文", "把当前段恢复为普通段落", () => {
-      const target = activeEditableBlock ?? currentBlocks.find((b) => b.kind === "heading");
+      const target = pickTarget(["heading", "list"]);
       if (target) convertBlockToHeading(target, null);
     });
     mkQuick("• 列表", "把当前段设为无序列表", () => {
-      const target = activeEditableBlock ?? currentBlocks.find((b) => b.kind === "paragraph");
+      const target = pickTarget(["paragraph", "list"]);
       if (target) convertBlockToList(target, false);
     });
     mkQuick("+ 表格", "在下方插入表格", () => insertTableAfterActive(false));
     mkQuick("+ 段落", "在末尾添加新段落", () => {
-      const lastEditable = [...currentBlocks].reverse().find((b) => b.kind !== "section-close" && b.kind !== "blank");
+      const lastEditable = [...currentBlocks]
+        .reverse()
+        .find((b) => !b.locked && b.kind !== "section-close" && b.kind !== "blank" && b.kind !== "lock-marker");
       if (lastEditable) insertNewParagraphAfter(lastEditable, false);
     });
     previewContainer.append(quickBar);
@@ -1218,15 +1518,17 @@ export function getDocEditMode(): DocEditMode {
  * 当右侧面板重新渲染或外部修改文件后，同步更新文档预览视图。
  */
 export function syncDocView(): void {
-  if (updatingTextareaFromPreview) return;
+  if (isPreviewWindowLocation() || updatingTextareaFromPreview) return;
   const textarea = getDocTextarea();
   if (!textarea || !previewContainer) return;
 
   // 选中控件并显示其说明小节时，在 #doc-note 旁提供“查看整份文档”按钮
   const docNote = document.getElementById("doc-note");
-  if (docNote && docHost?.getSelectedId() && !textarea.disabled && !docNote.querySelector("button") && docHost.onViewFullDoc) {
-    const m = /^<!--\s*ui-section:\s*([^\s-]+?)\s*-->/m.exec(textarea.value);
-    const secName = m?.[1] ?? null;
+  const selectedId = docHost?.getSelectedId() ?? null;
+  if (docNote && selectedId && !textarea.disabled && !docNote.querySelector("button") && docHost?.onViewFullDoc) {
+    const rawDocRef = docHost.getProject().logic.objects?.[selectedId]?.doc ?? "";
+    const hashIdx = rawDocRef.indexOf("#");
+    const secName = hashIdx >= 0 ? rawDocRef.slice(hashIdx + 1).trim() : null;
     const fullBtn = document.createElement("button");
     fullBtn.type = "button";
     fullBtn.textContent = "查看整份文档";
@@ -1264,6 +1566,7 @@ export function syncDocView(): void {
  * 初始化文档页签的“源码 | 预览”切换开关与所见即所得编辑器。
  */
 export function initDocView(host: DocViewHost): void {
+  if (isPreviewWindowLocation()) return;
   docHost = host;
   const paneDoc = document.getElementById("pane-doc");
   const textarea = getDocTextarea();

@@ -3,6 +3,7 @@
 // 拥有自己独立的 Runtime 实例、条件开关、事件记录和可收起的预览工具条，
 // 文件改动后自动刷新；按住 Alt 点击控件时通知主窗口选中该控件并打开文档页签。
 
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { emit, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { Project } from "./project.ts";
@@ -48,6 +49,8 @@ export async function openStandalonePreviewWindow(project: Project): Promise<voi
     try {
       const existing = await WebviewWindow.getByLabel("preview");
       if (existing) {
+        await existing.setTitle(title).catch(() => {});
+        await existing.setSize(new LogicalSize(width, height)).catch(() => {});
         await existing.unminimize().catch(() => {});
         await existing.show().catch(() => {});
         await existing.setFocus().catch(() => {});
@@ -112,6 +115,22 @@ export function initPreviewLauncher(
       if (event.payload?.id) onSelectFromPreview(event.payload.id);
     }).catch(() => {});
   }
+
+  // 主窗口处于预览模式时，捕获阶段拦截 Alt+点击，防止触发控件内部原生按钮的 click 事件
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (!e.altKey || !document.body.classList.contains("preview")) return;
+      const wrapper = (e.target as Element | null)?.closest<HTMLElement>(".vf-node");
+      const id = wrapper?.dataset.vfId;
+      if (id) {
+        e.preventDefault();
+        e.stopPropagation();
+        onSelectFromPreview(id);
+      }
+    },
+    true,
+  );
 }
 
 /** 独立预览窗口初始化：切入预览模式，挂载可收起的预览工具条与事件记录开关。 */
@@ -174,7 +193,11 @@ export function initStandalonePreviewWindow(hooks: {
       if (!e.altKey) return;
       const wrapper = (e.target as Element | null)?.closest<HTMLElement>(".vf-node");
       const id = wrapper?.dataset.vfId;
-      if (id) void notifyMainWindowSelect(id);
+      if (id) {
+        e.preventDefault();
+        e.stopPropagation();
+        void notifyMainWindowSelect(id);
+      }
     },
     true,
   );

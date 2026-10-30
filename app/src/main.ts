@@ -3148,6 +3148,7 @@ async function main(): Promise<void> {
     copyComponentRef: (type) => void copyReference(componentReference(project, type)),
     setSelection,
     setNodeTool: (type) => setTool(tool.kind === "node" && tool.type === type ? { kind: "select" } : { kind: "node", type }),
+    getActiveNodeTool: () => (tool.kind === "node" ? tool.type : null),
     addNodeAt: addNode,
     renderProblems,
   });
