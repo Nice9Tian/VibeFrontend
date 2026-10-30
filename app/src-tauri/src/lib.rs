@@ -24,16 +24,64 @@ fn project_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("project")
 }
 
-/// 把网页传来的相对路径解析到项目文件夹内，拒绝绝对路径和 `..`。
-fn resolve(rel: &str) -> Result<PathBuf, String> {
+/// 用户收藏素材库所在的文件夹：
+/// 1. 环境变量 VF_LIBRARY；
+/// 2. 应用数据目录下的 VibeFrontend/library/。
+fn library_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("VF_LIBRARY") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(appdata) = std::env::var("APPDATA").or_else(|_| std::env::var("LOCALAPPDATA")) {
+        return PathBuf::from(appdata).join("VibeFrontend").join("library");
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".config").join("VibeFrontend").join("library");
+    }
+    project_dir().join(".designer").join("library")
+}
+
+/// 把网页传来的相对路径解析到指定文件夹内，拒绝绝对路径、`.` 和 `..`。
+fn resolve_in(base: PathBuf, rel: &str) -> Result<PathBuf, String> {
     let rel_path = Path::new(rel);
     for part in rel_path.components() {
         match part {
-            Component::Normal(_) | Component::CurDir => {}
-            _ => return Err(format!("路径不在项目文件夹内：{rel}")),
+            Component::Normal(_) => {}
+            _ => return Err(format!("路径不在文件夹内：{rel}")),
         }
     }
-    Ok(project_dir().join(rel_path))
+    Ok(base.join(rel_path))
+}
+
+fn ensure_non_empty_rel(rel: &str) -> Result<(), String> {
+    let rel_path = Path::new(rel);
+    let mut has_normal = false;
+    for part in rel_path.components() {
+        match part {
+            Component::Normal(_) => has_normal = true,
+            _ => return Err(format!("非法相对路径：{rel}")),
+        }
+    }
+    if !has_normal {
+        return Err("路径不能为空或当前目录".to_string());
+    }
+    Ok(())
+}
+
+fn ensure_writable_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() == "preview" {
+        return Err("独立预览窗口为只读权限，不允许写盘或删除文件".to_string());
+    }
+    Ok(())
+}
+
+/// 把网页传来的相对路径解析到项目文件夹内，拒绝绝对路径和 `..`。
+fn resolve(rel: &str) -> Result<PathBuf, String> {
+    resolve_in(project_dir(), rel)
+}
+
+/// 把网页传来的相对路径解析到用户素材库文件夹内，拒绝绝对路径和 `..`。
+fn resolve_library(rel: &str) -> Result<PathBuf, String> {
+    resolve_in(library_dir(), rel)
 }
 
 #[derive(Serialize)]
@@ -51,8 +99,51 @@ fn project_root() -> Result<String, String> {
     Ok(dir.to_string_lossy().trim_start_matches(r"\\?\").to_string())
 }
 
+fn image_mime_for_path(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => Some("image/png"),
+        Some("jpg" | "jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        Some("bmp") => Some("image/bmp"),
+        Some("ico") => Some("image/x-icon"),
+        Some("svg") => Some("image/svg+xml"),
+        _ => None,
+    }
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((triple >> 6) & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(triple & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
 #[tauri::command]
 fn read_text(path: String) -> Result<Option<String>, String> {
+    ensure_non_empty_rel(&path)?;
     let full = resolve(&path)?;
     match std::fs::read_to_string(&full) {
         Ok(text) => Ok(Some(text)),
@@ -62,12 +153,38 @@ fn read_text(path: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn write_text(path: String, content: String) -> Result<(), String> {
+fn read_image_data_url(window: tauri::WebviewWindow, path: String) -> Result<Option<String>, String> {
+    ensure_writable_window(&window)?;
+    ensure_non_empty_rel(&path)?;
+    let full = resolve(&path)?;
+    let mime = image_mime_for_path(&full).ok_or_else(|| format!("不支持的图片格式：{path}"))?;
+    match std::fs::read(&full) {
+        Ok(bytes) => Ok(Some(format!("data:{mime};base64,{}", encode_base64(&bytes)))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("读取图片 {path} 失败：{e}")),
+    }
+}
+
+#[tauri::command]
+fn write_text(window: tauri::WebviewWindow, path: String, content: String) -> Result<(), String> {
+    ensure_writable_window(&window)?;
+    ensure_non_empty_rel(&path)?;
     let full = resolve(&path)?;
     if let Some(parent) = full.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
     }
     std::fs::write(&full, content).map_err(|e| format!("写入 {path} 失败：{e}"))
+}
+
+#[tauri::command]
+fn remove_file(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
+    ensure_writable_window(&window)?;
+    ensure_non_empty_rel(&path)?;
+    let full = resolve(&path)?;
+    if full.is_file() {
+        std::fs::remove_file(&full).map_err(|e| format!("删除 {path} 失败：{e}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -87,6 +204,75 @@ fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)
+}
+
+#[tauri::command]
+fn library_root() -> Result<String, String> {
+    let dir = library_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建素材库目录失败：{e}"))?;
+    let dir = dir.canonicalize().unwrap_or(dir);
+    Ok(dir.to_string_lossy().trim_start_matches(r"\\?\").to_string())
+}
+
+#[tauri::command]
+fn library_read_text(path: String) -> Result<Option<String>, String> {
+    ensure_non_empty_rel(&path)?;
+    let full = resolve_library(&path)?;
+    match std::fs::read_to_string(&full) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("读取素材库 {path} 失败：{e}")),
+    }
+}
+
+#[tauri::command]
+fn library_write_text(window: tauri::WebviewWindow, path: String, content: String) -> Result<(), String> {
+    ensure_writable_window(&window)?;
+    ensure_non_empty_rel(&path)?;
+    let full = resolve_library(&path)?;
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建素材库目录失败：{e}"))?;
+    }
+    std::fs::write(&full, content).map_err(|e| format!("写入素材库 {path} 失败：{e}"))
+}
+
+#[tauri::command]
+fn library_list_dir(path: String) -> Result<Vec<DirEntry>, String> {
+    let full = resolve_library(&path)?;
+    let read = match std::fs::read_dir(&full) {
+        Ok(read) => read,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("列出素材库 {path} 失败：{e}")),
+    };
+    let mut entries = Vec::new();
+    for entry in read.flatten() {
+        entries.push(DirEntry {
+            name: entry.file_name().to_string_lossy().to_string(),
+            is_dir: entry.file_type().map(|t| t.is_dir()).unwrap_or(false),
+        });
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+#[tauri::command]
+fn library_remove_dir(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
+    ensure_writable_window(&window)?;
+    let rel_path = Path::new(&path);
+    let mut comps = rel_path.components();
+    match (comps.next(), comps.next()) {
+        (Some(Component::Normal(_)), None) => {}
+        _ => return Err(format!("只允许删除素材库下的一级子目录：{path}")),
+    }
+    let base = library_dir();
+    let full = resolve_library(&path)?;
+    if full == base {
+        return Err("不能删除素材库根目录".to_string());
+    }
+    if full.exists() {
+        std::fs::remove_dir_all(&full).map_err(|e| format!("删除素材库 {path} 失败：{e}"))?;
+    }
+    Ok(())
 }
 
 /// 监听项目文件夹，文件有变化就通知网页重新加载。
@@ -118,7 +304,19 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![project_root, read_text, write_text, list_dir])
+        .invoke_handler(tauri::generate_handler![
+            project_root,
+            read_text,
+            read_image_data_url,
+            write_text,
+            remove_file,
+            list_dir,
+            library_root,
+            library_read_text,
+            library_write_text,
+            library_list_dir,
+            library_remove_dir,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

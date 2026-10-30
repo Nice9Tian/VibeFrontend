@@ -10,7 +10,9 @@
     "tauri": "tauri",
     "export:qt": "node scripts/export-qt.ts",
     "case": "node scripts/run-case.ts",
-    "test:editor": "node scripts/test-editor.ts"
+    "test:editor": "node scripts/test-editor.ts",
+    "test:library": "node scripts/test-library.ts",
+    "test:docview": "node scripts/test-docview.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
