@@ -22,22 +22,22 @@ namespace vf {
 // ---------------------------------------------------------------------------
 // 效果 ColorPickerDraw（调色盘自绘效果）：控件自绘内容
 // 工具里的实现：设计项目的 effects/ColorPickerDraw/index.js
-// 当前哈希：42ac9aaf
+// 当前哈希：ba2779df
 // ---------------------------------------------------------------------------
 
 // 哈希不是当前值的，一律落到这里，编译时报错。
 template <unsigned Hash>
 class ColorPickerDrawEffect
 {
-    static_assert(Hash == 0x42ac9aaf,
-                  "[VF-EFFECT-HASH] 效果 ColorPickerDraw 在工具里的实现已经改变，现在的哈希是 42ac9aaf。"
+    static_assert(Hash == 0xba2779df,
+                  "[VF-EFFECT-HASH] 效果 ColorPickerDraw 在工具里的实现已经改变，现在的哈希是 ba2779df。"
                   "这个实现是照着旧哈希写的，请对照工具里的新实现（effects/ColorPickerDraw/index.js）重新翻译，"
-                  "再把基类改成 vf::ColorPickerDrawEffect<0x42ac9aaf>。");
+                  "再把基类改成 vf::ColorPickerDrawEffect<0xba2779df>。");
 };
 
 // 哈希是当前值的，才是真正要实现的抽象类。
 template <>
-class ColorPickerDrawEffect<0x42ac9aaf>
+class ColorPickerDrawEffect<0xba2779df>
 {
 public:
     virtual ~ColorPickerDrawEffect() = default;
@@ -49,22 +49,22 @@ public:
 // ---------------------------------------------------------------------------
 // 效果 PanelExpand（面板展开）：控件显示和隐藏时的过渡
 // 工具里的实现：设计项目的 effects/PanelExpand/index.js
-// 当前哈希：77a08c49
+// 当前哈希：4c42b870
 // ---------------------------------------------------------------------------
 
 // 哈希不是当前值的，一律落到这里，编译时报错。
 template <unsigned Hash>
 class PanelExpandEffect
 {
-    static_assert(Hash == 0x77a08c49,
-                  "[VF-EFFECT-HASH] 效果 PanelExpand 在工具里的实现已经改变，现在的哈希是 77a08c49。"
+    static_assert(Hash == 0x4c42b870,
+                  "[VF-EFFECT-HASH] 效果 PanelExpand 在工具里的实现已经改变，现在的哈希是 4c42b870。"
                   "这个实现是照着旧哈希写的，请对照工具里的新实现（effects/PanelExpand/index.js）重新翻译，"
-                  "再把基类改成 vf::PanelExpandEffect<0x77a08c49>。");
+                  "再把基类改成 vf::PanelExpandEffect<0x4c42b870>。");
 };
 
 // 哈希是当前值的，才是真正要实现的抽象类。
 template <>
-class PanelExpandEffect<0x77a08c49>
+class PanelExpandEffect<0x4c42b870>
 {
 public:
     virtual ~PanelExpandEffect() = default;
@@ -85,14 +85,14 @@ public:
 class UiEffects
 {
 public:
-    void setColorPickerDraw(std::unique_ptr<ColorPickerDrawEffect<0x42ac9aaf>> effect) { m_colorPickerDraw = std::move(effect); }
-    ColorPickerDrawEffect<0x42ac9aaf> *colorPickerDraw() const { return m_colorPickerDraw.get(); }
-    void setPanelExpand(std::unique_ptr<PanelExpandEffect<0x77a08c49>> effect) { m_panelExpand = std::move(effect); }
-    PanelExpandEffect<0x77a08c49> *panelExpand() const { return m_panelExpand.get(); }
+    void setColorPickerDraw(std::unique_ptr<ColorPickerDrawEffect<0xba2779df>> effect) { m_colorPickerDraw = std::move(effect); }
+    ColorPickerDrawEffect<0xba2779df> *colorPickerDraw() const { return m_colorPickerDraw.get(); }
+    void setPanelExpand(std::unique_ptr<PanelExpandEffect<0x4c42b870>> effect) { m_panelExpand = std::move(effect); }
+    PanelExpandEffect<0x4c42b870> *panelExpand() const { return m_panelExpand.get(); }
 
 private:
-    std::unique_ptr<ColorPickerDrawEffect<0x42ac9aaf>> m_colorPickerDraw;
-    std::unique_ptr<PanelExpandEffect<0x77a08c49>> m_panelExpand;
+    std::unique_ptr<ColorPickerDrawEffect<0xba2779df>> m_colorPickerDraw;
+    std::unique_ptr<PanelExpandEffect<0x4c42b870>> m_panelExpand;
 };
 
 } // namespace vf

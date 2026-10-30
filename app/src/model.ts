@@ -624,13 +624,14 @@ export function ensureComponentSvgFiles(project: Project): void {
   };
   if (!project.root || !fs.existsSync(project.root)) return;
   for (const comp of project.components.values()) {
+    if (comp.svgFiles !== undefined) continue;
     const folder = comp.folder ?? comp.decl.type;
     if (!folder) continue;
+    comp.svgFiles = {};
     const compDir = path.join(project.root, "components", folder);
     if (!fs.existsSync(compDir)) continue;
-    comp.svgFiles ??= {};
     for (const entry of fs.readdirSync(compDir, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.toLowerCase().endsWith(".svg") && !(entry.name in comp.svgFiles)) {
+      if (entry.isFile() && entry.name.toLowerCase().endsWith(".svg")) {
         comp.svgFiles[entry.name] = fs.readFileSync(path.join(compDir, entry.name), "utf8");
       }
     }

@@ -80,7 +80,7 @@
         "name": "ColorPickerDraw",
         "label": "调色盘自绘效果",
         "kind": "paint",
-        "hash": "42ac9aaf",
+        "hash": "ba2779df",
         "source": "effects/ColorPickerDraw/index.js",
         "className": "ColorPickerDrawEffect",
         "setter": "setColorPickerDraw",
@@ -90,7 +90,7 @@
         "name": "PanelExpand",
         "label": "面板展开",
         "kind": "visibility",
-        "hash": "77a08c49",
+        "hash": "4c42b870",
         "source": "effects/PanelExpand/index.js",
         "className": "PanelExpandEffect",
         "setter": "setPanelExpand",
@@ -99,6 +99,7 @@
     ]
   },
   "lastChanges": [
-    "效果 ColorPickerDraw：在工具里的实现改了，哈希从 0e198374 变成 42ac9aaf，需要对照 effects/ColorPickerDraw/index.js 重新翻译"
+    "效果 ColorPickerDraw：在工具里的实现改了，哈希从 42ac9aaf 变成 ba2779df，需要对照 effects/ColorPickerDraw/index.js 重新翻译",
+    "效果 PanelExpand：在工具里的实现改了，哈希从 77a08c49 变成 4c42b870，需要对照 effects/PanelExpand/index.js 重新翻译"
   ]
 }

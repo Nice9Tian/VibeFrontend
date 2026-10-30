@@ -60,6 +60,8 @@ async function injectComponentStyles(project: Project): Promise<string> {
 /** previous 用于在 YAML 写坏时沿用上一份有效的逻辑。 */
 export async function loadProject(previous: Project | null): Promise<Project> {
   const project = await loadProjectFiles({ root: projectRoot, readText, listDir }, previous);
+  const preCheckSet = new Set(check(project).map((p) => `${p.level}\0${p.message}`));
+  const loaderProblems = project.problems.filter((p) => !preCheckSet.has(`${p.level}\0${p.message}`));
   let svgSignature = "";
 
   for (const [, component] of project.components) {
@@ -85,10 +87,7 @@ export async function loadProject(previous: Project | null): Promise<Project> {
     component.svgFiles = svgFiles;
   }
 
-  // 重新运行静态检查（使浏览器模式下读取到的 SVG 文件也参与 SVG 兼容性检查）
-  project.problems = check(project);
-
-  for (const [type, component] of project.components) {
+  for (const [, component] of project.components) {
     if (component.source === undefined) continue;
     const entry = component.decl.entry ?? "index.js";
     const loaded = await importSource(`components/${component.folder}/${entry}`, component.source);
@@ -100,17 +99,18 @@ export async function loadProject(previous: Project | null): Promise<Project> {
       const svgFiles = component.svgFiles ?? {};
       if (stateImages) {
         component.create = (el, ctx) => {
+          const userInst = rawCreate(el, { ...ctx, stateImages, svgFiles });
           const stateInst = mountStateImageControl(el, {
             props: ctx.props,
             emit: ctx.emit,
+            mode: ctx.mode,
             stateImages,
             svgFiles,
           });
-          const userInst = rawCreate(el, { ...ctx, stateImages, svgFiles });
           return {
             update(next) {
-              stateInst.update(next);
               userInst?.update?.(next);
+              stateInst.update(next);
             },
             destroy() {
               userInst?.destroy?.();
@@ -122,10 +122,9 @@ export async function loadProject(previous: Project | null): Promise<Project> {
         component.create = rawCreate;
       }
     }
-    if (component.error) project.problems.push({ level: "error", message: `控件 ${type}：${component.error}` });
   }
 
-  for (const [name, effect] of project.effects) {
+  for (const [, effect] of project.effects) {
     const entry = effect.decl.entry ?? "index.js";
     const source = effect.files[entry];
     if (effect.error || source === undefined) continue;
@@ -138,8 +137,10 @@ export async function loadProject(previous: Project | null): Promise<Project> {
     } else {
       effect.play = loaded.module.default as EffectPlay;
     }
-    if (effect.error) project.problems.push({ level: "error", message: `效果 ${name}：${effect.error}` });
   }
+
+  // 重新运行静态检查（保留加载阶段的语法/缺失报错，并合并浏览器模式下读取到的 SVG 检查与模块导出检查）
+  project.problems = [...loaderProblems, ...check(project)];
 
   const css = await injectComponentStyles(project);
   project.signature += svgSignature + css;

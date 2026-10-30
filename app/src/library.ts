@@ -17,7 +17,7 @@ import {
   type Problem,
   type Project,
 } from "./model.ts";
-import { normalizeLf, structHashFromFiles } from "./structhash.ts";
+import { canonicalJson, normalizeLf, structHashFromFiles } from "./structhash.ts";
 
 export const ORIGINS_PATH = ".designer/origins.json";
 export const PAIRED_EFFECTS_PATH = ".designer/paired-effects.json";
@@ -139,7 +139,7 @@ export function parseComponentDecl(files: Record<string, string>, fallbackType: 
 export function computeEffectHash(files: Record<string, string>, fallbackName = "Effect"): string {
   let decl: EffectDecl = { name: fallbackName, kind: "visibility" };
   try {
-    const parsed = JSON.parse(files["effect.json"] ?? "{}") as Partial<EffectDecl>;
+    const parsed = JSON.parse(normalizeLf(files["effect.json"] ?? "{}")) as Partial<EffectDecl>;
     decl = {
       ...parsed,
       name: parsed.name || fallbackName,
@@ -149,13 +149,37 @@ export function computeEffectHash(files: Record<string, string>, fallbackName = 
     // ignore
   }
   const { label: _label, description: _description, ...rest } = decl;
-  const declKeys = Object.keys(rest).sort();
   const body = Object.keys(files)
-    .filter((name) => name !== "effect.json")
+    .filter((name) => name !== "effect.json" && isSafePathSegment(name))
     .sort()
-    .map((name) => [name, files[name].replace(/\r\n/g, "\n")]);
-  const canonical = JSON.stringify([declKeys.map((key) => [key, (rest as Record<string, unknown>)[key]]), body]);
+    .map((name) => [name, normalizeLf(files[name])]);
+  const canonical = JSON.stringify([canonicalJson(rest), body]);
   return md5(canonical).slice(0, 8);
+}
+
+/** 过滤并清洗 pairedEffects 表，剔除任何不安全的效果名或文件名，并可选按控件实际引用的效果名集合过滤。 */
+export function sanitizePairedEffects(
+  raw: Record<string, PairedEffect> | undefined | null,
+  allowedEffectNames?: Set<string>,
+): Record<string, PairedEffect> {
+  const out: Record<string, PairedEffect> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [effKey, paired] of Object.entries(raw)) {
+    if (!isSafePathSegment(effKey) || !paired || typeof paired !== "object") continue;
+    if (allowedEffectNames && !allowedEffectNames.has(effKey)) continue;
+    const safeFiles: Record<string, string> = {};
+    for (const [k, v] of Object.entries(paired.files ?? {})) {
+      if (isSafePathSegment(k) && typeof v === "string") safeFiles[k] = normalizeLf(v);
+    }
+    const safeQtFiles: Record<string, string> = {};
+    for (const [k, v] of Object.entries(paired.qtFiles ?? {})) {
+      if (isSafePathSegment(k) && typeof v === "string") safeQtFiles[k] = normalizeLf(v);
+    }
+    const safeName =
+      typeof paired.name === "string" && isSafePathSegment(paired.name.trim()) ? paired.name.trim() : effKey;
+    out[effKey] = collectPairedEffect(safeName, safeFiles, safeQtFiles);
+  }
+  return out;
 }
 
 /**
@@ -169,8 +193,8 @@ export function collectPairedEffect(
 ): PairedEffect {
   const safeName = isSafePathSegment(name.trim()) ? name.trim() : "Effect";
   const normalizedFiles: Record<string, string> = {};
-  for (const [k, v] of Object.entries(files)) {
-    if (isSafePathSegment(k)) normalizedFiles[k] = normalizeLf(v);
+  for (const [k, v] of Object.entries(files ?? {})) {
+    if (isSafePathSegment(k) && typeof v === "string") normalizedFiles[k] = normalizeLf(v);
   }
   let decl: Partial<EffectDecl> = {};
   try {
@@ -182,15 +206,15 @@ export function collectPairedEffect(
     normalizedFiles["effect.json"] =
       JSON.stringify({ name: safeName, kind: decl.kind ?? "visibility", entry: "index.js" }, null, 2) + "\n";
   }
-  const hash = computeEffectHash(normalizedFiles);
+  const hash = computeEffectHash(normalizedFiles, safeName);
   const normalizedQtFiles: Record<string, string> = {};
   const hashRe = new RegExp(`(\\b${safeName}Effect\\s*<\\s*0x)[0-9a-fA-F]+(u?\\s*>)`, "g");
-  for (const [k, v] of Object.entries(qtFiles)) {
-    if (!isSafePathSegment(k)) continue;
+  for (const [k, v] of Object.entries(qtFiles ?? {})) {
+    if (!isSafePathSegment(k) || typeof v !== "string") continue;
     normalizedQtFiles[k] = normalizeLf(v).replace(hashRe, `$1${hash}u>`);
   }
   return {
-    name: decl.name || safeName,
+    name: decl.name && isSafePathSegment(decl.name) ? decl.name : safeName,
     label: decl.label ?? safeName,
     description: decl.description ?? "",
     kind: decl.kind ?? "visibility",
@@ -591,7 +615,13 @@ export function prepareLibraryComponentForProject(
   const workingEffects: Record<string, Record<string, string>> = { ...projectEffects };
   const workingQt: Record<string, string> = { ...projectQtEffects };
 
-  for (const [effName, paired] of Object.entries(fav.pairedEffects ?? {})) {
+  const favDecl = parseComponentDecl(fav.files, safeFavType);
+  const favAllowedEffects = new Set(effectsForComponent(favDecl));
+  const sanitizedFavPaired = sanitizePairedEffects(
+    fav.pairedEffects,
+    favAllowedEffects.size > 0 ? favAllowedEffects : undefined,
+  );
+  for (const [effName, paired] of Object.entries(sanitizedFavPaired)) {
     if (!paired || typeof paired !== "object") continue;
     const effRes = preparePairedEffectForProject(paired, workingEffects, workingQt);
     if (effRes.copiedEffectFiles) {
@@ -602,12 +632,16 @@ export function prepareLibraryComponentForProject(
       copiedQtEffects[qf] = qc;
       workingQt[qf] = qc;
     }
+    const safeOrigQtFiles: Record<string, string> = {};
+    for (const [qf, qc] of Object.entries(paired.qtFiles ?? {})) {
+      if (isSafePathSegment(qf) && typeof qc === "string") safeOrigQtFiles[qf] = normalizeLf(qc);
+    }
     pairedOut[effRes.localEffectName] = {
       ...paired,
       name: effRes.localEffectName,
       hash: effRes.hash,
       files: effRes.copiedEffectFiles ?? workingEffects[effRes.localEffectName] ?? paired.files,
-      qtFiles: { ...paired.qtFiles, ...effRes.copiedQtFiles },
+      qtFiles: effRes.action === "reuse" ? { ...safeOrigQtFiles, ...effRes.copiedQtFiles } : { ...effRes.copiedQtFiles },
     };
     if (effRes.localEffectName !== effName) {
       effectRenameMap.set(effName, effRes.localEffectName);
@@ -763,12 +797,14 @@ export function collectComponentInLibrary(
 
   const rawId = existingIdx >= 0 ? library[existingIdx].id : makeId();
   const id = isSafePathSegment(rawId) ? rawId : `fav-${Date.now().toString(36)}`;
-  const mergedPaired =
+  const neededEffects = new Set(effectsForComponent(decl));
+  const rawPaired =
     pairedEffects && Object.keys(pairedEffects).length > 0
       ? pairedEffects
       : existingIdx >= 0
         ? library[existingIdx].pairedEffects
         : undefined;
+  const mergedPaired = neededEffects.size > 0 ? sanitizePairedEffects(rawPaired, neededEffects) : {};
   const item: LibraryItem = {
     id,
     type: safeType,
@@ -777,7 +813,7 @@ export function collectComponentInLibrary(
     hash,
     sourceProjectId,
     files: normalizedFiles,
-    ...(mergedPaired && Object.keys(mergedPaired).length > 0 ? { pairedEffects: mergedPaired } : {}),
+    ...(Object.keys(mergedPaired).length > 0 ? { pairedEffects: mergedPaired } : {}),
   };
   const nextLibrary = [...library];
   if (existingIdx >= 0) nextLibrary[existingIdx] = item;
@@ -810,13 +846,19 @@ export function updateLibraryItemFromProject(
   const prev = library[idx];
   const updatedFiles = rewriteComponentIdentity(localFiles, prev.type, prev.label);
   const hash = structHashFromFiles(updatedFiles);
-  const mergedPaired = pairedEffects ?? prev.pairedEffects;
+  const decl = parseComponentDecl(updatedFiles, prev.type);
+  const neededEffects = new Set(effectsForComponent(decl));
+  const mergedPaired =
+    neededEffects.size > 0 ? sanitizePairedEffects(pairedEffects ?? prev.pairedEffects, neededEffects) : {};
   const item: LibraryItem = {
     ...prev,
     hash,
     files: updatedFiles,
-    ...(mergedPaired && Object.keys(mergedPaired).length > 0 ? { pairedEffects: mergedPaired } : {}),
+    ...(Object.keys(mergedPaired).length > 0 ? { pairedEffects: mergedPaired } : {}),
   };
+  if (Object.keys(mergedPaired).length === 0) {
+    delete item.pairedEffects;
+  }
   const nextLibrary = [...library];
   nextLibrary[idx] = item;
   const nextOrigins: OriginsFile = {
@@ -849,11 +891,13 @@ export function replaceProjectComponentWithLibrary(
   const removedFiles = Object.keys(localFiles).filter((name) => isSafePathSegment(name) && !(name in writtenFiles));
   const writtenEffects: Record<string, Record<string, string>> = {};
   const writtenQtEffects: Record<string, string> = {};
-  for (const [effName, paired] of Object.entries(fav.pairedEffects ?? {})) {
-    if (!paired) continue;
+  const sanitizedPaired = sanitizePairedEffects(fav.pairedEffects);
+  for (const [effName, paired] of Object.entries(sanitizedPaired)) {
     writtenEffects[effName] = { ...paired.files };
     for (const [qf, qc] of Object.entries(paired.qtFiles ?? {})) {
-      writtenQtEffects[qf] = qc;
+      if (isSafePathSegment(qf) && typeof qc === "string") {
+        writtenQtEffects[qf] = qc;
+      }
     }
   }
   const nextOrigins: OriginsFile = {
@@ -916,9 +960,31 @@ async function loadUserLibrary(): Promise<LibraryItem[]> {
     try {
       const raw = localStorage.getItem(LOCAL_STORAGE_LIB_KEY);
       const parsed = raw ? (JSON.parse(raw) as LibraryItem[]) : [];
-      return Array.isArray(parsed)
-        ? parsed.filter((item) => item && isSafePathSegment(item.id) && isSafePathSegment(item.type))
-        : [];
+      if (!Array.isArray(parsed)) return [];
+      const out: LibraryItem[] = [];
+      for (const item of parsed) {
+        if (!item || !isSafePathSegment(item.id) || !isSafePathSegment(item.type)) continue;
+        const safeFiles: Record<string, string> = {};
+        for (const [k, v] of Object.entries(item.files ?? {})) {
+          if (isSafePathSegment(k) && typeof v === "string") safeFiles[k] = normalizeLf(v);
+        }
+        if (!safeFiles["component.json"]) continue;
+        const decl = parseComponentDecl(safeFiles, item.type);
+        const neededEffects = new Set(effectsForComponent(decl));
+        const safePaired =
+          neededEffects.size > 0
+            ? sanitizePairedEffects(item.pairedEffects, neededEffects)
+            : sanitizePairedEffects(item.pairedEffects);
+        out.push({
+          ...item,
+          files: safeFiles,
+          ...(Object.keys(safePaired).length > 0 ? { pairedEffects: safePaired } : {}),
+        });
+        if (Object.keys(safePaired).length === 0) {
+          delete out[out.length - 1].pairedEffects;
+        }
+      }
+      return out;
     } catch {
       return [];
     }
@@ -938,6 +1004,12 @@ async function loadUserLibrary(): Promise<LibraryItem[]> {
         if (content !== null) files[name] = normalizeLf(content);
       }
       if (!files["component.json"]) continue;
+      const decl = parseComponentDecl(files, entry.type);
+      const neededEffects = new Set(effectsForComponent(decl));
+      const safePaired =
+        neededEffects.size > 0
+          ? sanitizePairedEffects(entry.pairedEffects, neededEffects)
+          : sanitizePairedEffects(entry.pairedEffects);
       items.push({
         id: entry.id,
         type: entry.type,
@@ -946,9 +1018,7 @@ async function loadUserLibrary(): Promise<LibraryItem[]> {
         hash: entry.hash || structHashFromFiles(files),
         sourceProjectId: entry.sourceProjectId ?? "",
         files,
-        ...(entry.pairedEffects && Object.keys(entry.pairedEffects).length > 0
-          ? { pairedEffects: entry.pairedEffects }
-          : {}),
+        ...(Object.keys(safePaired).length > 0 ? { pairedEffects: safePaired } : {}),
       });
     }
     return items;
@@ -1327,6 +1397,118 @@ function openCompareModal(
   document.body.append(backdrop);
 }
 
+async function readAllUiEffectFilesFromProject(project: Project): Promise<Record<string, string>> {
+  const allQtFiles: Record<string, string> = {};
+  if (!host) return allQtFiles;
+  const candidateDirs: string[] = [];
+  if (project.qtExportDir) {
+    candidateDirs.push(`${project.qtExportDir.replace(/[\\/]+$/, "")}/ui_effects`);
+  }
+  candidateDirs.push("ui_effects");
+
+  for (const dir of candidateDirs) {
+    try {
+      const entries = await host.listDir(dir);
+      if (!Array.isArray(entries)) continue;
+      for (const entry of entries) {
+        if (entry.isDir || !isSafePathSegment(entry.name)) continue;
+        if (!entry.name.endsWith(".h") && !entry.name.endsWith(".cpp")) continue;
+        if (entry.name === "EffectsSetup.h" || entry.name === "EffectsSetup.cpp") continue;
+        const text = await host.readText(`${dir}/${entry.name}`);
+        if (typeof text === "string") allQtFiles[entry.name] = normalizeLf(text);
+      }
+    } catch {
+      // 忽略不在项目目录内或不存在的路径
+    }
+  }
+
+  const g = globalThis as {
+    process?: { versions?: { node?: string }; getBuiltinModule?: (id: string) => unknown };
+  };
+  if (project.root && g.process?.versions?.node && typeof g.process.getBuiltinModule === "function") {
+    try {
+      const fs = g.process.getBuiltinModule("node:fs") as {
+        existsSync(p: string): boolean;
+        readdirSync(p: string, opts: { withFileTypes: true }): Array<{ name: string; isFile(): boolean }>;
+        readFileSync(p: string, enc: "utf8"): string;
+      };
+      const pathMod = g.process.getBuiltinModule("node:path") as { resolve(...parts: string[]): string; join(...parts: string[]): string };
+      const fsDirs = [
+        project.qtExportDir ? pathMod.resolve(project.root, project.qtExportDir, "ui_effects") : "",
+        pathMod.resolve(project.root, "../qt/ui/ui_effects"),
+        pathMod.resolve(project.root, "ui_effects"),
+      ].filter(Boolean);
+      for (const fsDir of fsDirs) {
+        if (!fs.existsSync(fsDir)) continue;
+        for (const entry of fs.readdirSync(fsDir, { withFileTypes: true })) {
+          if (!entry.isFile() || !isSafePathSegment(entry.name)) continue;
+          if (!entry.name.endsWith(".h") && !entry.name.endsWith(".cpp")) continue;
+          if (entry.name === "EffectsSetup.h" || entry.name === "EffectsSetup.cpp") continue;
+          if (!(entry.name in allQtFiles)) {
+            allQtFiles[entry.name] = normalizeLf(fs.readFileSync(pathMod.join(fsDir, entry.name), "utf8"));
+          }
+        }
+      }
+    } catch {
+      // 忽略
+    }
+  }
+
+  return allQtFiles;
+}
+
+function matchQtFilesForEffect(name: string, allQtFiles: Record<string, string>): Record<string, string> {
+  const matched: Record<string, string> = {};
+  const matchedStems = new Set<string>([`${name}Effect`, name]);
+  for (const [fileName, content] of Object.entries(allQtFiles)) {
+    if (!isSafePathSegment(fileName) || typeof content !== "string") continue;
+    if (content.includes(`${name}Effect<`)) {
+      const dot = fileName.lastIndexOf(".");
+      if (dot > 0) matchedStems.add(fileName.slice(0, dot));
+      matched[fileName] = content;
+    }
+  }
+  for (const [fileName, content] of Object.entries(allQtFiles)) {
+    if (!isSafePathSegment(fileName) || typeof content !== "string") continue;
+    const dot = fileName.lastIndexOf(".");
+    const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
+    if (matchedStems.has(stem)) {
+      matched[fileName] = content;
+    }
+  }
+  return matched;
+}
+
+async function readAllProjectEffectFiles(project: Project): Promise<Record<string, Record<string, string>>> {
+  const out: Record<string, Record<string, string>> = {};
+  for (const [name, eff] of project.effects) {
+    if (!isSafePathSegment(name)) continue;
+    const copy: Record<string, string> = {};
+    for (const [k, v] of Object.entries(eff.files ?? {})) {
+      if (isSafePathSegment(k) && typeof v === "string") copy[k] = normalizeLf(v);
+    }
+    if (Object.keys(copy).length > 0) out[name] = copy;
+  }
+  if (!host) return out;
+  try {
+    const dirEntries = await host.listDir("effects");
+    for (const dirEntry of dirEntries) {
+      if (!dirEntry.isDir || !isSafePathSegment(dirEntry.name)) continue;
+      const files = await host.listDir(`effects/${dirEntry.name}`);
+      const fileMap: Record<string, string> = { ...(out[dirEntry.name] ?? {}) };
+      for (const f of files) {
+        if (f.isDir || !isSafePathSegment(f.name)) continue;
+        const text = await host.readText(`effects/${dirEntry.name}/${f.name}`);
+        if (typeof text === "string") fileMap[f.name] = normalizeLf(text);
+      }
+      if (fileMap["effect.json"]) out[dirEntry.name] = fileMap;
+    }
+  } catch {
+    // 忽略
+  }
+  return out;
+}
+
 async function readPairedEffectsFromProject(project: Project): Promise<Record<string, PairedEffect>> {
   const result: Record<string, PairedEffect> = {};
   if (!host) return result;
@@ -1334,29 +1516,22 @@ async function readPairedEffectsFromProject(project: Project): Promise<Record<st
     const raw = await host.readText(PAIRED_EFFECTS_PATH);
     if (raw) {
       const parsed = JSON.parse(raw) as { effects?: Record<string, PairedEffect> };
-      if (parsed.effects && typeof parsed.effects === "object") {
-        Object.assign(result, parsed.effects);
-      }
+      Object.assign(result, sanitizePairedEffects(parsed.effects));
     }
   } catch {
     // 忽略
   }
-  for (const [name, _eff] of project.effects) {
-    if (!isSafePathSegment(name)) continue;
-    const entries = await host.listDir(`effects/${name}`);
-    const designFiles: Record<string, string> = {};
-    for (const entry of entries) {
-      if (entry.isDir || !isSafePathSegment(entry.name)) continue;
-      const text = await host.readText(`effects/${name}/${entry.name}`);
-      if (text !== null) designFiles[entry.name] = text;
-    }
-    if (!designFiles["effect.json"]) continue;
+  const allUiEffectFiles = await readAllUiEffectFilesFromProject(project);
+  const projectEffectFiles = await readAllProjectEffectFiles(project);
+  for (const [name, designFiles] of Object.entries(projectEffectFiles)) {
+    if (!isSafePathSegment(name) || !designFiles["effect.json"]) continue;
     const existing = result[name];
-    result[name] = collectPairedEffect(
-      name,
-      designFiles,
-      existing?.qtFiles ?? {},
-    );
+    const fromUiEffects = matchQtFilesForEffect(name, allUiEffectFiles);
+    const mergedQtFiles: Record<string, string> = {
+      ...(existing?.qtFiles ?? {}),
+      ...fromUiEffects,
+    };
+    result[name] = collectPairedEffect(name, designFiles, mergedQtFiles);
   }
   return result;
 }
@@ -1369,22 +1544,23 @@ async function writePairedEffectsToProject(
   for (const [effName, files] of Object.entries(copiedEffects)) {
     if (!isSafePathSegment(effName)) continue;
     for (const [fileName, content] of Object.entries(files)) {
-      if (!isSafePathSegment(fileName)) continue;
+      if (!isSafePathSegment(fileName) || typeof content !== "string") continue;
       await host.writeText(`effects/${effName}/${fileName}`, content);
     }
   }
-  if (Object.keys(pairedEffects).length > 0) {
+  const sanitizedIncoming = sanitizePairedEffects(pairedEffects);
+  if (Object.keys(sanitizedIncoming).length > 0) {
     let existing: Record<string, PairedEffect> = {};
     try {
       const raw = await host.readText(PAIRED_EFFECTS_PATH);
       if (raw) {
         const parsed = JSON.parse(raw) as { effects?: Record<string, PairedEffect> };
-        if (parsed.effects && typeof parsed.effects === "object") existing = parsed.effects;
+        existing = sanitizePairedEffects(parsed.effects);
       }
     } catch {
       // 忽略
     }
-    const merged = { ...existing, ...pairedEffects };
+    const merged = { ...existing, ...sanitizedIncoming };
     await host.writeText(PAIRED_EFFECTS_PATH, JSON.stringify({ version: 1, effects: merged }, null, 2) + "\n");
   }
 }
@@ -1396,9 +1572,25 @@ async function writePairedEffectsToProject(
 async function ensureFavoriteInProject(fav: LibraryItem): Promise<string | null> {
   if (!host) return null;
   const project = host.getProject();
-  const projectComponents = await readAllProjectComponentFiles(project);
-  const origins = await readOrigins();
-  const prepared = prepareLibraryComponentForProject(fav, projectComponents, origins);
+  const [projectComponents, origins, projectEffects, projectPaired] = await Promise.all([
+    readAllProjectComponentFiles(project),
+    readOrigins(),
+    readAllProjectEffectFiles(project),
+    readPairedEffectsFromProject(project),
+  ]);
+  const projectQtEffects: Record<string, string> = {};
+  for (const p of Object.values(projectPaired)) {
+    for (const [qf, qc] of Object.entries(p.qtFiles ?? {})) {
+      if (isSafePathSegment(qf) && typeof qc === "string") projectQtEffects[qf] = qc;
+    }
+  }
+  const prepared = prepareLibraryComponentForProject(
+    fav,
+    projectComponents,
+    origins,
+    projectEffects,
+    projectQtEffects,
+  );
 
   if (prepared.copiedFiles) {
     await writeComponentFolder(prepared.localType, prepared.copiedFiles);

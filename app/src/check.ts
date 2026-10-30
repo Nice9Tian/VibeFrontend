@@ -591,12 +591,15 @@ export function check(project: Project): Problem[] {
   // 状态图片与 SVG 写法检查（components/ 与 effects/）
   ensureComponentSvgFiles(project);
   for (const [type, comp] of project.components) {
+    if (comp.error) {
+      error(`控件 ${type}：${comp.error}`);
+    }
     const folder = comp.folder ?? type;
     if (comp.decl.stateImages) {
       if (!comp.decl.stateImages.normal) {
         error(`控件 ${type}：stateImages 必须至少提供 normal 状态对应的 SVG 文件名`);
       }
-      if (comp.svgFiles && Object.keys(comp.svgFiles).length > 0) {
+      if (comp.svgFiles !== undefined) {
         for (const key of STATE_IMAGE_KEYS) {
           const fname = comp.decl.stateImages[key];
           if (fname && !(fname in comp.svgFiles)) {

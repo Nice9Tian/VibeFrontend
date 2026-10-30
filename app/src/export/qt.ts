@@ -625,11 +625,19 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
         const parsed = JSON.parse(fs.readFileSync(pairedPath, "utf8")) as {
           effects?: Record<string, { hash?: string; qtFiles?: Record<string, string> }>;
         };
+        const isSafeSegment = (seg: string): boolean => {
+          if (!seg || typeof seg !== "string") return false;
+          const trimmed = seg.trim();
+          if (!trimmed || trimmed !== seg || seg === "." || seg === "..") return false;
+          return !/[/\\:\u0000-\u001f<>|?*]/.test(seg);
+        };
         for (const eff of effects) {
+          if (!isSafeSegment(eff.name)) continue;
           const paired = parsed.effects?.[eff.name];
-          if (paired && paired.hash === eff.hash && paired.qtFiles) {
+          if (paired && paired.hash === eff.hash && paired.qtFiles && typeof paired.qtFiles === "object") {
             for (const [fName, content] of Object.entries(paired.qtFiles)) {
-              scaffold.set(`ui_effects/${fName}`, content.replace(/\r\n/g, "\n"));
+              if (!isSafeSegment(fName) || typeof content !== "string") continue;
+              scaffold.set(`ui_effects/${fName}`, content.replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
             }
           }
         }

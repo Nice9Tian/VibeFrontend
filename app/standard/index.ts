@@ -394,11 +394,14 @@ export function mountStateImageControl(
   ctx: {
     props: Record<string, Value>;
     emit: (event: string, value?: Value) => void;
+    mode?: "design" | "preview" | "edit";
     stateImages: StateImagesDecl;
     svgFiles: Record<string, string>;
   },
 ): ComponentInstance {
   const { stateImages, svgFiles, emit } = ctx;
+  const isEditMode = (): boolean =>
+    ctx.mode === "design" || ctx.mode === "edit" || Boolean(el.closest("#window.edit"));
   const slice = normalizeStateImageSlice(stateImages);
   const transitionMs = typeof stateImages.transitionMs === "number" && Number.isFinite(stateImages.transitionMs)
     ? Math.max(0, stateImages.transitionMs)
@@ -441,6 +444,12 @@ export function mountStateImageControl(
   let pressed = false;
 
   const syncVisual = () => {
+    if (root.parentElement !== el) el.append(root);
+    const edit = isEditMode();
+    if (edit) {
+      hovered = false;
+      pressed = false;
+    }
     const enabled = currentProps.enabled !== false;
     if (!enabled) pressed = false;
     const selected = Boolean(
@@ -448,8 +457,8 @@ export function mountStateImageControl(
     );
     const resolved = resolveStateImage(fakeDecl, {
       enabled,
-      pressed: pressed || currentProps.pressed === true,
-      hovered: hovered || currentProps.hovered === true,
+      pressed: (!edit && pressed) || currentProps.pressed === true,
+      hovered: (!edit && hovered) || currentProps.hovered === true,
       selected,
     }) ?? { state: "normal" as const, file: stateImages.normal };
 
@@ -460,7 +469,7 @@ export function mountStateImageControl(
     root.dataset.stateImage = resolved.file;
     el.dataset.vfState = resolved.state;
     el.dataset.vfStateImage = resolved.file;
-    root.style.cursor = enabled ? "pointer" : "not-allowed";
+    root.style.cursor = edit ? "default" : enabled ? "pointer" : "not-allowed";
 
     textSpan.textContent = String(currentProps.text ?? "");
     if (typeof currentProps.textColor === "string" && currentProps.textColor) {
@@ -475,7 +484,7 @@ export function mountStateImageControl(
   };
 
   root.addEventListener("mouseenter", () => {
-    if (currentProps.enabled === false) return;
+    if (isEditMode() || currentProps.enabled === false) return;
     hovered = true;
     syncVisual();
   });
@@ -485,7 +494,7 @@ export function mountStateImageControl(
     syncVisual();
   });
   root.addEventListener("mousedown", (e) => {
-    if (e.button !== 0 || currentProps.enabled === false) return;
+    if (isEditMode() || e.button !== 0 || currentProps.enabled === false) return;
     pressed = true;
     syncVisual();
   });
@@ -495,7 +504,7 @@ export function mountStateImageControl(
     syncVisual();
   });
   root.addEventListener("click", () => {
-    if (currentProps.enabled === false) return;
+    if (isEditMode() || currentProps.enabled === false) return;
     if (currentProps.checkable) emit("toggle", !currentProps.checked);
   });
 
