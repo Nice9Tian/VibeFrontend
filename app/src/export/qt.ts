@@ -505,12 +505,7 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
   for (const child of topIds) visit(child, rootParentVar);
 
   for (const type of [...unmappedTypes].sort()) {
-    if (type) {
-      hint(`控件类型 ${type} 没有写在 Qt 里对应什么（component.json 的 qt），导出后是一个占位框；事件、状态和逻辑照常工作`);
-
-    } else {
-      void type;
-    }
+    hint(`控件类型 ${type} 没有写在 Qt 里对应什么（component.json 的 qt），导出后是一个占位框；事件、状态和逻辑照常工作`);
   }
   for (const name of [...unmappedProps].sort()) {
     hint(`属性 ${name} 在 Qt 里没有对应的属性，导出后不起作用`);

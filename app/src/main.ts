@@ -4397,6 +4397,7 @@ async function openExportQtModal(): Promise<void> {
     summaryText: string | null,
     changes: string[] | null,
     problems: Array<{ level: "error" | "hint"; message: string }>,
+    hasPrevious = false,
   ) => {
     resultBox.replaceChildren();
 
@@ -4431,7 +4432,11 @@ async function openExportQtModal(): Promise<void> {
         const empty = document.createElement("div");
         empty.className = "muted";
         empty.style.fontSize = "12px";
-        empty.textContent = "接口和上一次导出相同（无新增、删除或签名变化）。";
+        empty.textContent = !isInTauri()
+          ? "浏览器模式下无法读取目标目录的导出记录 vf-export.json，按第一次导出预览。"
+          : !hasPrevious
+            ? "这是第一次导出到这个文件夹。"
+            : "接口和上一次导出相同（无新增、删除或签名变化）。";
         changeSec.append(empty);
       } else {
         const ul = document.createElement("ul");
@@ -4563,9 +4568,17 @@ async function openExportQtModal(): Promise<void> {
         summaryText,
         result.changes,
         allProblems,
+        previous !== null,
       );
     } catch (e) {
-      renderResultView("error", `写入导出目录失败：${(e as Error).message}`, summaryText, result.changes, allProblems);
+      renderResultView(
+        "error",
+        `写入导出目录失败：${(e as Error).message}`,
+        summaryText,
+        result.changes,
+        allProblems,
+        previous !== null,
+      );
     }
   };
 

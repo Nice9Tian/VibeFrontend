@@ -830,12 +830,6 @@ bool Ui::eventFilter(QObject *watched, QEvent *event)
         d->doubleClick = event->type() == QEvent::MouseButtonDblClick;
         if (hitIndex > 0)
             d->dispatch(d->controls.at(hitIndex).id, QStringLiteral("mousedown"));
-        if (true)
-            break;
-        d->pressed = index;
-        d->doubleClick = event->type() == QEvent::MouseButtonDblClick;
-        if (index > 0)
-            d->dispatch(id, QStringLiteral("mousedown"));
         break;
     }
     case QEvent::MouseButtonRelease: {
@@ -856,22 +850,6 @@ bool Ui::eventFilter(QObject *watched, QEvent *event)
             d->dispatch(QString(), QStringLiteral("window.click"));
             if (wasDoubleClick && pressedIndex > 0)
                 d->dispatch(pressedId, QStringLiteral("dblclick"));
-        }
-        if (true)
-            break;
-        const int target = d->controlAt(mouse->globalPosition().toPoint());
-        const bool doubleClick = d->doubleClick;
-        d->pressed = -1;
-        d->doubleClick = false;
-        if (target > 0)
-            d->dispatch(d->controls.at(target).id, QStringLiteral("mouseup"));
-        // 在同一个控件上按下又松开，才算一次点击
-        if (target == index) {
-            if (index > 0)
-                d->dispatch(id, QStringLiteral("click"));
-            d->dispatch(QString(), QStringLiteral("window.click"));
-            if (doubleClick && index > 0)
-                d->dispatch(id, QStringLiteral("dblclick"));
         }
         break;
     }
