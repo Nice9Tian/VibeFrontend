@@ -143,6 +143,34 @@ export interface QtMapping {
   events?: Record<string, { signal: string; type?: "string" | "number" | "boolean" }>;
 }
 
+export const STATE_IMAGE_KEYS = ["normal", "hover", "pressed", "selected", "disabled"] as const;
+export type StateImageKey = (typeof STATE_IMAGE_KEYS)[number];
+
+/**
+ * 状态图片声明（正常、悬停、按下、选中、不可用）。
+ * 不需要翻译，两边渲染同一套 SVG 文件；支持九宫格切线、透明度过渡与文字单独绘制。
+ */
+export interface StateImagesDecl {
+  normal: string;
+  hover?: string;
+  pressed?: string;
+  selected?: string;
+  disabled?: string;
+  /** 九宫格四条切线在 SVG viewBox 坐标系中的边距：[上, 右, 下, 左] */
+  slice?: [number, number, number, number];
+  /** slice 的别名：[上, 右, 下, 左] */
+  ninePatch?: [number, number, number, number];
+  /** 状态切换时的透明度过渡时长（毫秒，默认 120） */
+  transitionMs?: number;
+}
+
+export interface ComponentEffectsDecl {
+  /** 显示与隐藏时的过渡效果名 */
+  visible?: string;
+  /** 自绘控件的绘制效果名 */
+  paint?: string;
+}
+
 export interface ComponentDecl {
   type: string;
   label?: string;
@@ -155,6 +183,10 @@ export interface ComponentDecl {
   entry?: string;
   style?: string;
   qt?: QtMapping;
+  /** 状态图片配置（正常、悬停、按下、选中、不可用，两边渲染同一套 SVG） */
+  stateImages?: StateImagesDecl;
+  /** 控件自带的“需要翻译”的效果（过渡效果或绘制效果） */
+  effects?: ComponentEffectsDecl;
 }
 
 export interface ComponentInstance {
@@ -164,7 +196,13 @@ export interface ComponentInstance {
 
 export type ComponentCreate = (
   el: HTMLElement,
-  ctx: { props: Record<string, Value>; emit: (event: string, value?: Value) => void; mode: "design" | "preview" },
+  ctx: {
+    props: Record<string, Value>;
+    emit: (event: string, value?: Value) => void;
+    mode: "design" | "preview";
+    stateImages?: StateImagesDecl;
+    svgFiles?: Record<string, string>;
+  },
 ) => ComponentInstance;
 
 export interface LoadedComponent {
@@ -173,6 +211,8 @@ export interface LoadedComponent {
   folder?: string;
   /** 实现文件的原文 */
   source?: string;
+  /** 控件文件夹内的 SVG 文件：文件名 → SVG 原文 */
+  svgFiles?: Record<string, string>;
   /** 只在工具界面里有：实现文件加载后得到的创建函数 */
   create?: ComponentCreate;
   error?: string;
@@ -255,8 +295,16 @@ export const BUILTIN_TYPES = [
 
 // ---------- 效果 ----------
 
-/** 效果的种类。目前只有一种：控件显示和隐藏时的过渡。 */
-export const EFFECT_KINDS = ["visibility"];
+/** 效果的种类：过渡效果（visibility / transition，控件显示和隐藏时的过渡）和绘制效果（paint，取色器等自绘内容）。 */
+export const EFFECT_KINDS = ["visibility", "transition", "paint"];
+
+export function isPaintEffect(kind?: string): boolean {
+  return kind === "paint";
+}
+
+export function isTransitionEffect(kind?: string): boolean {
+  return !kind || kind === "visibility" || kind === "transition";
+}
 
 export interface EffectDecl {
   name: string;
@@ -269,6 +317,12 @@ export interface EffectDecl {
 /** 显示隐藏过渡在网页里的实现：播放完成时返回的 Promise 结束。 */
 export type EffectPlay = (el: HTMLElement, ctx: { showing: boolean }) => Promise<unknown> | { finished: Promise<unknown> } | void;
 
+/** 绘制效果在网页里的实现：根据控件矩形尺寸和当前属性参数把画面画进 el。 */
+export type EffectPaint = (
+  el: HTMLElement,
+  ctx: { props: Record<string, Value>; width: number; height: number },
+) => void;
+
 export interface LoadedEffect {
   decl: EffectDecl;
   folder: string;
@@ -276,8 +330,10 @@ export interface LoadedEffect {
   files: Record<string, string>;
   /** 由名字、种类和实现算出的哈希，8 位十六进制。导出到 Qt 时用它对接。 */
   hash: string;
-  /** 只在工具界面里有 */
+  /** 过渡效果在工具界面里的实现 */
   play?: EffectPlay;
+  /** 绘制效果在工具界面里的实现 */
+  paint?: EffectPaint;
   error?: string;
 }
 
@@ -481,6 +537,104 @@ export function declFor(project: RuntimeProject, type: string): ComponentDecl | 
   if (type === "Shape") return SHAPE_DECL;
   if (type === "Line") return LINE_DECL;
   return project.components.get(type)?.decl ?? STANDARD_COMPONENTS.get(type)?.decl ?? null;
+}
+
+/** 获取某个控件声明自身携带的需要翻译的效果名列表。 */
+export function effectsForComponent(decl: ComponentDecl | null | undefined): string[] {
+  if (!decl?.effects) return [];
+  const names: string[] = [];
+  if (decl.effects.visible) names.push(decl.effects.visible);
+  if (decl.effects.paint && !names.includes(decl.effects.paint)) names.push(decl.effects.paint);
+  return names;
+}
+
+/** 获取某个画布节点关联的过渡效果与绘制效果（合并 logic.objects.<id>.effects 与控件声明 decl.effects）。 */
+export function effectsForNode(project: RuntimeProject, id: string): { visible?: string; paint?: string } {
+  const node = project.scene.nodes[id];
+  const decl = node ? declFor(project, node.type) : null;
+  const objEffects = project.logic.objects?.[id]?.effects;
+  const visible = objEffects?.visible ?? decl?.effects?.visible;
+  const paint = objEffects?.paint ?? decl?.effects?.paint;
+  return {
+    ...(visible ? { visible } : {}),
+    ...(paint ? { paint } : {}),
+  };
+}
+
+export function visibleEffectForNode(project: RuntimeProject, id: string): string | undefined {
+  return effectsForNode(project, id).visible;
+}
+
+export function paintEffectForNode(project: RuntimeProject, id: string): string | undefined {
+  return effectsForNode(project, id).paint;
+}
+
+/** 归一化状态图片的九宫格四条切线 [top, right, bottom, left]。 */
+export function normalizeStateImageSlice(stateImages?: StateImagesDecl): [number, number, number, number] {
+  const raw = stateImages?.slice ?? stateImages?.ninePatch;
+  if (Array.isArray(raw) && raw.length === 4 && raw.every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0)) {
+    return [raw[0], raw[1], raw[2], raw[3]];
+  }
+  return [0, 0, 0, 0];
+}
+
+/**
+ * 根据控件当前状态（不可用、按下、悬停、选中、正常）选出应显示的状态与对应的 SVG 文件名。
+ * 如果某状态未单独指定 SVG 文件，则回退到 normal。
+ */
+export function resolveStateImage(
+  decl: ComponentDecl | null | undefined,
+  state: { enabled: boolean; pressed: boolean; hovered: boolean; selected: boolean },
+): { state: StateImageKey; file: string } | null {
+  const si = decl?.stateImages;
+  if (!si || typeof si.normal !== "string" || !si.normal) return null;
+  let key: StateImageKey = "normal";
+  if (!state.enabled) {
+    key = "disabled";
+  } else if (state.pressed) {
+    key = "pressed";
+  } else if (state.hovered) {
+    key = "hover";
+  } else if (state.selected) {
+    key = "selected";
+  }
+  const file = si[key] || (key === "pressed" && si.hover ? si.hover : si.normal);
+  return { state: key, file };
+}
+
+/**
+ * 在 Node 环境下（命令行检查、导出、测试），为项目中的自定义控件补齐文件夹内的 .svg 文件表（component.svgFiles）。
+ * 浏览器模式下由 project.ts 的 loadProject 异步读取。
+ */
+export function ensureComponentSvgFiles(project: Project): void {
+  const g = globalThis as {
+    process?: {
+      versions?: { node?: string };
+      getBuiltinModule?: (id: string) => unknown;
+    };
+  };
+  if (!g.process?.versions?.node || typeof g.process.getBuiltinModule !== "function") return;
+  const fs = g.process.getBuiltinModule("node:fs") as {
+    existsSync(p: string): boolean;
+    readdirSync(p: string, opts: { withFileTypes: true }): Array<{ name: string; isFile(): boolean }>;
+    readFileSync(p: string, enc: "utf8"): string;
+  };
+  const path = g.process.getBuiltinModule("node:path") as {
+    join(...parts: string[]): string;
+  };
+  if (!project.root || !fs.existsSync(project.root)) return;
+  for (const comp of project.components.values()) {
+    const folder = comp.folder ?? comp.decl.type;
+    if (!folder) continue;
+    const compDir = path.join(project.root, "components", folder);
+    if (!fs.existsSync(compDir)) continue;
+    comp.svgFiles ??= {};
+    for (const entry of fs.readdirSync(compDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.toLowerCase().endsWith(".svg") && !(entry.name in comp.svgFiles)) {
+        comp.svgFiles[entry.name] = fs.readFileSync(path.join(compDir, entry.name), "utf8");
+      }
+    }
+  }
 }
 
 /**

@@ -16,6 +16,11 @@
     "ui_binding/Ui.h",
     "ui_binding/UiDriver.cpp",
     "ui_binding/UiDriver.h",
+    "ui_binding/logic/components/StateButton/disabled.svg",
+    "ui_binding/logic/components/StateButton/hover.svg",
+    "ui_binding/logic/components/StateButton/normal.svg",
+    "ui_binding/logic/components/StateButton/pressed.svg",
+    "ui_binding/logic/components/StateButton/selected.svg",
     "ui_binding/logic/project.json",
     "ui_binding/logic/runtime.js",
     "ui_interface/CMakeLists.txt",
@@ -70,9 +75,30 @@
         "setter": "setCanvasHostWidget"
       }
     ],
-    "effects": []
+    "effects": [
+      {
+        "name": "ColorPickerDraw",
+        "label": "调色盘自绘效果",
+        "kind": "paint",
+        "hash": "42ac9aaf",
+        "source": "effects/ColorPickerDraw/index.js",
+        "className": "ColorPickerDrawEffect",
+        "setter": "setColorPickerDraw",
+        "getter": "colorPickerDraw"
+      },
+      {
+        "name": "PanelExpand",
+        "label": "面板展开",
+        "kind": "visibility",
+        "hash": "77a08c49",
+        "source": "effects/PanelExpand/index.js",
+        "className": "PanelExpandEffect",
+        "setter": "setPanelExpand",
+        "getter": "panelExpand"
+      }
+    ]
   },
   "lastChanges": [
-    "新增动作 exportClip"
+    "效果 ColorPickerDraw：在工具里的实现改了，哈希从 0e198374 变成 42ac9aaf，需要对照 effects/ColorPickerDraw/index.js 重新翻译"
   ]
 }

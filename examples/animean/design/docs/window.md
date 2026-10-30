@@ -38,7 +38,20 @@
 <!-- ui-section: inspector-dock -->
 ## 右侧检查器面板（inspectorDock）
 
-位于主窗口右侧停靠区，顶部用 2 列网格（Grid）排列“图层属性”和“渲染导出”两个标签按钮，下方用层叠容器（Stack）在表单页 `layerPropsPage` 与导出页 `exportPage` 之间切换。导出页通过 `call: exportClip` 调用动作，支持在预览栏切换“真跑 / 模拟成功 / 模拟失败”。
+位于主窗口右侧停靠区，顶部用 2 列网格（Grid）排列“图层属性”和“渲染导出”两个标签按钮，中部用层叠容器（Stack）在表单页 `layerPropsPage` 与导出页 `exportPage` 之间切换，底部包含状态图片按钮 `colorPanelToggleBtn` 与可展开收起的调色盘面板 `colorPanel`。导出页通过 `call: exportClip` 调用动作，支持在预览栏切换“真跑 / 模拟成功 / 模拟失败”。
+<!-- /ui-section -->
+
+<!-- ui-section: color-panel -->
+## 调色盘展开按钮与面板（colorPanelToggleBtn / colorPanel）
+
+- `colorPanelToggleBtn`（类型为 `StateButton`）：使用同一套 5 状态 SVG（`normal.svg` / `hover.svg` / `pressed.svg` / `selected.svg` / `disabled.svg`）按 `[8, 8, 8, 8]` 九宫格拉伸绘制，状态切换带 120ms 透明度过渡，文字由控件单独画在上面（随 `inspector.colorPanelOpen` 在“收起调色盘”和“展开调色盘”之间切换；锁定图层时切换到 `disabled` 状态）。
+- `colorPanel`：关联过渡效果 `PanelExpand`（`effects/PanelExpand`），显示和隐藏时播放 180ms 面板展开与淡入淡出过渡动画，在 Qt 端由 `ui_effects/PanelExpandEffect` 实现。
+<!-- /ui-section -->
+
+<!-- ui-section: color-picker -->
+## 自绘调色盘控件（colorPickerCanvas）
+
+类型为 `ColorPicker`，在 `component.json` 中声明需要翻译的自绘效果 `ColorPickerDraw`（`effects/ColorPickerDraw`）。在工具端用 Canvas 2D 绘制 HSV 饱和度-明度渐变方块、色相条与颜色预览条；在 Qt 端由 `ui_effects/ColorPickerDrawEffect` 用 `QPainter` 与 `QLinearGradient` 实现，未提供实现或加 `--no-effects` 时显示虚线占位框。
 <!-- /ui-section -->
 
 <!-- ui-section: timeline-dock -->

@@ -1,7 +1,16 @@
 // 工具自带的 8 种标准控件：文字、按钮、输入框、数字框、下拉框、复选框、列表、分隔线。
 // 每种包含共用声明（component.json）、网页实现（index.js / style.css）和对应的 Qt 映射。
 import type { Value } from "../src/expr.ts";
-import type { ComponentCreate, ComponentDecl, LoadedComponent } from "../src/model.ts";
+import {
+  normalizeStateImageSlice,
+  resolveStateImage,
+  STATE_IMAGE_KEYS,
+  type ComponentCreate,
+  type ComponentDecl,
+  type ComponentInstance,
+  type LoadedComponent,
+  type StateImagesDecl,
+} from "../src/model.ts";
 import buttonDecl from "./Button/component.json" with { type: "json" };
 import checkBoxDecl from "./CheckBox/component.json" with { type: "json" };
 import comboBoxDecl from "./ComboBox/component.json" with { type: "json" };
@@ -291,3 +300,217 @@ export const STANDARD_COMPONENT_LIST: StandardComponent[] = [
 export const STANDARD_COMPONENTS = new Map<string, StandardComponent>(
   STANDARD_COMPONENT_LIST.map((item) => [item.decl.type, item]),
 );
+
+// ---------- 状态图片（正常、悬停、按下、选中、不可用）渲染器 ----------
+
+let svgScopeCounter = 0;
+
+function parseSvgMetrics(svgText: string): { vx: number; vy: number; vw: number; vh: number; inner: string } {
+  const vbMatch = svgText.match(/viewBox\s*=\s*["']\s*([-\d.]+)[,\s]+([-\d.]+)[,\s]+([-\d.]+)[,\s]+([-\d.]+)\s*["']/i);
+  const wMatch = svgText.match(/\bwidth\s*=\s*["']\s*([\d.]+)/i);
+  const hMatch = svgText.match(/\bheight\s*=\s*["']\s*([\d.]+)/i);
+  const vx = vbMatch ? Number(vbMatch[1]) : 0;
+  const vy = vbMatch ? Number(vbMatch[2]) : 0;
+  const vw = vbMatch ? Number(vbMatch[3]) : wMatch ? Number(wMatch[1]) : 120;
+  const vh = vbMatch ? Number(vbMatch[4]) : hMatch ? Number(hMatch[1]) : 32;
+  const openEnd = svgText.indexOf(">", svgText.indexOf("<svg"));
+  const closeStart = svgText.lastIndexOf("</svg>");
+  const inner = openEnd >= 0 && closeStart > openEnd ? svgText.slice(openEnd + 1, closeStart) : "";
+  return {
+    vx: Number.isFinite(vx) ? vx : 0,
+    vy: Number.isFinite(vy) ? vy : 0,
+    vw: Number.isFinite(vw) && vw > 0 ? vw : 120,
+    vh: Number.isFinite(vh) && vh > 0 ? vh : 32,
+    inner,
+  };
+}
+
+function scopeSvgIds(inner: string, prefix: string): string {
+  return inner
+    .replace(/\bid\s*=\s*["']([^"']+)["']/g, `id="${prefix}_$1"`)
+    .replace(/url\(#([^)]+)\)/g, `url(#${prefix}_$1)`)
+    .replace(/\b(xlink:href|href)\s*=\s*["']#([^"']+)["']/g, `$1="#${prefix}_$2"`);
+}
+
+function createSliceSvgElement(vx: number, vy: number, vw: number, vh: number, inner: string, prefix: string): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `${vx} ${vy} ${vw} ${vh}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.style.width = "100%";
+  svg.style.height = "100%";
+  svg.style.display = "block";
+  svg.style.overflow = "hidden";
+  svg.innerHTML = scopeSvgIds(inner, prefix);
+  return svg;
+}
+
+/**
+ * 将一张 SVG 状态图按九宫格切线 [top, right, bottom, left] 渲染到容器中，保证拉伸时四角不变形。
+ */
+export function renderNinePatchSvg(
+  container: HTMLElement,
+  svgText: string,
+  slice: [number, number, number, number],
+): void {
+  container.replaceChildren();
+  if (!svgText.trim()) return;
+  const { vx, vy, vw, vh, inner } = parseSvgMetrics(svgText);
+  const [top, right, bottom, left] = slice;
+  const uid = `vfs_${++svgScopeCounter}`;
+  if ((top === 0 && right === 0 && bottom === 0 && left === 0) || left + right >= vw || top + bottom >= vh) {
+    container.append(createSliceSvgElement(vx, vy, vw, vh, inner, uid));
+    return;
+  }
+  const grid = document.createElement("div");
+  grid.className = "vf-nine-patch";
+  grid.style.cssText = `display:grid;width:100%;height:100%;grid-template-columns:${left}px minmax(0,1fr) ${right}px;grid-template-rows:${top}px minmax(0,1fr) ${bottom}px;`;
+  const xs = [vx, vx + left, vx + vw - right];
+  const ws = [left, Math.max(0.01, vw - left - right), right];
+  const ys = [vy, vy + top, vy + vh - bottom];
+  const hs = [top, Math.max(0.01, vh - top - bottom), bottom];
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      const cell = document.createElement("div");
+      cell.className = "vf-nine-patch-cell";
+      cell.style.cssText = "width:100%;height:100%;overflow:hidden;position:relative;";
+      if (ws[c] > 0 && hs[r] > 0) {
+        cell.append(createSliceSvgElement(xs[c], ys[r], ws[c], hs[r], inner, `${uid}_${r}_${c}`));
+      }
+      grid.append(cell);
+    }
+  }
+  container.append(grid);
+}
+
+/**
+ * 挂载状态图片控件：
+ * - 5 种固定状态（normal / hover / pressed / selected / disabled）渲染同一套 SVG 文件；
+ * - 按 slice 做九宫格拉伸，四角不变形；
+ * - 状态切换时带透明度过渡（transitionMs）；
+ * - 文字由控件在顶层单独绘制，不写进 SVG。
+ */
+export function mountStateImageControl(
+  el: HTMLElement,
+  ctx: {
+    props: Record<string, Value>;
+    emit: (event: string, value?: Value) => void;
+    stateImages: StateImagesDecl;
+    svgFiles: Record<string, string>;
+  },
+): ComponentInstance {
+  const { stateImages, svgFiles, emit } = ctx;
+  const slice = normalizeStateImageSlice(stateImages);
+  const transitionMs = typeof stateImages.transitionMs === "number" && Number.isFinite(stateImages.transitionMs)
+    ? Math.max(0, stateImages.transitionMs)
+    : 120;
+
+  const root = document.createElement("div");
+  root.className = "vf-state-image-root";
+  root.style.cssText =
+    "position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;user-select:none;overflow:hidden;cursor:pointer;";
+
+  const layersWrap = document.createElement("div");
+  layersWrap.className = "vf-state-image-layers";
+  layersWrap.style.cssText = "position:absolute;inset:0;pointer-events:none;";
+
+  const layerEls = new Map<string, HTMLElement>();
+  const fakeDecl: ComponentDecl = { type: "StateImage", stateImages };
+
+  for (const key of STATE_IMAGE_KEYS) {
+    const file = stateImages[key] || (key === "pressed" && stateImages.hover ? stateImages.hover : stateImages.normal);
+    const layer = document.createElement("div");
+    layer.className = "vf-state-image-layer";
+    layer.dataset.stateKey = key;
+    layer.dataset.svgFile = file;
+    layer.style.cssText = `position:absolute;inset:0;opacity:0;transition:opacity ${transitionMs}ms ease;pointer-events:none;`;
+    renderNinePatchSvg(layer, svgFiles[file] ?? svgFiles[stateImages.normal] ?? "", slice);
+    layersWrap.append(layer);
+    layerEls.set(key, layer);
+  }
+
+  const textSpan = document.createElement("span");
+  textSpan.className = "vf-state-image-text";
+  textSpan.style.cssText =
+    "position:relative;z-index:1;padding:0 10px;font-size:13px;font-weight:500;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;transition:color 0.12s ease;";
+
+  root.append(layersWrap, textSpan);
+  el.append(root);
+
+  let currentProps: Record<string, Value> = { ...ctx.props };
+  let hovered = false;
+  let pressed = false;
+
+  const syncVisual = () => {
+    const enabled = currentProps.enabled !== false;
+    if (!enabled) pressed = false;
+    const selected = Boolean(
+      currentProps.selected ?? currentProps.checked ?? (currentProps.variant === "primary"),
+    );
+    const resolved = resolveStateImage(fakeDecl, {
+      enabled,
+      pressed: pressed || currentProps.pressed === true,
+      hovered: hovered || currentProps.hovered === true,
+      selected,
+    }) ?? { state: "normal" as const, file: stateImages.normal };
+
+    for (const [k, layer] of layerEls) {
+      layer.style.opacity = k === resolved.state ? "1" : "0";
+    }
+    root.dataset.state = resolved.state;
+    root.dataset.stateImage = resolved.file;
+    el.dataset.vfState = resolved.state;
+    el.dataset.vfStateImage = resolved.file;
+    root.style.cursor = enabled ? "pointer" : "not-allowed";
+
+    textSpan.textContent = String(currentProps.text ?? "");
+    if (typeof currentProps.textColor === "string" && currentProps.textColor) {
+      textSpan.style.color = currentProps.textColor;
+    } else if (!enabled) {
+      textSpan.style.color = "#94a3b8";
+    } else if (resolved.state === "selected" || resolved.state === "pressed") {
+      textSpan.style.color = "#ffffff";
+    } else {
+      textSpan.style.color = "#1e293b";
+    }
+  };
+
+  root.addEventListener("mouseenter", () => {
+    if (currentProps.enabled === false) return;
+    hovered = true;
+    syncVisual();
+  });
+  root.addEventListener("mouseleave", () => {
+    hovered = false;
+    pressed = false;
+    syncVisual();
+  });
+  root.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || currentProps.enabled === false) return;
+    pressed = true;
+    syncVisual();
+  });
+  root.addEventListener("mouseup", (e) => {
+    if (e.button !== 0) return;
+    pressed = false;
+    syncVisual();
+  });
+  root.addEventListener("click", () => {
+    if (currentProps.enabled === false) return;
+    if (currentProps.checkable) emit("toggle", !currentProps.checked);
+  });
+
+  const update = (next: Record<string, Value>) => {
+    currentProps = next;
+    syncVisual();
+  };
+  update(ctx.props);
+
+  return {
+    update,
+    destroy: () => {
+      delete el.dataset.vfState;
+      delete el.dataset.vfStateImage;
+      root.remove();
+    },
+  };
+}
