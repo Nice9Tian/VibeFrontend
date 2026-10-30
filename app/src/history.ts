@@ -4,11 +4,16 @@ import { isMap, parseDocument } from "yaml";
 import type { Value } from "./expr.ts";
 import type { Scene, SceneNode } from "./model.ts";
 import {
+  MIN_NODE_SIZE,
+  absRectInScene,
   computeResizeBox,
   filterUnlocked,
   hasLockedInSubtree,
   isNodeLocked,
+  parentOfInScene,
+  worldRectToNodeLocalInScene,
   worldRotationInScene,
+  worldToParentDeltaInScene,
 } from "./transform.ts";
 
 export const DEFAULT_HISTORY_LIMIT = 200;
@@ -164,30 +169,9 @@ export function pushHistory(
   if (nextPast.length > 0) {
     const prev = nextPast[nextPast.length - 1];
     if (prev.after) {
-      const prevDelta = computeDelta(prev.snapshot, prev.after);
-      const currDelta = computeDelta(before, after);
-      const extScene = (prevDelta.scene || currDelta.scene) && prev.after.sceneText !== before.sceneText;
-      const extLogic = (prevDelta.logic || currDelta.logic) && prev.after.logicText !== before.logicText;
-      const extPresets =
-        (prevDelta.presets || currDelta.presets) &&
-        prev.after.presetsText !== undefined &&
-        before.presetsText !== undefined &&
-        prev.after.presetsText !== before.presetsText;
-      const extDocKeys: string[] = [];
-      if (prev.after.docs && before.docs) {
-        for (const k of new Set([...prevDelta.docKeys, ...currDelta.docKeys])) {
-          if ((prev.after.docs[k] ?? "") !== (before.docs[k] ?? "")) extDocKeys.push(k);
-        }
-      }
-      if (extScene || extLogic || extPresets || extDocKeys.length > 0) {
-        const extBefore = cloneSnapshot(before);
-        if (extScene) extBefore.sceneText = prev.after.sceneText;
-        if (extLogic) extBefore.logicText = prev.after.logicText;
-        if (extPresets) extBefore.presetsText = prev.after.presetsText;
-        if (extDocKeys.length > 0 && prev.after.docs) {
-          extBefore.docs = { ...(extBefore.docs ?? {}) };
-          for (const k of extDocKeys) extBefore.docs[k] = prev.after.docs[k];
-        }
+      const extDelta = computeDelta(prev.after, before);
+      if (extDelta.scene || extDelta.logic || extDelta.presets || extDelta.docKeys.length > 0) {
+        const extBefore = applyPartialSnapshot(before, prev.after, extDelta);
         nextPast.push({
           snapshot: extBefore,
           after: cloneSnapshot(before),
@@ -337,16 +321,38 @@ export function restoreHistoryVersion(
   let workingSnap = cloneSnapshot(current);
 
   if (index < currentIdx) {
-    const steps = currentIdx - index;
-    for (let i = 0; i < steps; i++) {
+    const top = workingStack.past[workingStack.past.length - 1];
+    if (top?.after) {
+      const extDelta = computeDelta(workingSnap, top.after);
+      if (extDelta.scene || extDelta.logic || extDelta.presets || extDelta.docKeys.length > 0) {
+        const revertedSnap = applyPartialSnapshot(workingSnap, top.after, extDelta);
+        workingStack = {
+          past: [...workingStack.past],
+          future: [
+            ...workingStack.future,
+            {
+              snapshot: cloneSnapshot(workingSnap),
+              after: cloneSnapshot(revertedSnap),
+              label: "外部修改",
+              timestamp,
+            },
+          ],
+          limit: workingStack.limit,
+        };
+        workingSnap = revertedSnap;
+      }
+    }
+    let guard = workingStack.past.length * 2 + 4;
+    while (workingStack.past.length > index && guard-- > 0) {
       const u = undoHistory(workingStack, workingSnap, "编辑", timestamp);
       if (!u.snapshot) break;
       workingStack = u.stack;
       workingSnap = u.snapshot;
     }
   } else {
-    const steps = index - currentIdx;
-    for (let i = 0; i < steps; i++) {
+    const targetFutureLen = total - 1 - index;
+    let guard = workingStack.future.length * 2 + 4;
+    while (workingStack.future.length > targetFutureLen && guard-- > 0) {
       const r = redoHistory(workingStack, workingSnap, "编辑", timestamp);
       if (!r.snapshot) break;
       workingStack = r.stack;
@@ -401,8 +407,9 @@ export function removeYamlObjects(logicText: string, ids: Iterable<string>): str
   if (doc.errors.length > 0) return logicText;
   const objects = doc.get("objects");
   if (!isMap(objects)) return logicText;
-  const firstKey =
-    objects.items.length > 0 ? ((objects.items[0].key as { value?: unknown } | undefined)?.value as string | undefined) : undefined;
+  const firstPair = objects.items.length > 0 ? objects.items[0] : undefined;
+  const firstKey = (firstPair?.key as { value?: unknown } | undefined)?.value as string | undefined;
+  const firstKeyHadOwnComment = Boolean((firstPair?.key as { commentBefore?: string | null } | undefined)?.commentBefore);
   let changed = false;
   let deletedFirst = false;
   for (const id of ids) {
@@ -412,10 +419,56 @@ export function removeYamlObjects(logicText: string, ids: Iterable<string>): str
       changed = true;
     }
   }
-  if (changed && deletedFirst && objects.commentBefore) {
-    objects.commentBefore = null;
+  if (changed && deletedFirst && objects.commentBefore && !firstKeyHadOwnComment) {
+    const parts = objects.commentBefore.split(/\n[ \t]*\n/);
+    objects.commentBefore = parts.length > 1 ? parts.slice(0, -1).join("\n\n") : null;
   }
   return changed ? doc.toString({ lineWidth: 0 }) : logicText;
+}
+
+/** 将 sceneText 中引用了旧控件类型的节点同步替换为新控件类型名。 */
+export function renameComponentTypeInSceneText(
+  sceneText: string,
+  oldTypes: Iterable<string>,
+  nextType: string,
+): string {
+  const oldSet = new Set(Array.from(oldTypes).filter(Boolean));
+  if (oldSet.size === 0 || !nextType) return sceneText;
+  try {
+    const scene = parseScene(sceneText);
+    let changed = false;
+    for (const n of Object.values(scene.nodes ?? {})) {
+      if (n && oldSet.has(n.type)) {
+        n.type = nextType;
+        changed = true;
+      }
+    }
+    return changed ? serializeScene(scene) : sceneText;
+  } catch {
+    return sceneText;
+  }
+}
+
+/** 重命名项目中的控件类型后，同步更新历史栈各快照中的节点 type 引用，避免撤销时回退到已删除的旧控件目录。 */
+export function renameComponentTypeInHistory(
+  stack: HistoryStack,
+  oldTypes: Iterable<string>,
+  nextType: string,
+): HistoryStack {
+  const mapSnap = (snap: HistorySnapshot): HistorySnapshot => ({
+    ...cloneSnapshot(snap),
+    sceneText: renameComponentTypeInSceneText(snap.sceneText, oldTypes, nextType),
+  });
+  const mapEntry = (entry: VersionEntry): VersionEntry => ({
+    ...entry,
+    snapshot: mapSnap(entry.snapshot),
+    ...(entry.after ? { after: mapSnap(entry.after) } : {}),
+  });
+  return {
+    past: stack.past.map(mapEntry),
+    future: stack.future.map(mapEntry),
+    limit: stack.limit,
+  };
 }
 
 // ---------- 画布纯函数操作（供主界面与测试共同调用） ----------
@@ -424,19 +477,29 @@ export function cloneScene(scene: Scene): Scene {
   return JSON.parse(JSON.stringify(scene)) as Scene;
 }
 
-/** 移动一组未锁定节点。 */
+/** 移动一组未锁定节点（当子节点位于旋转后的父容器内时，自动将世界位移换算为父容器局部坐标增量）。 */
 export function applyMoveToScene(scene: Scene, ids: string[], dx: number, dy: number): Scene {
   const next = cloneScene(scene);
-  for (const id of filterUnlocked(next, ids)) {
+  const chosen = new Set(filterUnlocked(next, ids));
+  for (const id of chosen) {
+    let hasChosenAncestor = false;
+    for (let p = parentOfInScene(next, id); p; p = parentOfInScene(next, p)) {
+      if (chosen.has(p)) {
+        hasChosenAncestor = true;
+        break;
+      }
+    }
+    if (hasChosenAncestor) continue;
     const n = next.nodes[id];
     if (!n) continue;
-    n.x = (n.x ?? 0) + dx;
-    n.y = (n.y ?? 0) + dy;
+    const d = worldToParentDeltaInScene(next, id, dx, dy);
+    n.x = Math.round((n.x ?? 0) + d.x);
+    n.y = Math.round((n.y ?? 0) + d.y);
   }
   return next;
 }
 
-/** 缩放单个未锁定节点（考虑节点及其祖先容器的旋转角度）。 */
+/** 缩放单个未锁定节点（考虑节点及其祖先容器的旋转角度，并将世界外框换算回父容器局部坐标）。 */
 export function applyResizeToScene(
   scene: Scene,
   id: string,
@@ -448,15 +511,20 @@ export function applyResizeToScene(
   const next = cloneScene(scene);
   const n = next.nodes[id];
   if (!n || (id !== next.root && isNodeLocked(next, id))) return next;
-  const orig = { x: n.x ?? 0, y: n.y ?? 0, width: n.width, height: n.height };
-  const rot = id === next.root ? 0 : worldRotationInScene(next, id);
-  const box = computeResizeBox(orig, handle, dx, dy, keepAspect, rot);
-  if (id !== next.root) {
-    n.x = Math.round(box.x);
-    n.y = Math.round(box.y);
+  const isRoot = id === next.root;
+  const orig = isRoot ? { x: 0, y: 0, width: n.width, height: n.height } : absRectInScene(next, id);
+  const rot = isRoot ? 0 : worldRotationInScene(next, id);
+  const box = computeResizeBox(orig, handle, dx, dy, keepAspect, MIN_NODE_SIZE, rot);
+  if (!isRoot) {
+    const local = worldRectToNodeLocalInScene(next, id, box);
+    n.x = local.x;
+    n.y = local.y;
+    n.width = local.width;
+    n.height = local.height;
+  } else {
+    n.width = Math.round(box.width);
+    n.height = Math.round(box.height);
   }
-  n.width = Math.round(box.width);
-  n.height = Math.round(box.height);
   return next;
 }
 

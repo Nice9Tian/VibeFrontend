@@ -223,6 +223,25 @@ export function worldToParentDeltaInScene(scene: Scene, id: string, worldDx: num
   return rotatePoint({ x: worldDx, y: worldDy }, { x: 0, y: 0 }, -parentRot);
 }
 
+/** 把节点在画布世界坐标系中的基准框（以世界中心和节点宽高表示）转换为父容器局部坐标 `(x, y, width, height)`。 */
+export function worldRectToNodeLocalInScene(scene: Scene, id: string, worldRect: Rect): Rect {
+  const parentId = parentOfInScene(scene, id);
+  const worldCenter = {
+    x: worldRect.x + worldRect.width / 2,
+    y: worldRect.y + worldRect.height / 2,
+  };
+  const localCenter =
+    parentId && parentId !== scene.root
+      ? worldToNodeLocalInScene(scene, parentId, worldCenter)
+      : worldCenter;
+  return {
+    x: Math.round(localCenter.x - worldRect.width / 2),
+    y: Math.round(localCenter.y - worldRect.height / 2),
+    width: Math.round(worldRect.width),
+    height: Math.round(worldRect.height),
+  };
+}
+
 /** 节点在世界坐标系中的未旋转基准框（以世界中心定位，宽高为节点自身宽高）。 */
 export function absRectInScene(scene: Scene, id: string): Rect {
   const n = scene.nodes[id];
@@ -298,9 +317,17 @@ export function filterUnlocked(scene: Scene, ids: string[]): string[] {
   return ids.filter((id) => id !== scene.root && Boolean(scene.nodes[id]) && !isNodeLocked(scene, id));
 }
 
+/** 查找导致节点 id 被继承锁定的最近祖先容器 ID；若祖先均未锁定则返回 null。 */
+export function lockedAncestorInScene(scene: Scene, id: string): string | null {
+  for (let cursor = parentOfInScene(scene, id); cursor && cursor !== scene.root; cursor = parentOfInScene(scene, cursor)) {
+    if (scene.nodes[cursor]?.locked) return cursor;
+  }
+  return null;
+}
+
 /**
  * 设置一组节点的锁定状态，返回是否有变化。
- * 解锁（locked === false）时，若节点继承了祖先容器的锁定，一并解除祖先链上的锁定，确保节点真正解锁。
+ * 解锁（locked === false）时，仅解除目标节点自身的锁定标记，绝不静默解开父容器和兄弟节点。
  */
 export function setNodesLocked(scene: Scene, ids: string[], locked: boolean): boolean {
   let changed = false;
@@ -313,14 +340,9 @@ export function setNodesLocked(scene: Scene, ids: string[], locked: boolean): bo
         n.locked = true;
         changed = true;
       }
-    } else {
-      for (let cursor: string | null = id; cursor && cursor !== scene.root; cursor = parentOfInScene(scene, cursor)) {
-        const currNode = scene.nodes[cursor];
-        if (currNode?.locked) {
-          delete currNode.locked;
-          changed = true;
-        }
-      }
+    } else if (n.locked) {
+      delete n.locked;
+      changed = true;
     }
   }
   return changed;
@@ -430,6 +452,7 @@ export function scaleGroupItems(
   startBounds: Rect,
   nextBounds: Rect,
   minSize = MIN_NODE_SIZE,
+  scene?: Scene,
 ): Map<string, ScaledNodeResult> {
   const sx = startBounds.width > 0 ? nextBounds.width / startBounds.width : 1;
   const sy = startBounds.height > 0 ? nextBounds.height / startBounds.height : 1;
@@ -442,32 +465,46 @@ export function scaleGroupItems(
     const ny = mapY(item.abs.y);
     const nw = Math.max(minSize, Math.round(item.abs.width * sx));
     const nh = Math.max(minSize, Math.round(item.abs.height * sy));
+    const local = scene
+      ? worldRectToNodeLocalInScene(scene, item.id, { x: nx, y: ny, width: nw, height: nh })
+      : {
+          x: Math.round(nx - item.parentOrigin.x),
+          y: Math.round(ny - item.parentOrigin.y),
+          width: nw,
+          height: nh,
+        };
     const result: ScaledNodeResult = {
-      x: Math.round(nx - item.parentOrigin.x),
-      y: Math.round(ny - item.parentOrigin.y),
-      width: nw,
-      height: nh,
+      x: local.x,
+      y: local.y,
+      width: local.width,
+      height: local.height,
     };
     if (item.isLine && item.lineProps) {
       const p = { ...item.lineProps };
       const ox = item.parentOrigin.x;
       const oy = item.parentOrigin.y;
+      const mapLinePt = (lx: number, ly: number): Point => {
+        const parentId = scene ? parentOfInScene(scene, item.id) : null;
+        if (scene && parentId && parentId !== scene.root) {
+          const wpt = nodeLocalToWorldInScene(scene, parentId, { x: lx, y: ly });
+          const nextW = { x: mapX(wpt.x), y: mapY(wpt.y) };
+          return worldToNodeLocalInScene(scene, parentId, nextW);
+        }
+        return { x: mapX(ox + lx) - ox, y: mapY(oy + ly) - oy };
+      };
       if (!p.startNode) {
-        p.x1 = Math.round(mapX(ox + numVal(p.x1, 0)) - ox);
-        p.y1 = Math.round(mapY(oy + numVal(p.y1, 0)) - oy);
+        const pt = mapLinePt(numVal(p.x1, 0), numVal(p.y1, 0));
+        p.x1 = Math.round(pt.x);
+        p.y1 = Math.round(pt.y);
       }
       if (!p.endNode) {
-        p.x2 = Math.round(mapX(ox + numVal(p.x2, 160)) - ox);
-        p.y2 = Math.round(mapY(oy + numVal(p.y2, 0)) - oy);
+        const pt = mapLinePt(numVal(p.x2, 160), numVal(p.y2, 0));
+        p.x2 = Math.round(pt.x);
+        p.y2 = Math.round(pt.y);
       }
       const bends = parseBends(p.bends);
       if (bends.length > 0) {
-        p.bends = formatBends(
-          bends.map((b) => ({
-            x: mapX(ox + b.x) - ox,
-            y: mapY(oy + b.y) - oy,
-          })),
-        );
+        p.bends = formatBends(bends.map((b) => mapLinePt(b.x, b.y)));
       }
       result.props = p;
     }
@@ -504,7 +541,7 @@ export function applyGroupResize(
   const startBounds = unionRectOf(unlocked.map((id) => visualBoundsInScene(scene, id)));
   if (!startBounds) return null;
   const nextBounds = computeResizeBox(startBounds, handle, dx, dy, keepAspect, minSize);
-  const scaled = scaleGroupItems(items, startBounds, nextBounds, minSize);
+  const scaled = scaleGroupItems(items, startBounds, nextBounds, minSize, scene);
   for (const [id, res] of scaled) {
     const n = scene.nodes[id];
     if (!n) continue;

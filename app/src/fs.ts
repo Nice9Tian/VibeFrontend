@@ -35,6 +35,11 @@ export async function writeText(path: string, content: string): Promise<void> {
   await devFetch("write", path, { method: "POST", body: content });
 }
 
+export async function removeFile(path: string): Promise<void> {
+  if (inTauri) return invoke("remove_file", { path });
+  await devFetch("remove", path, { method: "POST" });
+}
+
 export async function listDir(path: string): Promise<DirEntry[]> {
   if (inTauri) return invoke<DirEntry[]>("list_dir", { path });
   return (await devFetch("list", path)).json();

@@ -12,6 +12,7 @@ import {
   applyResizeToScene,
   canRedo,
   canUndo,
+  cloneScene,
   collectSubtreeIds,
   createHistory,
   nodesWithYamlEntries,
@@ -19,6 +20,7 @@ import {
   pushHistory,
   redoHistory,
   removeYamlObjects,
+  renameComponentTypeInHistory,
   restoreHistoryVersion,
   snapshotOf,
   undoHistory,
@@ -47,6 +49,7 @@ import {
   filterUnlocked,
   hasLockedInSubtree,
   isNodeLocked,
+  lockedAncestorInScene,
   moveBendOnLine,
   nodeLocalToWorldInScene,
   normalizeRotation,
@@ -619,20 +622,33 @@ test("锁定保护：父容器含已锁定子孙时禁止删除父容器", () =>
   assert.equal(resMixed.scene.nodes.box2, undefined);
 });
 
-// 10. [阻塞 3 回归] 子节点因祖先锁定而处于继承锁定状态时，解锁子节点能解除祖先锁定链
-test("继承锁定的子节点可以直接解锁", () => {
+// 10. [复审第 8 项回归] 解锁子节点只解除其自身锁定标记，绝不连带解开父容器和兄弟节点，并能定位锁定的祖先容器
+test("解锁继承锁定的子节点时不连带解开父容器和兄弟节点", () => {
   const scene = makeBaseScene();
-  // 锁定父容器 box1
-  setNodesLocked(scene, ["box1"], true);
+  scene.nodes.child2 = { type: "Button", x: 10, y: 40, width: 60, height: 24 };
+  scene.nodes.box1.children = ["child1", "child2"];
+  // 锁定父容器 box1 与子节点 child1
+  setNodesLocked(scene, ["box1", "child1"], true);
   assert.equal(isNodeLocked(scene, "box1"), true);
   assert.equal(isNodeLocked(scene, "child1"), true);
-  assert.equal(scene.nodes.child1.locked, undefined);
+  assert.equal(isNodeLocked(scene, "child2"), true);
+  assert.equal(lockedAncestorInScene(scene, "child1"), "box1");
+  assert.equal(lockedAncestorInScene(scene, "child2"), "box1");
+  assert.equal(lockedAncestorInScene(scene, "box1"), null);
 
-  // 对继承锁定的 child1 执行切换锁定，应当返回 false（已解锁）并解除父容器 box1 的锁定
-  const nowLocked = toggleNodesLocked(scene, ["child1"]);
-  assert.equal(nowLocked, false);
-  assert.equal(isNodeLocked(scene, "child1"), false);
+  // 对 child1 执行解锁：只清除 child1 自身的 locked 标记，父容器 box1 和兄弟 child2 保持锁定
+  const changed = setNodesLocked(scene, ["child1"], false);
+  assert.equal(changed, true);
+  assert.equal(scene.nodes.child1.locked, undefined);
+  assert.equal(scene.nodes.box1.locked, true, "父容器 box1 不应被连带解锁");
+  assert.equal(isNodeLocked(scene, "box1"), true);
+  assert.equal(isNodeLocked(scene, "child2"), true, "兄弟节点 child2 不应被连带解锁");
+
+  // 解锁父容器 box1 后，child1 与 child2 才一并恢复可编辑
+  setNodesLocked(scene, ["box1"], false);
   assert.equal(isNodeLocked(scene, "box1"), false);
+  assert.equal(isNodeLocked(scene, "child1"), false);
+  assert.equal(isNodeLocked(scene, "child2"), false);
 });
 
 // 11. [阻塞 4 回归] 旋转节点的局部系缩放、视觉外包围盒、旋转框选碰撞、旋转父容器坐标换算与对齐分布
@@ -723,6 +739,112 @@ test("多选四角默认等比缩放与单节点对齐防归零保护", () => {
   assert.equal(alignSceneNodes(scene2, ["box1", "box2"], "left"), false);
   assert.equal(scene2.nodes.box2.x, prevX);
   assert.equal(scene2.nodes.box2.y, prevY);
+});
+
+// 13. [复审阻塞 1 & 2 回归] applyResizeToScene 旋转参数顺序与旋转父容器内子节点的移动/单选缩放/多选缩放
+test("旋转节点与旋转父容器内子节点的移动和缩放精度", () => {
+  const scene = makeBaseScene();
+  // (a) 节点自身旋转 90° 或 -45° 时调用 applyResizeToScene：不会把旋转角误传为 minSize
+  setNodeRotation(scene.nodes.box2, 90);
+  // box2 初始 (200, 120, 80x40)，旋转 90° 后拖右把手 "e" 朝世界 +y 方向拉 20px -> 宽度变为 100，高度保持 40
+  const resizedRot = applyResizeToScene(scene, "box2", "e", 0, 20);
+  assert.equal(resizedRot.nodes.box2.width, 100);
+  assert.equal(resizedRot.nodes.box2.height, 40);
+
+  // 负旋转角 -45° 缩放到极小值时仍受 MIN_NODE_SIZE (8) 保护，不会缩成 0 或负数
+  setNodeRotation(scene.nodes.box2, -45);
+  const clampedRot = applyResizeToScene(scene, "box2", "w", 500, 500);
+  assert.ok(clampedRot.nodes.box2.width >= 8, "负角度旋转节点缩放宽度不应小于最小尺寸 8");
+  assert.ok(clampedRot.nodes.box2.height >= 8, "负角度旋转节点缩放高度不应小于最小尺寸 8");
+
+  // (b) 父容器 box1 旋转 90° 时，移动子节点 child1（世界位移 dx=30, dy=0）：
+  // 子节点在世界坐标系中的外框应精确右移 30px、垂直方向不漂移
+  const sceneParentRot = makeBaseScene();
+  setNodeRotation(sceneParentRot.nodes.box1, 90);
+  const childWorldBefore = absRectInScene(sceneParentRot, "child1");
+  const movedScene = applyMoveToScene(sceneParentRot, ["child1"], 30, 0);
+  const childWorldAfterMove = absRectInScene(movedScene, "child1");
+  assert.equal(Math.round(childWorldAfterMove.x - childWorldBefore.x), 30);
+  assert.equal(Math.round(childWorldAfterMove.y - childWorldBefore.y), 0);
+
+  // (c) 父容器 box1 旋转 90° 时，缩放子节点 child1（拖 "e" 把手沿世界 +y 拉 20px）：
+  // child1 的宽度增加 20（30 -> 50），高度保持 20，且不会把世界坐标直接赋给局部坐标导致跳出父容器
+  const resizedChildScene = applyResizeToScene(sceneParentRot, "child1", "e", 0, 20);
+  assert.equal(resizedChildScene.nodes.child1.width, 50);
+  assert.equal(resizedChildScene.nodes.child1.height, 20);
+  assert.equal(resizedChildScene.nodes.child1.x, 10, "在父容器局部系中拖右把手不应改变左边缘 x");
+  assert.equal(resizedChildScene.nodes.child1.y, 10, "在父容器局部系中拖右把手不应改变上边缘 y");
+});
+
+// 14. [复审阻塞 3 回归] 重命名项目控件类型后同步更新历史栈快照，撤销/重做不会回退到已删除的旧控件类型
+test("重命名项目控件类型后历史栈同步更新组件类型引用", () => {
+  const s0 = makeBaseScene();
+  s0.nodes.child1.type = "Button";
+  const s1 = applyMoveToScene(s0, ["child1"], 24, 0);
+  let stack = createHistory(20);
+  stack = pushHistory(stack, snapshotOf(s0, "version: 1\n"), snapshotOf(s1, "version: 1\n"), "移动 child1");
+
+  // 重命名控件 Button -> PrimaryBtn
+  stack = renameComponentTypeInHistory(stack, ["Button"], "PrimaryBtn");
+  const currentRenamed = cloneScene(s1);
+  currentRenamed.nodes.child1.type = "PrimaryBtn";
+
+  // 按 Ctrl+Z 撤销移动：child1 的位置退回 s0，但 type 保持为重命名后的 PrimaryBtn
+  const undone = undoHistory(stack, snapshotOf(currentRenamed, "version: 1\n"));
+  assert.ok(undone.snapshot);
+  const sceneAfterUndo = parseScene(undone.snapshot.sceneText);
+  assert.equal(sceneAfterUndo.nodes.child1.x, s0.nodes.child1.x);
+  assert.equal(sceneAfterUndo.nodes.child1.type, "PrimaryBtn");
+
+  // 按 Ctrl+Y 重做移动：位置前进到 s1，type 仍为 PrimaryBtn
+  const redone = redoHistory(undone.stack, undone.snapshot);
+  assert.ok(redone.snapshot);
+  const sceneAfterRedo = parseScene(redone.snapshot.sceneText);
+  assert.equal(sceneAfterRedo.nodes.child1.x, s1.nodes.child1.x);
+  assert.equal(sceneAfterRedo.nodes.child1.type, "PrimaryBtn");
+});
+
+// 15. [复审应修 6 & 9 回归] 跨通道外部修改自动补入历史记录、删除 objects 首条目保留顶层块注释
+test("跨通道外部修改历史记录与删除首条目保留 objects 顶层块注释", () => {
+  // (a) 两次画布移动之间，外部修改了 logicText：pushHistory 自动记录“外部修改”，跳回 #0 初始状态可完整恢复 (S0, L0)
+  const s0 = makeBaseScene();
+  const s1 = applyMoveToScene(s0, ["box1"], 20, 0);
+  const s2 = applyMoveToScene(s1, ["box1"], 40, 0);
+  const l0 = "version: 1\nstate:\n  count: 0\n";
+  const lExt = "version: 1\nstate:\n  count: 99\n";
+
+  let stack = createHistory(20);
+  stack = pushHistory(stack, snapshotOf(s0, l0), snapshotOf(s1, l0), "第一次移动");
+  // 外部把 logic 从 l0 改成了 lExt，然后用户进行第二次画布移动
+  stack = pushHistory(stack, snapshotOf(s1, lExt), snapshotOf(s2, lExt), "第二次移动");
+  assert.equal(stack.past.length, 3, "应在两次画布操作之间自动补入一条外部修改记录");
+  assert.equal(stack.past[1].label, "外部修改");
+
+  // 跳转到 #0 初始状态，画布与逻辑均恢复为 (s0, l0)
+  const restored0 = restoreHistoryVersion(stack, 0, snapshotOf(s2, lExt));
+  assert.ok(restored0.snapshot);
+  assert.equal(parseScene(restored0.snapshot.sceneText).nodes.box1.x, s0.nodes.box1.x);
+  assert.equal(restored0.snapshot.logicText, l0);
+
+  // (b) objects: 下既有块级顶层注释（空行分隔），又有首条目专属注释时，删除首条目保留块级顶层注释
+  const yamlWithSectionComment = [
+    "version: 1",
+    "objects:",
+    "  # 控件逻辑总表",
+    "",
+    "  # 第一个按钮的逻辑",
+    "  btn1:",
+    "    doc: docs/main.md#btn1",
+    "  # 第二个按钮的逻辑",
+    "  btn2:",
+    "    doc: docs/main.md#btn2",
+    "",
+  ].join("\n");
+  const afterDel = removeYamlObjects(yamlWithSectionComment, ["btn1"]);
+  assert.equal(afterDel.includes("# 控件逻辑总表"), true, "应保留 objects 块级顶层注释");
+  assert.equal(afterDel.includes("# 第一个按钮的逻辑"), false, "应清除被删首条目的前导注释");
+  assert.equal(afterDel.includes("# 第二个按钮的逻辑"), true, "应保留后续条目的注释");
+  assert.equal(afterDel.includes("btn2:"), true);
 });
 
 console.log(`\n全部 ${passed} 项编辑器单元测试通过。`);

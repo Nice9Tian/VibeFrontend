@@ -1,6 +1,6 @@
 // 编辑器界面：素材栏、图层、设计窗口（编辑模式 / 预览模式）、文档与 YAML 页签、问题栏。
 import { isMap, parseDocument, type Document } from "yaml";
-import { listDir, readText, watchProject, writeText } from "./fs";
+import { listDir, readText, removeFile, watchProject, writeText } from "./fs";
 import { initDocView, syncDocView } from "./docview";
 import { initLibrary, renderLibraryPalette } from "./library";
 import { initPreviewLauncher, initStandalonePreviewWindow, syncStandalonePreviewTitle } from "./previewwindow";
@@ -78,6 +78,7 @@ import {
   nodesWithYamlEntries,
   pushHistory,
   redoHistory,
+  renameComponentTypeInHistory,
   restoreHistoryVersion,
   undoHistory,
   type HistorySnapshot,
@@ -93,6 +94,7 @@ import {
   filterUnlocked,
   hasLockedInSubtree,
   isNodeLocked,
+  lockedAncestorInScene,
   moveBendOnLine,
   nodeLocalToWorldInScene,
   normalizeRotation,
@@ -101,10 +103,12 @@ import {
   rotatePoint,
   scaleGroupItems,
   setNodeRotation,
-  toggleNodesLocked,
+  setNodesLocked,
   visualBoundsInScene,
+  worldRectToNodeLocalInScene,
   worldRotationInScene,
   worldToNodeLocalInScene,
+  worldToParentDeltaInScene,
   type AlignKind,
   type DistributeAxis,
   type MultiResizeItem,
@@ -241,12 +245,15 @@ async function applyHistorySnapshot(target: HistorySnapshot): Promise<void> {
   if (target.presetsText !== undefined && target.presetsText !== currentPresetsText()) {
     await writeText(PRESETS_PATH, target.presetsText);
   }
-  await reload();
+  await reload(true);
 }
 
 async function saveScene(options: { history?: boolean; nextLogicText?: string; label?: string } = {}): Promise<void> {
   normalizeLines();
   const text = JSON.stringify(project.scene, null, 2) + "\n";
+  if (docDirty || yamlDirty) {
+    await flushEditors();
+  }
   const nextLogic = options.nextLogicText ?? project.logicText;
   const logicChanged = nextLogic !== project.logicText;
   if (text === project.sceneText && !logicChanged) return;
@@ -262,12 +269,14 @@ async function saveScene(options: { history?: boolean; nextLogicText?: string; l
   if (logicChanged) {
     window.clearTimeout(yamlTimer);
     yamlDirty = false;
+    project.logicText = nextLogic;
     await writeText(LOGIC_PATH, nextLogic);
   }
   if (text !== project.sceneText) {
+    project.sceneText = text;
     await writeText(SCENE_PATH, text);
   }
-  await reload();
+  await reload(true);
 }
 
 async function undo(): Promise<void> {
@@ -327,7 +336,9 @@ function ensureObject(doc: Document, id: string): void {
 
 let loading = false;
 let reloadAgain = false;
-async function reload(): Promise<void> {
+let reloadForce = false;
+async function reload(force = false): Promise<void> {
+  if (force) reloadForce = true;
   if (loading) {
     reloadAgain = true;
     return;
@@ -336,8 +347,10 @@ async function reload(): Promise<void> {
   try {
     do {
       reloadAgain = false;
+      const mustRender = reloadForce;
+      reloadForce = false;
       const next = await loadProject(project);
-      if (next.signature === project.signature) continue;
+      if (!mustRender && next.signature === project.signature) continue;
       project = next;
       designRuntime = new Runtime(project);
       previewRuntime?.adopt(project);
@@ -1420,7 +1433,7 @@ overlay.addEventListener("pointerdown", (e) => {
         const eachNode = node(each)!;
         return {
           id: each,
-          abs: visualRect(each),
+          abs: absRect(each),
           parentOrigin: parentOrigin(each),
           isLine: eachNode.type === "Line",
           lineProps: eachNode.type === "Line" ? { ...eachNode.props } : undefined,
@@ -1550,11 +1563,12 @@ overlay.addEventListener("pointermove", (e) => {
     for (const origin of gesture.origins) {
       const n = node(origin.id);
       if (!n) continue;
+      const d = worldToParentDeltaInScene(project.scene, origin.id, mx, my);
       if (n.type === "Line" && origin.props) {
-        n.props = offsetLineProps(origin.id, origin.props, mx, my);
+        n.props = offsetLineProps(origin.id, origin.props, Math.round(d.x), Math.round(d.y));
       } else {
-        n.x = origin.x + mx;
-        n.y = origin.y + my;
+        n.x = Math.round(origin.x + d.x);
+        n.y = Math.round(origin.y + d.y);
       }
     }
     for (const origin of gesture.origins) {
@@ -1574,11 +1588,11 @@ overlay.addEventListener("pointermove", (e) => {
     const dy = Math.round((e.clientY - gesture.start.y) / viewZoom());
     if (dx === 0 && dy === 0 && !gesture.moved) return;
     gesture.moved = true;
-    const { orig, abs, handle } = gesture;
+    const { abs, handle } = gesture;
     const isRoot = gesture.id === project.scene.root;
     const rot = isRoot ? 0 : worldRotation(gesture.id);
     const keepAspect = e.shiftKey && handle.length === 2;
-    let box = computeResizeBox(abs, handle, dx, dy, keepAspect, rot, MIN_SIZE);
+    let box = computeResizeBox(abs, handle, dx, dy, keepAspect, MIN_SIZE, rot);
     if (!isRoot && rot === 0 && !keepAspect) {
       const snapped = snapResize(box, handle, gesture.targets, options);
       box = snapped.rect;
@@ -1587,8 +1601,14 @@ overlay.addEventListener("pointermove", (e) => {
     n.width = Math.max(MIN_SIZE, Math.round(box.width));
     n.height = Math.max(MIN_SIZE, Math.round(box.height));
     if (!isRoot) {
-      n.x = Math.round(orig.x + box.x - abs.x);
-      n.y = Math.round(orig.y + box.y - abs.y);
+      const local = worldRectToNodeLocalInScene(project.scene, gesture.id, {
+        x: box.x,
+        y: box.y,
+        width: n.width,
+        height: n.height,
+      });
+      n.x = local.x;
+      n.y = local.y;
     }
     showSize(n.width, n.height);
     applyLiveGeometry(gesture.id);
@@ -1603,7 +1623,7 @@ overlay.addEventListener("pointermove", (e) => {
     const { origBox, handle } = gesture;
     // 多选整体缩放：四角拖拽默认保持长宽比（按比例缩放），按住 Shift 可自由变形
     const keepAspect = handle.length === 2 ? !e.shiftKey : false;
-    let box = computeResizeBox(origBox, handle, dx, dy, keepAspect, 0, MIN_SIZE);
+    let box = computeResizeBox(origBox, handle, dx, dy, keepAspect, MIN_SIZE, 0);
     if (!keepAspect) {
       const snapped = snapResize(box, handle, gesture.targets, options);
       box = snapped.rect;
@@ -1615,7 +1635,7 @@ overlay.addEventListener("pointermove", (e) => {
       width: Math.max(MIN_SIZE, Math.round(box.width)),
       height: Math.max(MIN_SIZE, Math.round(box.height)),
     };
-    const scaledList = scaleGroupItems(gesture.items, origBox, box, MIN_SIZE);
+    const scaledList = scaleGroupItems(gesture.items, origBox, box, MIN_SIZE, project.scene);
     for (const [id, scaled] of scaledList) {
       const eachNode = node(id);
       if (!eachNode) continue;
@@ -1969,9 +1989,15 @@ const TOOL_KEYS: Record<string, string> = { r: "rectangle", o: "ellipse", l: "li
 document.addEventListener("keydown", (e) => {
   if (document.getElementById("delete-confirm")) return;
   const target = e.target as HTMLElement;
-  if (mode !== "edit" || (target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable))) return;
   const ctrl = e.ctrlKey || e.metaKey;
   const key = e.key.toLowerCase();
+  const inDocPreview = target instanceof HTMLElement && Boolean(target.closest("#doc-preview"));
+  if (mode === "edit" && inDocPreview && ctrl && (key === "z" || key === "y")) {
+    e.preventDefault();
+    void (key === "y" || e.shiftKey ? redo() : undo());
+    return;
+  }
+  if (mode !== "edit" || (target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable))) return;
 
   if (ctrl && key === "z") {
     e.preventDefault();
@@ -2041,7 +2067,10 @@ document.addEventListener("keydown", (e) => {
     }
     for (const id of lineIds) {
       const n = node(id);
-      if (n) n.props = offsetLineProps(id, n.props ?? {}, dx, dy);
+      if (n) {
+        const d = worldToParentDeltaInScene(project.scene, id, dx, dy);
+        n.props = offsetLineProps(id, n.props ?? {}, Math.round(d.x), Math.round(d.y));
+      }
     }
     void saveScene();
   }
@@ -2459,9 +2488,26 @@ async function toggleLock(targetIds?: string[]): Promise<void> {
     (id) => id !== project.scene.root && !!node(id),
   );
   if (ids.length === 0) return;
-  const locked = toggleNodesLocked(project.scene, ids);
-  await saveScene({ label: locked ? "锁定控件" : "解锁控件" });
-  toast(locked ? `已锁定 ${ids.length} 个控件` : `已解锁 ${ids.length} 个控件`);
+  const shouldLock = ids.some((id) => !isNodeLocked(project.scene, id));
+  if (!shouldLock) {
+    const chosen = new Set(ids);
+    const lockedParent = ids
+      .map((id) => lockedAncestorInScene(project.scene, id))
+      .find((anc): anc is string => anc !== null && !chosen.has(anc));
+    const changed = setNodesLocked(project.scene, ids, false);
+    if (changed) {
+      await saveScene({ label: "解锁控件" });
+    }
+    if (lockedParent) {
+      toast(`父容器 ${lockedParent} 已锁定，请先解锁父容器`);
+      return;
+    }
+    toast(`已解锁 ${ids.length} 个控件`);
+    return;
+  }
+  setNodesLocked(project.scene, ids, true);
+  await saveScene({ label: "锁定控件" });
+  toast(`已锁定 ${ids.length} 个控件`);
 }
 
 function alignableSelection(): string[] {
@@ -3604,6 +3650,8 @@ async function saveDoc(): Promise<void> {
     const before = currentSnapshot();
     const nextDocs = { ...(before.docs ?? {}), [path]: nextDocContent };
     history = pushHistory(history, before, { ...before, docs: nextDocs }, "编辑说明");
+    project.docs.set(path, nextDocContent);
+    renderToolbar();
   }
   await writeText(path, nextDocContent);
   await reload();
@@ -3613,16 +3661,19 @@ async function saveYaml(): Promise<void> {
   window.clearTimeout(yamlTimer);
   if (!yamlDirty) return;
   yamlDirty = false;
-  if (yamlText.value !== project.logicText) {
+  const nextYaml = yamlText.value;
+  if (nextYaml !== project.logicText) {
     const before = currentSnapshot();
     history = pushHistory(
       history,
       before,
-      { ...before, logicText: yamlText.value },
+      { ...before, logicText: nextYaml },
       "编辑 YAML",
     );
+    project.logicText = nextYaml;
+    renderToolbar();
   }
-  await writeText(LOGIC_PATH, yamlText.value);
+  await writeText(LOGIC_PATH, nextYaml);
   await reload();
 }
 
@@ -3865,6 +3916,24 @@ async function main(): Promise<void> {
     getZoom: () => viewZoom(),
     readText,
     writeText,
+    removeFile,
+    onComponentRenamed: async (oldTypes, nextType) => {
+      await flushEditors();
+      const oldSet = new Set(oldTypes.filter(Boolean));
+      let sceneChanged = false;
+      for (const n of Object.values(project.scene.nodes)) {
+        if (oldSet.has(n.type)) {
+          n.type = nextType;
+          sceneChanged = true;
+        }
+      }
+      if (sceneChanged) {
+        const nextSceneText = JSON.stringify(project.scene, null, 2) + "\n";
+        project.sceneText = nextSceneText;
+        await writeText(SCENE_PATH, nextSceneText);
+      }
+      history = renameComponentTypeInHistory(history, oldSet, nextType);
+    },
     listDir,
     reload,
     toast,
@@ -3880,6 +3949,7 @@ async function main(): Promise<void> {
     getProject: () => project,
     getSelectedId: () => selectedId,
     onViewFullDoc: () => select(null),
+    onCommitDoc: () => void saveDoc(),
   });
   initPreviewLauncher(
     () => project,

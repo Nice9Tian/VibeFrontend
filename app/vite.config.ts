@@ -99,6 +99,21 @@ function devProjectFs(): Plugin {
           });
           return;
         }
+        if (url.pathname === "/remove" && req.method === "POST") {
+          if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+            fs.unlinkSync(full);
+            const parent = path.dirname(full);
+            const compsRoot = path.join(projectDir, "components");
+            if (parent !== compsRoot && parent.startsWith(compsRoot + path.sep)) {
+              try {
+                if (fs.readdirSync(parent).length === 0) fs.rmdirSync(parent);
+              } catch {
+                // 忽略非空或删除失败
+              }
+            }
+          }
+          return send(200, "ok");
+        }
         send(404, "未知接口");
       });
     },
