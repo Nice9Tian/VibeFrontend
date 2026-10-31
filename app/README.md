@@ -90,6 +90,8 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 ## 还没有实现
 
 - 普通控件（非基础图形的 `QWidget`）在导出成 Qt 时的旋转绘制（基础图形 `Shape` 已按 `QPainter` 旋转导出；普通控件设置了旋转时在问题栏保留提示）
+- AnimeAn 原工程（`animean/`）业务层中启用嵌入式 Python（`ANIMEAN_WITH_PYTHON=ON`）以及将导出的新界面直接合入 `animean/` 主程序的联调（`animean/business/` 的无 `QWidget` C++ 业务接口层及 45 项无头测试已实现；新界面在 `examples/animean/` 中通过 `MockBusiness` 完成了全部面板、参数表单与时间轴的双端验证）
+- `可视化界面与语义逻辑设计工具.md` 第 10、11 节中留待后续的内容：iOS 版、控件实现直接引入 npm 依赖包并由工具打包、运行时自动测量文字溢出提示、导出为独立 Web 项目
 
 
 ## 代码结构
