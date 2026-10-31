@@ -9,7 +9,7 @@ import {
   syncSceneNodesFromDockLayout,
   type DockPreviewCallbacks,
 } from "./dock";
-import { listDir, readText, removeFile, watchProject, writeText } from "./fs";
+import { listDir, localWriteCount, readText, removeFile, watchProject, writeText, writesSettled } from "./fs";
 import { initDocView, syncDocView, syncPreviewSelectionToTextarea } from "./docview";
 import { initLibrary, renderLibraryPalette } from "./library";
 import { invoke } from "@tauri-apps/api/core";
@@ -324,6 +324,7 @@ async function applyHistorySnapshot(target: HistorySnapshot): Promise<void> {
   if (target.logicText !== project.logicText) {
     window.clearTimeout(yamlTimer);
     yamlDirty = false;
+    project.logicText = target.logicText;
     await writeText(LOGIC_PATH, target.logicText);
   }
   if (sceneChanged) {
@@ -434,6 +435,8 @@ async function editLogic(mutate: (doc: Document) => void, label = "修改逻辑"
   }
   window.clearTimeout(yamlTimer);
   yamlDirty = false;
+  // 先更新内存再写盘：紧接着的下一次修改要以这次的结果为基准，不能等 reload 读回来
+  project.logicText = nextText;
   await writeText(LOGIC_PATH, nextText);
   await reload();
   return true;
@@ -442,6 +445,28 @@ async function editLogic(mutate: (doc: Document) => void, label = "修改逻辑"
 function ensureObject(doc: Document, id: string): void {
   if (!isMap(doc.getIn(["objects", id]))) doc.setIn(["objects", id], doc.createNode({}));
 }
+
+// 重载可能在任何时候到来（外部工具改了文件）。鼠标按住时重绘会换掉按着的控件，这次点击或拖动就丢了，
+// 所以等松开再画；click 在松开之后才发，排到下一轮
+let pointerHeld = false;
+let renderPending = false;
+
+function renderAfterReload(): void {
+  if (pointerHeld) renderPending = true;
+  else renderAll();
+}
+
+function onPointerReleased(): void {
+  pointerHeld = false;
+  if (!renderPending) return;
+  renderPending = false;
+  window.setTimeout(renderAll, 0);
+}
+
+document.addEventListener("pointerdown", () => (pointerHeld = true), true);
+document.addEventListener("pointerup", onPointerReleased, true);
+document.addEventListener("pointercancel", onPointerReleased, true);
+window.addEventListener("blur", onPointerReleased);
 
 let loading = false;
 let reloadAgain = false;
@@ -458,13 +483,21 @@ async function reload(force = false): Promise<void> {
       reloadAgain = false;
       const mustRender = reloadForce;
       reloadForce = false;
+      // 磁盘要追上内存才能读：文件监听触发的重载如果读到自己还没写完的文件，会用旧内容盖掉内存
+      await writesSettled();
+      const writesBefore = localWriteCount();
       const next = await loadProject(project);
+      if (writesBefore !== localWriteCount()) {
+        reloadForce ||= mustRender;
+        reloadAgain = true;
+        continue;
+      }
       if (!mustRender && next.signature === project.signature) continue;
       project = next;
       designRuntime = new Runtime(project);
       previewRuntime?.adopt(project);
       if (selectedId && !node(selectedId)) selectedId = null;
-      renderAll();
+      renderAfterReload();
     } while (reloadAgain);
   } catch (e) {
     toast(`加载项目失败：${(e as Error).message}`);
@@ -4959,7 +4992,27 @@ $("restart").addEventListener("click", () => {
 
 // ---------- 启动 ----------
 
+/** 右侧“新增”表单（data-new-*）里填了但还没提交的内容。这些输入框每次重绘都重建。 */
+function readFormDrafts(): Array<[string, string]> {
+  const drafts: Array<[string, string]> = [];
+  for (const el of document.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")) {
+    for (const key of Object.keys(el.dataset)) {
+      if (/^new[A-Z]/.test(key)) drafts.push([key, el.value]);
+    }
+  }
+  return drafts;
+}
+
+function restoreFormDrafts(drafts: Array<[string, string]>): void {
+  for (const [key, value] of drafts) {
+    const attr = key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+    const el = document.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-${attr}]`);
+    if (el) el.value = value;
+  }
+}
+
 function renderAll(): void {
+  const formDrafts = readFormDrafts();
   syncSelection();
   $("project-name").textContent = project.name;
   $("project-root").textContent = project.root;
@@ -4972,6 +5025,7 @@ function renderAll(): void {
   renderProblems();
   renderConditions();
   syncStandalonePreviewTitle(project);
+  restoreFormDrafts(formDrafts);
 }
 
 // ---------- 导出成 Qt ----------

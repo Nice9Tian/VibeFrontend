@@ -582,6 +582,10 @@ export function renderStateEditPane(): void {
       deps?.toast("初始值格式与类型不匹配");
       return;
     }
+    pathIn.value = "";
+    initIn.value = "";
+    typeSel.selectedIndex = 0;
+    ownerSel.selectedIndex = 0;
     let applied = false;
     void deps
       ?.editLogic((doc) => {
@@ -759,6 +763,8 @@ export function renderStateEditPane(): void {
       deps?.toast(simErr);
       return;
     }
+    evNameIn.value = "";
+    evSimIn.value = "";
     void deps?.editLogic((doc) => {
       upsertBusinessEventInDoc(doc, name, { simulateSet: sim });
     }, `添加业务事件 ${name}`);
@@ -831,6 +837,8 @@ export function renderStateEditPane(): void {
       deps?.toast(`条件名“${id}”已与控件、菜单或状态分组重名`);
       return;
     }
+    condIdIn.value = "";
+    condExprIn.value = "";
     let applied = false;
     void deps
       ?.editLogic((doc) => {
