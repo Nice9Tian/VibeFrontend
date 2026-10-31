@@ -449,6 +449,9 @@ function ensureObject(doc: Document, id: string): void {
 // 重载可能在任何时候到来（外部工具改了文件）。鼠标按住时重绘会换掉按着的控件，这次点击或拖动就丢了，
 // 所以等松开再画；click 在松开之后才发，排到下一轮
 let pointerHeld = false;
+let pointerHeldInIframe = false;
+let stageIframeDoc: globalThis.Document | null = null;
+let stageIframeCleanup: (() => void) | null = null;
 let renderPending = false;
 
 function renderAfterReload(): void {
@@ -458,6 +461,7 @@ function renderAfterReload(): void {
 
 function onPointerReleased(): void {
   pointerHeld = false;
+  pointerHeldInIframe = false;
   if (!renderPending) return;
   renderPending = false;
   window.setTimeout(renderAll, 0);
@@ -466,7 +470,11 @@ function onPointerReleased(): void {
 document.addEventListener("pointerdown", () => (pointerHeld = true), true);
 document.addEventListener("pointerup", onPointerReleased, true);
 document.addEventListener("pointercancel", onPointerReleased, true);
-window.addEventListener("blur", onPointerReleased);
+window.addEventListener("blur", () => {
+  const iframe = document.getElementById("stage-iframe") as HTMLIFrameElement | null;
+  if (iframe && (document.activeElement === iframe || iframe.contentDocument?.hasFocus())) return;
+  onPointerReleased();
+});
 
 let loading = false;
 let reloadAgain = false;
@@ -1200,6 +1208,18 @@ function ensureStageIframe(): HTMLElement {
     stage.prepend(iframe);
   }
   const doc = iframe.contentDocument!;
+  if (stageIframeDoc && stageIframeDoc !== doc) {
+    stageIframeCleanup?.();
+    stageIframeCleanup = null;
+    if (pointerHeldInIframe) onPointerReleased();
+  }
+  stageIframeDoc = doc;
+  if (!(iframe as unknown as { __vfLoadBound?: boolean }).__vfLoadBound) {
+    (iframe as unknown as { __vfLoadBound?: boolean }).__vfLoadBound = true;
+    iframe.addEventListener("load", () => {
+      ensureStageIframe();
+    });
+  }
   let baseStyle = doc.getElementById("vf-stage-base-styles") as HTMLStyleElement | null;
   if (!baseStyle) {
     baseStyle = doc.createElement("style");
@@ -1218,6 +1238,23 @@ function ensureStageIframe(): HTMLElement {
   }
   if (!(doc as unknown as { __vfStageEventsBound?: boolean }).__vfStageEventsBound) {
     (doc as unknown as { __vfStageEventsBound?: boolean }).__vfStageEventsBound = true;
+    const onIframePointerDown = () => {
+      pointerHeld = true;
+      pointerHeldInIframe = true;
+    };
+    const onIframeWindowBlur = () => {
+      if (!document.hasFocus()) onPointerReleased();
+    };
+    doc.addEventListener("pointerdown", onIframePointerDown, true);
+    doc.addEventListener("pointerup", onPointerReleased, true);
+    doc.addEventListener("pointercancel", onPointerReleased, true);
+    doc.defaultView?.addEventListener("blur", onIframeWindowBlur);
+    stageIframeCleanup = () => {
+      doc.removeEventListener("pointerdown", onIframePointerDown, true);
+      doc.removeEventListener("pointerup", onPointerReleased, true);
+      doc.removeEventListener("pointercancel", onPointerReleased, true);
+      doc.defaultView?.removeEventListener("blur", onIframeWindowBlur);
+    };
     doc.addEventListener(
       "click",
       (e) => {
@@ -4504,6 +4541,12 @@ const docText = $<HTMLTextAreaElement>("doc-text");
 const yamlText = $<HTMLTextAreaElement>("yaml-text");
 let docDirty = false;
 let yamlDirty = false;
+let docBaseContent: string | null = null;
+let docConflictNotified = false;
+let docEditSeq = 0;
+let yamlBaseContent: string | null = null;
+let yamlConflictNotified = false;
+let yamlEditSeq = 0;
 /** 文档页签当前编辑的是哪份文件的哪个小节；section 为 null 表示整份文件 */
 let docTarget: { path: string; section: string | null } | null = null;
 let docTimer: number | undefined;
@@ -4570,6 +4613,16 @@ function renderRight(): void {
     }
   }
 
+  if (!docDirty) {
+    docBaseContent = docTarget ? (project.docs.get(docTarget.path) ?? "") : null;
+    docConflictNotified = false;
+  } else if (docTarget && !docConflictNotified) {
+    const latest = project.docs.get(docTarget.path) ?? "";
+    if (docBaseContent !== null && latest !== docBaseContent) {
+      docConflictNotified = true;
+      toast(`已忽略 ${docTarget.path} 的外部修改，保留当前编辑内容`);
+    }
+  }
   // YAML 页签
   if (!yamlDirty) {
     setTextarea(yamlText, project.logicText);
@@ -4581,6 +4634,13 @@ function renderRight(): void {
     } else {
       noteWithButton($("yaml-note"), LOGIC_PATH);
     }
+  }
+  if (!yamlDirty) {
+    yamlBaseContent = project.logicText;
+    yamlConflictNotified = false;
+  } else if (!yamlConflictNotified && yamlBaseContent !== null && project.logicText !== yamlBaseContent) {
+    yamlConflictNotified = true;
+    toast(`已忽略 ${LOGIC_PATH} 的外部修改，保留当前编辑内容`);
   }
   syncDocView();
   renderLayoutEditPane();
@@ -4602,13 +4662,25 @@ async function saveDoc(): Promise<void> {
   const { path, section } = docTarget;
   const current = project.docs.get(path) ?? "";
   const nextDocContent = section === null ? docText.value : replaceSection(current, section, docText.value);
+  const docBase = docBaseContent;
+  const docNotified = docConflictNotified;
+  const docSeq = docEditSeq;
   docDirty = false;
+  docBaseContent = nextDocContent;
+  docConflictNotified = false;
   if (nextDocContent !== current) {
     const before = currentSnapshot();
     const nextDocs = { ...(before.docs ?? {}), [path]: nextDocContent };
     history = pushHistory(history, before, { ...before, docs: nextDocs }, "编辑说明");
     project.docs.set(path, nextDocContent);
     renderToolbar();
+  }
+  if (!docNotified && docBase !== null) {
+    const diskNow = await readText(path);
+    if (docSeq !== docEditSeq) return;
+    if (diskNow !== null && diskNow !== docBase && diskNow !== nextDocContent) {
+      toast(`已忽略 ${path} 的外部修改，保留当前编辑内容`);
+    }
   }
   await writeText(path, nextDocContent);
   await reload();
@@ -4618,7 +4690,12 @@ async function saveYaml(): Promise<void> {
   window.clearTimeout(yamlTimer);
   if (!yamlDirty) return;
   yamlDirty = false;
+  const yamlBase = yamlBaseContent;
+  const yamlNotified = yamlConflictNotified;
+  const yamlSeq = yamlEditSeq;
   const nextYaml = yamlText.value;
+  yamlBaseContent = nextYaml;
+  yamlConflictNotified = false;
   if (nextYaml !== project.logicText) {
     const before = currentSnapshot();
     history = pushHistory(
@@ -4630,6 +4707,13 @@ async function saveYaml(): Promise<void> {
     project.logicText = nextYaml;
     renderToolbar();
   }
+  if (!yamlNotified && yamlBase !== null) {
+    const diskNow = await readText(LOGIC_PATH);
+    if (yamlSeq !== yamlEditSeq) return;
+    if (diskNow !== null && diskNow !== yamlBase && diskNow !== nextYaml) {
+      toast(`已忽略 ${LOGIC_PATH} 的外部修改，保留当前编辑内容`);
+    }
+  }
   await writeText(LOGIC_PATH, nextYaml);
   await reload();
 }
@@ -4640,12 +4724,22 @@ async function flushEditors(): Promise<void> {
 }
 
 docText.addEventListener("input", () => {
+  docEditSeq++;
+  if (!docDirty) {
+    docBaseContent = docTarget ? (project.docs.get(docTarget.path) ?? "") : null;
+    docConflictNotified = false;
+  }
   docDirty = true;
   window.clearTimeout(docTimer);
   docTimer = window.setTimeout(() => void saveDoc(), 600);
 });
 docText.addEventListener("blur", () => void saveDoc());
 yamlText.addEventListener("input", () => {
+  yamlEditSeq++;
+  if (!yamlDirty) {
+    yamlBaseContent = project.logicText;
+    yamlConflictNotified = false;
+  }
   yamlDirty = true;
   window.clearTimeout(yamlTimer);
   yamlTimer = window.setTimeout(() => void saveYaml(), 600);

@@ -1544,6 +1544,33 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     );
     assert.equal(qtClosedMiddle.docks.areas.left.groups.length, 3);
 
+    // DataForm (toolOptionsForm) 在固定 58px 高度下应保持自然行高（按钮高度 >= 20px）并提供纵向滚动
+    const qtFormCheck = execFileSync(
+      ANIMEAN_QT_EXE,
+      ["--steps", "resize:1280x800;size:toolOptionsForm;size:toolOptionsForm:buttons;size:toolOptionsForm:scroll"],
+      { encoding: "utf8", env: qtEnv },
+    )
+      .split(/\r?\n/)
+      .filter(Boolean);
+    const formBtnsLine = qtFormCheck.find((l) => l.startsWith("size toolOptionsForm buttons ")) ?? "";
+    const formBtnEntries = formBtnsLine
+      .replace(/^size toolOptionsForm buttons\s*/, "")
+      .split(",")
+      .filter(Boolean);
+    assert.ok(formBtnEntries.length >= 3, `toolOptionsForm 应包含至少 3 个可见按钮，实际：${formBtnsLine}`);
+    for (const entry of formBtnEntries) {
+      const m = /^(.+)=(\d+)x(\d+)$/.exec(entry);
+      assert.ok(m, `按钮尺寸格式错误：${entry}`);
+      const btnH = Number(m![3]);
+      assert.ok(btnH >= 20, `toolOptionsForm 按钮 ${m![1]} 高度应保持自然行高 (>= 20px)，不应被挤扁，实际：${entry}`);
+    }
+    const formScrollLine = qtFormCheck.find((l) => l.startsWith("size toolOptionsForm scroll ")) ?? "";
+    const maxScrollMatch = /maxScroll=(\d+)/.exec(formScrollLine);
+    assert.ok(
+      maxScrollMatch && Number(maxScrollMatch[1]) > 0,
+      `toolOptionsForm 内容超出 58px 时应可纵向滚动 (maxScroll > 0)，实际：${formScrollLine}`,
+    );
+
     console.log(
       `PASS 3. 停靠编排 + FloatBox 浮出移位后无头 Chrome DOM 与 Qt 实测几何对比：共 ${count} 个可见控件，最大偏差 ${maxDiff}px（<= 3px），父 Dock 关闭后 FloatBox 独立显隐、真实 QTest 鼠标拖拽及复审组合场景验证通过`,
     );

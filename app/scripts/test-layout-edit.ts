@@ -1205,7 +1205,7 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(heldBox.x), y: Math.round(heldBox.y), button: "left" });
     await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: Math.round(heldBox.x), y: Math.round(heldBox.y), button: "left", buttons: 1, clickCount: 1 });
     fs.appendFileSync(logicFile, "# 按住时外部改的\n");
-    await new Promise((r) => setTimeout(r, 450));
+    await new Promise((r) => setTimeout(r, 650));
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: Math.round(heldBox.x), y: Math.round(heldBox.y), button: "left", buttons: 0, clickCount: 1 });
     await waitUntil("鼠标按住时的外部修改不应吞掉这次点击", () =>
       cdp!.eval<boolean>(`Boolean(document.querySelector('#layers .layer.selected[data-id="layerList"]'))`),
@@ -1257,8 +1257,10 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
       return text.includes("duringSlowRead") && text.includes("afterSlowRead");
     });
 
-    // 规则：YAML 编辑器里有还没保存的内容时，外部修改不覆盖编辑器，停止输入后以编辑器为准
+    // 规则：YAML 编辑器里有还没保存的内容时，外部修改不覆盖编辑器，停止输入后以编辑器为准，并提示用户外部修改被忽略
     await cdp.eval(`(() => {
+      const t = document.getElementById("toast");
+      if (t) { t.textContent = ""; t.classList.remove("show"); }
       const el = document.querySelector("#yaml-text");
       el.value = el.value + "# 本地还没保存\\n";
       el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1266,7 +1268,113 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     fs.appendFileSync(logicFile, "# 编辑时外部改的\n");
     await new Promise((r) => setTimeout(r, 350));
     if (!(await yamlEditorHas("本地还没保存"))) timingProblems.push("外部修改覆盖了编辑器里没保存的内容");
+    await waitUntil("YAML 防抖窗口内外部修改应弹出忽略提示", () =>
+      cdp!.eval<boolean>(`(() => {
+        const t = document.getElementById("toast");
+        return Boolean(t && t.textContent && t.textContent.includes("外部修改") && t.textContent.includes("忽略"));
+      })()`),
+    );
     await waitUntil("编辑器里的内容应在停止输入后落盘", () => fs.readFileSync(logicFile, "utf8").includes("本地还没保存"));
+
+    // 文档编辑器在 600ms 防抖窗口内遇到外部修改同一文件时，同样保留编辑器内容、事后覆盖并提示用户
+    const docFile = path.join(tmpDir, "docs", "page.md");
+    await cdp.clickSelector("#tab-doc");
+    if (await cdp.eval<boolean>(`Boolean(document.querySelector("#doc-note button"))`)) {
+      await cdp.clickSelector("#doc-note button");
+      await waitUntil("创建控件说明后文档编辑框应可编辑", () => cdp!.eval<boolean>(`!document.querySelector("#doc-text").disabled`));
+    }
+    await cdp.eval(`(() => {
+      const t = document.getElementById("toast");
+      if (t) { t.textContent = ""; t.classList.remove("show"); }
+      const el = document.querySelector("#doc-text");
+      el.value = el.value + "\\n本地文档还没保存\\n";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+    fs.appendFileSync(docFile, "\n外部改的文档\n");
+    await new Promise((r) => setTimeout(r, 350));
+    await waitUntil("文档防抖窗口内外部修改应弹出忽略提示", () =>
+      cdp!.eval<boolean>(`(() => {
+        const t = document.getElementById("toast");
+        return Boolean(t && t.textContent && t.textContent.includes("外部修改") && t.textContent.includes("忽略"));
+      })()`),
+    );
+    await waitUntil("文档编辑器里的内容应在停止输入后落盘", () => fs.readFileSync(docFile, "utf8").includes("本地文档还没保存"));
+
+    // 预览模式下 #stage-iframe 内部按住控件（含 iframe 重建后）时，外部修改不应在按下途中触发 renderAll()
+    await cdp.eval(`(() => {
+      document.getElementById("stage-iframe")?.remove();
+    })()`);
+    await cdp.clickSelector("#mode-preview");
+    const iframeBtnPt = await cdp.eval<{ x: number; y: number } | null>(`(() => {
+      const iframe = document.getElementById("stage-iframe");
+      const doc = iframe?.contentDocument;
+      const wrapper = doc?.querySelector('.vf-node[data-vf-id="moveLayerDownBtn"]');
+      if (!iframe || !wrapper) return null;
+      wrapper.__vfHeldMarker = true;
+      wrapper.scrollIntoView({ block: "center", inline: "center" });
+      const ir = iframe.getBoundingClientRect();
+      const wr = wrapper.getBoundingClientRect();
+      const scaleX = ir.width / (iframe.offsetWidth || 1);
+      const scaleY = ir.height / (iframe.offsetHeight || 1);
+      return {
+        x: ir.left + (wr.left + wr.width / 2) * scaleX,
+        y: ir.top + (wr.top + wr.height / 2) * scaleY,
+      };
+    })()`);
+    assert.ok(iframeBtnPt, "预览模式下应能在重建后的 #stage-iframe 内找到 addLayerBtn");
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(iframeBtnPt.x), y: Math.round(iframeBtnPt.y), button: "left" });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: Math.round(iframeBtnPt.x), y: Math.round(iframeBtnPt.y), button: "left", buttons: 1, clickCount: 1 });
+    fs.appendFileSync(logicFile, "# 预览按住时外部改的\n");
+    await new Promise((r) => setTimeout(r, 650));
+    const markerStillAliveWhileHeld = await cdp.eval<boolean>(`(() => {
+      const doc = document.getElementById("stage-iframe")?.contentDocument;
+      const wrapper = doc?.querySelector('.vf-node[data-vf-id="moveLayerDownBtn"]');
+      return Boolean(wrapper && wrapper.__vfHeldMarker === true);
+    })()`);
+    if (!markerStillAliveWhileHeld) {
+      timingProblems.push("预览模式下 #stage-iframe 内按住鼠标时外部修改仍在途中触发了重绘");
+    }
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: Math.round(iframeBtnPt.x), y: Math.round(iframeBtnPt.y), button: "left", buttons: 0, clickCount: 1 });
+    await waitUntil("预览模式下松开鼠标后补上延后的刷新", () => yamlEditorHas("预览按住时外部改的"));
+    await cdp.clickSelector("#mode-edit");
+
+    // devFetch 写入与删除失败时应抛出 Error，readText 对 404 仍返回 null
+    const fsErrorCheck = await cdp.eval<{ read404Null: boolean; write400Threw: boolean; remove400Threw: boolean; write500Threw: boolean }>(`(async () => {
+      const fsMod = await import("/src/fs.ts");
+      const read404Null = (await fsMod.readText("no-such-file-404.txt")) === null;
+      let write400Threw = false;
+      try {
+        await fsMod.writeText("../outside-bad-path.txt", "x");
+      } catch {
+        write400Threw = true;
+      }
+      let remove400Threw = false;
+      try {
+        await fsMod.removeFile("../outside-bad-path.txt");
+      } catch {
+        remove400Threw = true;
+      }
+      const origFetch = window.fetch;
+      window.fetch = (url, init) => {
+        if (String(url).includes("/__fs/write")) {
+          return Promise.resolve(new Response("disk full", { status: 500 }));
+        }
+        return origFetch(url, init);
+      };
+      let write500Threw = false;
+      try {
+        await fsMod.writeText("docs/main.md", "fail");
+      } catch {
+        write500Threw = true;
+      } finally {
+        window.fetch = origFetch;
+      }
+      return { read404Null, write400Threw, remove400Threw, write500Threw };
+    })()`);
+    if (!fsErrorCheck.read404Null) timingProblems.push("readText 对 404 应返回 null");
+    if (!fsErrorCheck.write400Threw) timingProblems.push("writeText 越界 400 未抛异常");
+    if (!fsErrorCheck.remove400Threw) timingProblems.push("removeFile 越界 400 未抛异常");
+    if (!fsErrorCheck.write500Threw) timingProblems.push("writeText 500 未抛异常");
 
     assert.deepEqual(timingProblems, [], "保存与重载时序");
   } finally {

@@ -26,6 +26,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScopeGuard>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSlider>
 #include <QSpinBox>
@@ -507,7 +508,7 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             const QString rawVal = step.section(QLatin1Char(':'), 3);
             bool handledViaWidget = false;
             if (auto *frame = ui.window()->findChild<QFrame *>(id)) {
-                const QList<QWidget *> cells = frame->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+                const QList<QWidget *> cells = frame->findChildren<QWidget *>();
                 for (QWidget *cell : cells) {
                     if (cell->property("vfFieldName").toString() != fieldName || cell->isHidden())
                         continue;
@@ -963,7 +964,32 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             continue;
         }
         if (verb == QLatin1String("size")) {
-            output.append(QStringLiteral("size %1 %2x%3").arg(id).arg(widget->width()).arg(widget->height()));
+            const QString sub = step.section(QLatin1Char(':'), 2, 2);
+            if (sub == QLatin1String("buttons")) {
+                QStringList parts;
+                for (auto *btn : widget->findChildren<QPushButton *>()) {
+                    if (btn->isVisible())
+                        parts.append(QStringLiteral("%1=%2x%3").arg(btn->text()).arg(btn->width()).arg(btn->height()));
+                }
+                output.append(QStringLiteral("size %1 buttons %2").arg(id, parts.join(QLatin1String(","))));
+            } else if (sub == QLatin1String("scroll")) {
+                if (auto *sa = widget->findChild<QScrollArea *>()) {
+                    auto *vp = sa->viewport();
+                    auto *cw = sa->widget();
+                    auto *vsb = sa->verticalScrollBar();
+                    output.append(QStringLiteral("size %1 scroll viewport=%2x%3 content=%4x%5 maxScroll=%6")
+                                      .arg(id)
+                                      .arg(vp ? vp->width() : 0)
+                                      .arg(vp ? vp->height() : 0)
+                                      .arg(cw ? cw->width() : 0)
+                                      .arg(cw ? cw->height() : 0)
+                                      .arg(vsb ? vsb->maximum() : 0));
+                } else {
+                    output.append(QStringLiteral("size %1 scroll none").arg(id));
+                }
+            } else {
+                output.append(QStringLiteral("size %1 %2x%3").arg(id).arg(widget->width()).arg(widget->height()));
+            }
             continue;
         }
         if (verb == QLatin1String("click")) {
