@@ -25,6 +25,7 @@
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QScrollBar>
 #include <QSlider>
 #include <QSpinBox>
@@ -37,6 +38,45 @@
 namespace vf {
 
 namespace {
+
+// 按步骤运行时挡掉本机鼠标，结果不取决于光标碰巧停在哪里。
+// Qt 在控件显示、隐藏时还会按光标位置合成 Enter / Leave，这些不是自发事件，所以进出事件除了驱动自己发的都挡。
+// 设了环境变量 VF_STEPS_OS_MOUSE 时放行，用来在跑步骤时手工或用系统鼠标操作
+class OsPointerBlocker : public QObject
+{
+public:
+    using QObject::QObject;
+    bool driverSending = false;
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        switch (event->type()) {
+        case QEvent::Enter:
+        case QEvent::Leave:
+            return !driverSending;
+        case QEvent::MouseButtonPress:
+        case QEvent::MouseButtonRelease:
+        case QEvent::MouseButtonDblClick:
+        case QEvent::MouseMove:
+        case QEvent::Wheel:
+            return event->spontaneous() && watched->isWindowType();
+        default:
+            return false;
+        }
+    }
+};
+
+OsPointerBlocker *osPointerBlocker = nullptr;
+
+void sendPointerCrossing(QWidget *widget, QEvent *event)
+{
+    if (osPointerBlocker)
+        osPointerBlocker->driverSending = true;
+    QApplication::sendEvent(widget, event);
+    if (osPointerBlocker)
+        osPointerBlocker->driverSending = false;
+}
 
 void waitMs(int ms)
 {
@@ -263,6 +303,12 @@ QStringList compare(Ui &ui)
 QStringList runSteps(Ui &ui, const QStringList &steps)
 {
     QStringList output;
+    OsPointerBlocker blocker;
+    if (!qEnvironmentVariableIsSet("VF_STEPS_OS_MOUSE")) {
+        osPointerBlocker = &blocker;
+        qApp->installEventFilter(&blocker);
+    }
+    const auto clearBlocker = qScopeGuard([] { osPointerBlocker = nullptr; });
     QApplication::processEvents();
     for (const QString &raw : steps) {
         const QString step = raw.trimmed();
@@ -774,10 +820,10 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
         } else if (verb == QLatin1String("enter")) {
             const QPointF local = widget->rect().center();
             QEnterEvent event(local, widget->mapTo(widget->window(), local), widget->mapToGlobal(local));
-            QApplication::sendEvent(widget, &event);
+            sendPointerCrossing(widget, &event);
         } else if (verb == QLatin1String("leave")) {
             QEvent event(QEvent::Leave);
-            QApplication::sendEvent(widget, &event);
+            sendPointerCrossing(widget, &event);
         } else if (verb == QLatin1String("type")) {
             const QString text = step.section(QLatin1Char(':'), 2);
             widget->setFocus();

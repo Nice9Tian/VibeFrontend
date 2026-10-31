@@ -1547,6 +1547,9 @@ struct Ui::Private
     bool applyingLayout = false;
     bool manualClock = false;         // 显式调用 setClock 时停止自动定时器避免竞态
     bool syncingLayout = false;
+    bool dockPassRunning = false;     // applyDockLayout 正在执行
+    bool dockPassPending = false;     // 执行期间又有刷新请求，结束后补一次
+    bool dockPassCatchingUp = false;  // 正在补这一次
     // 界面销毁后，还没放完的效果再回调时靠它知道不能再碰界面
     std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 
@@ -3048,6 +3051,16 @@ void Ui::Private::applyDockLayout(const QJSValue &views)
     if (docks.isEmpty())
         return;
 
+    // 结构变化时面板先离开布局再加回来，其间显示、隐藏控件会触发 Enter 等事件，事件处理又走到这里。
+    // 这时重入会拿不在布局里的面板去 resizeDocks，所以先记下，等这一遍结束后按最新状态补一次
+    if (dockPassRunning) {
+        // 补跑的这一遍读的已经是最新状态，其间的请求是布局自己引起的窗口变化，再排队会转不停
+        if (!dockPassCatchingUp)
+            dockPassPending = true;
+        return;
+    }
+    dockPassRunning = true;
+
     const bool prevApplying = applyingLayout;
     applyingLayout = true;
 
@@ -3473,6 +3486,16 @@ void Ui::Private::applyDockLayout(const QJSValue &views)
     if (draggingSplitterIdx < 0)
         rebuildDockSplitters();
     applyingLayout = prevApplying;
+    dockPassRunning = false;
+
+    if (dockPassPending) {
+        dockPassPending = false;
+        dockPassCatchingUp = true;
+        const QJSValue latestViews = call("views");
+        applyDockLayout(latestViews);
+        applyFloatBoxes(latestViews);
+        dockPassCatchingUp = false;
+    }
 }
 
 void Ui::Private::rebuildDockSplitters()

@@ -39,6 +39,9 @@ class Ui;
 //   shot:文件路径            把窗口此刻的样子存成图片（.png）
 //   state                    输出 "state " 加上逻辑算出的状态和各控件应有的样子
 //   check                    对照各控件实际的样子：一致输出 "check ok"，否则逐条输出 "check MISMATCH ..."
+//
+// 按步骤运行时本机鼠标不起作用，悬停和点击都由步骤发出，结果不取决于光标停在哪里；
+// 设了环境变量 VF_STEPS_OS_MOUSE 时放行
 QStringList runSteps(Ui &ui, const QStringList &steps);
 
 } // namespace vf

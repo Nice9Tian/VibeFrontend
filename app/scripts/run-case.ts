@@ -13,7 +13,8 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 function buildQtEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
+  // Windows 上 Qt 的警告默认进调试输出，这里要它写到 stderr，下面才查得到
+  const env: NodeJS.ProcessEnv = { ...process.env, QT_FORCE_STDERR_LOGGING: "1" };
   if (process.platform === "win32") {
     const extraDirs = ["C:\\Qt\\6.9.1\\mingw_64\\bin", "C:\\Qt\\Tools\\mingw1310_64\\bin"].filter((d) =>
       fs.existsSync(d),
@@ -279,6 +280,16 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string; noEffects
     name: "51. 关闭的组夹在并排组中间：并排方向与分隔条序号不错位，关闭的激活页签叠入后显示另一个页签",
     steps:
       "dock:split:layersDock:timelineDock:after:horizontal;dock:split:timelineDock:inspectorDock:after;dock:close:timelineDock;check;state;dock:resizeSplit:left:0:100;check;state;click:menuToggleTimeline;check;state;dock:close:inspectorDock;dock:tabify:layersDock:inspectorDock;check;state",
+  },
+  {
+    name: "52. 悬停的按钮所在面板切走页签再切回：悬停状态不残留",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;enter:colorPanelToggleBtn;check;state;dock:tab:layersDock;check;state;dock:tab:inspectorDock;check;state",
+  },
+  {
+    name: "53. 悬停或按下的按钮所在面板关闭再打开、重排：状态不残留",
+    steps:
+      "enter:colorPanelToggleBtn;check;state;dock:close:inspectorDock;dock:open:inspectorDock;check;state;press:colorPanelToggleBtn;check;state;dock:close:inspectorDock;dock:open:inspectorDock;check;state;enter:colorPanelToggleBtn;dock:move:inspectorDock:left;check;state",
   },
 ];
 
@@ -682,6 +693,24 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
   return outLines;
 }
 
+/** 两行 state 的差异字段，一行一个，不打印整段 JSON。 */
+function stateDiffLines(web: string | undefined, qt: string | undefined): string[] {
+  if (web === undefined || qt === undefined) return [`web: ${web ?? "<无>"}`, `qt : ${qt ?? "<无>"}`];
+  const out: string[] = [];
+  const walk = (a: unknown, b: unknown, at: string) => {
+    if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
+      const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+      for (const k of keys) {
+        walk((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], at ? `${at}.${k}` : k);
+      }
+    } else if (a !== b) {
+      out.push(`${at}: web=${JSON.stringify(a)} qt=${JSON.stringify(b)}`);
+    }
+  };
+  walk(JSON.parse(web.slice("state ".length)), JSON.parse(qt.slice("state ".length)), "");
+  return out.length > 0 ? out : ["JSON 内容相同，只有键的顺序或空白不同"];
+}
+
 async function main(): Promise<number> {
   const projectArg = process.argv[2];
   const restArgs = process.argv.slice(3);
@@ -706,6 +735,7 @@ async function main(): Promise<number> {
       qtStates: string[];
       qtChecks: string[];
       badChecks: string[];
+      qtWarnings: string[];
       stateMatch: boolean;
     }> = new Array(ANIMEAN_SUITE_CASES.length);
 
@@ -717,7 +747,7 @@ async function main(): Promise<number> {
         const webLines = await runStepsOnWeb(project, c.steps);
         const webStates = webLines.filter((l) => l.startsWith("state "));
         const qtArgs = c.noEffects ? ["--no-effects", "--steps", c.steps] : ["--steps", c.steps];
-        const { stdout: qtOut } = await execFileAsync(qtExe, qtArgs, {
+        const { stdout: qtOut, stderr: qtErr } = await execFileAsync(qtExe, qtArgs, {
           encoding: "utf8",
           env: qtEnv,
           maxBuffer: 16 * 1024 * 1024,
@@ -726,6 +756,7 @@ async function main(): Promise<number> {
         const qtStates = qtLines.filter((l) => l.startsWith("state "));
         const qtChecks = qtLines.filter((l) => l.startsWith("check "));
         const badChecks = qtChecks.filter((l) => l !== "check ok");
+        const qtWarnings = qtErr.split(/\r?\n/).filter((l) => l.includes("resizeDocks"));
 
         let stateMatch = webStates.length === qtStates.length;
         if (stateMatch) {
@@ -736,14 +767,14 @@ async function main(): Promise<number> {
             }
           }
         }
-        results[idx] = { name: c.name, webStates, qtStates, qtChecks, badChecks, stateMatch };
+        results[idx] = { name: c.name, webStates, qtStates, qtChecks, badChecks, qtWarnings, stateMatch };
       }
     });
     await Promise.all(workers);
 
     let failed = false;
     for (const r of results) {
-      if (!r.stateMatch || r.badChecks.length > 0) {
+      if (!r.stateMatch || r.badChecks.length > 0 || r.qtWarnings.length > 0) {
         failed = true;
         console.log(`FAIL ${r.name}`);
         if (!r.stateMatch) {
@@ -752,12 +783,12 @@ async function main(): Promise<number> {
           for (let i = 0; i < maxLen; i++) {
             if (r.webStates[i] !== r.qtStates[i]) {
               console.log(`  第 ${i + 1} 个 state 不一致：`);
-              console.log(`    web: ${r.webStates[i] ?? "<无>"}`);
-              console.log(`    qt : ${r.qtStates[i] ?? "<无>"}`);
+              for (const line of stateDiffLines(r.webStates[i], r.qtStates[i])) console.log(`    ${line}`);
             }
           }
         }
         for (const bc of r.badChecks) console.log(`  Qt check 失败：${bc}`);
+        for (const w of r.qtWarnings) console.log(`  Qt 警告：${w}`);
       } else {
         console.log(`PASS ${r.name}（state=${r.webStates.length} 处逐字一致，check=${r.qtChecks.length} 处全部 ok）`);
       }

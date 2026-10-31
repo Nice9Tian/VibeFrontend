@@ -6202,79 +6202,87 @@ var VF = (function(exports) {
 			}), {}, { dockLayout: layout }));
 			this.dockLayouts.set(winId, normalized);
 			this.lastSceneDockLayouts.set(winId, JSON.stringify((_winNode$dockLayout = winNode === null || winNode === void 0 ? void 0 : winNode.dockLayout) !== null && _winNode$dockLayout !== void 0 ? _winNode$dockLayout : null));
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		dockTabify(targetDockId, dockId, winId = this.project.scene.root) {
 			const next = dockTabify(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], targetDockId, dockId);
 			this.dockLayouts.set(winId, next);
+			this.releaseDockedPointerStates();
 			this.hooks.onLog({
 				title: `停靠 ${dockId}`,
 				lines: [`叠入页签组 ${targetDockId}`]
 			});
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		dockActivateTab(dockId, winId = this.project.scene.root) {
 			const next = dockActivateTab(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], dockId);
 			this.dockLayouts.set(winId, next);
+			this.releaseDockedPointerStates();
 			this.hooks.onLog({
 				title: `停靠 ${dockId}`,
 				lines: [`切换激活页签 ${dockId}`]
 			});
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		dockFloat(dockId, rect, winId = this.project.scene.root) {
 			const next = dockFloat(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], dockId, rect);
 			this.dockLayouts.set(winId, next);
+			this.releaseDockedPointerStates();
 			this.hooks.onLog({
 				title: `停靠 ${dockId}`,
 				lines: [`浮出为独立面板`]
 			});
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		dockRestore(dockId, targetArea, winId = this.project.scene.root) {
 			const next = dockRestore(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], dockId, targetArea);
 			this.dockLayouts.set(winId, next);
+			this.releaseDockedPointerStates();
 			this.hooks.onLog({
 				title: `停靠 ${dockId}`,
 				lines: [`从浮窗恢复停靠`]
 			});
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		dockMoveToArea(dockId, area, index, winId = this.project.scene.root) {
 			const next = dockMoveToArea(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], dockId, area, index);
 			this.dockLayouts.set(winId, next);
+			this.releaseDockedPointerStates();
 			this.hooks.onLog({
 				title: `停靠 ${dockId}`,
 				lines: [`吸附到停靠区 ${area}`]
 			});
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		dockSplit(targetDockId, dockId, position = "after", orientation, winId = this.project.scene.root) {
 			const next = dockSplit(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], targetDockId, dockId, position, orientation);
 			this.dockLayouts.set(winId, next);
+			this.releaseDockedPointerStates();
 			this.hooks.onLog({
 				title: `停靠 ${dockId}`,
 				lines: [`与 ${targetDockId} 并排（${position}）`]
 			});
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		dockResizeArea(area, size, winId = this.project.scene.root) {
 			const next = dockResizeArea(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], area, size);
 			this.dockLayouts.set(winId, next);
+			this.releaseDockedPointerStates();
 			this.hooks.onLog({
 				title: `停靠区 ${area}`,
 				lines: [`调整尺寸为 ${next.areas[area].size}px`]
 			});
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		dockResizeSplit(area, groupIndex, size, winId = this.project.scene.root) {
 			const next = dockResizeSplit(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], area, groupIndex, size);
 			this.dockLayouts.set(winId, next);
+			this.releaseDockedPointerStates();
 			this.hooks.onLog({
 				title: `停靠区 ${area}`,
 				lines: [`调整并排组 #${groupIndex} 尺寸为 ${Math.round(size)}px`]
 			});
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		/** 当停靠面板显隐变化后，若某个页签组的当前 active 面板已隐藏，则自动切换到同组内仍可见的页签。 */
 		syncActiveTabsWithVisibility() {
@@ -6437,7 +6445,7 @@ var VF = (function(exports) {
 		setActionSimulation(name, config) {
 			const cur = this.getActionSimulation(name);
 			this.actionSims.set(name, _objectSpread2(_objectSpread2({}, cur), config));
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		isWindowOpen(id) {
 			var _this$windows$get$ope, _this$windows$get;
@@ -6494,7 +6502,7 @@ var VF = (function(exports) {
 					deltaMs: next - prev
 				});
 			});
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		stateSnapshot() {
 			return [...this.state].map(([k, v]) => [k, cloneValue(v)]);
@@ -6579,7 +6587,6 @@ var VF = (function(exports) {
 				}
 			}
 			const enabled = props.enabled !== false;
-			if (!enabled) this.pressedControls.delete(id);
 			const selected = Boolean((_ref3 = (_props$selected = props.selected) !== null && _props$selected !== void 0 ? _props$selected : props.checked) !== null && _ref3 !== void 0 ? _ref3 : props.variant === "primary");
 			const resolvedState = resolveStateImage(decl, {
 				enabled,
@@ -6596,6 +6603,43 @@ var VF = (function(exports) {
 				stateImage: resolvedState.file
 			} : {});
 		}
+		/** 所有变更都从这里通知界面：先清掉已经不可能被鼠标碰到的控件的悬停和按下，view() 只读不改。 */
+		notifyChanged() {
+			for (const set of [this.hoveredControls, this.pressedControls]) for (const id of [...set]) if (!this.canTakePointer(id)) set.delete(id);
+			this.hooks.onChange();
+		}
+		/** 叠页签组里显示的那个面板；激活页签已关闭时是组里第一个没关闭的。 */
+		isShownDockTab(dockId) {
+			const layout = this.dockLayouts.get(this.windowOf(dockId));
+			const loc = layout ? dockFindLocation(layout, dockId) : null;
+			if ((loc === null || loc === void 0 ? void 0 : loc.kind) !== "area") return true;
+			const { active, tabs } = loc.group;
+			return (active && tabs.includes(active) && this.view(active).visible ? active : tabs.find((tid) => this.view(tid).visible)) === dockId;
+		}
+		/** 控件此刻显示在界面上并且可用。view().visible 只看控件自己，这里还看所属窗口、容器和停靠页签。 */
+		canTakePointer(id) {
+			const scene = this.project.scene;
+			if (!this.view(id).enabled) return false;
+			for (let cur = id; cur && cur !== scene.root; cur = parentOfNode(scene, cur)) {
+				const node = scene.nodes[cur];
+				const curView = this.view(cur);
+				if (!node || !curView.visible) return false;
+				if (node.type === "Dock" && !this.isShownDockTab(cur)) return false;
+				if (node.type === "FloatBox" && curView.props.floating) return true;
+			}
+			return true;
+		}
+		/** 面板重排后控件换了位置，不一定还在鼠标底下，而界面不一定收到移出事件，所以停靠面板里的悬停和按下一律清掉。 */
+		releaseDockedPointerStates() {
+			const scene = this.project.scene;
+			for (const set of [this.hoveredControls, this.pressedControls]) for (const id of [...set]) for (let cur = id; cur; cur = parentOfNode(scene, cur)) {
+				var _scene$nodes$cur;
+				if (((_scene$nodes$cur = scene.nodes[cur]) === null || _scene$nodes$cur === void 0 ? void 0 : _scene$nodes$cur.type) === "Dock") {
+					set.delete(id);
+					break;
+				}
+			}
+		}
 		toggleTextCondition(id) {
 			var _this$textConditions$2;
 			const next = !((_this$textConditions$2 = this.textConditions.get(id)) !== null && _this$textConditions$2 !== void 0 ? _this$textConditions$2 : false);
@@ -6604,7 +6648,7 @@ var VF = (function(exports) {
 				title: `条件 ${id}`,
 				lines: [`手动切换：${next ? "否 → 是" : "是 → 否"}`]
 			});
-			this.hooks.onChange();
+			this.notifyChanged();
 		}
 		/** nodeId 为 null 表示全局事件。 */
 		dispatch(nodeId, event, value) {
@@ -6666,7 +6710,7 @@ var VF = (function(exports) {
 								title: `${nodeId}.${event}`,
 								lines: [`浮动嵌入框 ${nodeId}: ${nextFloat ? "嵌入 → 浮动" : "浮动 → 嵌入"}`]
 							});
-							this.hooks.onChange();
+							this.notifyChanged();
 						}
 					} else if (event === "move" && value && typeof value === "object" && !Array.isArray(value)) {
 						var _this$floatBoxes$get2;
@@ -6676,33 +6720,31 @@ var VF = (function(exports) {
 						const nw = typeof value.width === "number" ? Math.round(value.width) : cur.floatWidth;
 						const nh = typeof value.height === "number" ? Math.round(value.height) : cur.floatHeight;
 						this.floatBoxes.set(nodeId, _objectSpread2(_objectSpread2(_objectSpread2(_objectSpread2(_objectSpread2({}, cur), {}, { floating: true }, nx !== void 0 ? { floatX: nx } : {}), ny !== void 0 ? { floatY: ny } : {}), nw !== void 0 ? { floatWidth: nw } : {}), nh !== void 0 ? { floatHeight: nh } : {}));
-						this.hooks.onChange();
+						this.notifyChanged();
 					}
 				}
 			}
 			if (nodeId) {
 				if (event === "mouseleave") {
-					if (this.hoveredControls.delete(nodeId) || this.pressedControls.delete(nodeId)) this.hooks.onChange();
+					const wasHovered = this.hoveredControls.delete(nodeId);
+					const wasPressed = this.pressedControls.delete(nodeId);
+					if (wasHovered || wasPressed) this.notifyChanged();
 				} else if (event === "mouseup") {
-					if (this.pressedControls.delete(nodeId)) this.hooks.onChange();
+					if (this.pressedControls.delete(nodeId)) this.notifyChanged();
 				} else if (event === "mouseenter" || event === "mousedown") {
-					const winId = this.windowOf(nodeId);
-					const winOpen = winId === scene.root || this.view(winId).visible;
-					const curView = this.view(nodeId);
-					if (winOpen && curView.visible && curView.enabled) {
+					if (this.canTakePointer(nodeId)) {
 						if (event === "mouseenter") this.hoveredControls.add(nodeId);
 						else this.pressedControls.add(nodeId);
-						this.hooks.onChange();
+						this.notifyChanged();
 					}
 				} else if (event === "change" && (value === "pressed" || value === "released")) {
 					const decl = node ? declFor(this.project, node.type) : null;
 					if (decl === null || decl === void 0 ? void 0 : decl.stateImages) {
 						var _logic$objects2, _logic$objects3;
-						const curView = this.view(nodeId);
-						if (curView.visible && curView.enabled) {
+						if (this.canTakePointer(nodeId)) {
 							if (value === "pressed") this.pressedControls.add(nodeId);
 							else this.pressedControls.delete(nodeId);
-							this.hooks.onChange();
+							this.notifyChanged();
 						}
 						if (!((_logic$objects2 = logic.objects) === null || _logic$objects2 === void 0 || (_logic$objects2 = _logic$objects2[nodeId]) === null || _logic$objects2 === void 0 ? void 0 : _logic$objects2.bind) && !((_logic$objects3 = logic.objects) === null || _logic$objects3 === void 0 || (_logic$objects3 = _logic$objects3[nodeId]) === null || _logic$objects3 === void 0 || (_logic$objects3 = _logic$objects3.events) === null || _logic$objects3 === void 0 ? void 0 : _logic$objects3.change)) return;
 					}
@@ -6848,7 +6890,7 @@ var VF = (function(exports) {
 				title: "业务写回状态",
 				lines: [`${path}: ${show(before !== null && before !== void 0 ? before : null)} → ${show(value)}`]
 			});
-			this.hooks.onChange();
+			this.notifyChanged();
 			return null;
 		}
 		/** 执行一批步骤，让结果一次生效，再处理这一批里 emit 的业务事件和 call 的动作。 */
@@ -6894,7 +6936,7 @@ var VF = (function(exports) {
 					lines: batch.lines
 				});
 			}
-			if (changed) this.hooks.onChange();
+			if (changed) this.notifyChanged();
 			for (const item of batch.pending) this.raise(item.name, item.args);
 			for (const call of batch.calls) this.executeAction(call.name, call.input);
 		}

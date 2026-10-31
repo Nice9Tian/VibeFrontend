@@ -434,6 +434,60 @@ async function testDockModelAndReferences(): Promise<void> {
   assert.equal(closedActive.areas.left.groups[0].active, "inspectorDock");
   assert.equal(effClosed.areas.left.groups[0].active, "layersDock", "激活页签已关闭时实际显示的是组里另一个");
 
+  // 14) [审核四] 控件不再显示或被重排后，悬停和按下状态不残留，切回来时不是 hover
+  const btn = "colorPanelToggleBtn";
+  const freshRuntime = async () => {
+    const rt = new Runtime(project);
+    rt.start();
+    await rt.waitForIdle();
+    return rt;
+  };
+  const stateOf = (rt: Runtime) => rt.view(btn).visualState;
+  {
+    const rt = await freshRuntime();
+    assert.equal(stateOf(rt), "selected", "初始是 selected");
+    rt.dockOp("tabify", { target: "layersDock", dock: "inspectorDock" });
+    rt.dispatch(btn, "mouseenter");
+    assert.equal(stateOf(rt), "hover", "显示着的控件能悬停");
+    rt.dockOp("activateTab", { dock: "layersDock" });
+    rt.dockOp("activateTab", { dock: "inspectorDock" });
+    assert.equal(stateOf(rt), "selected", "切走页签再切回不残留 hover");
+
+    rt.dockOp("activateTab", { dock: "layersDock" });
+    rt.dispatch(btn, "mouseenter");
+    rt.dockOp("activateTab", { dock: "inspectorDock" });
+    assert.equal(stateOf(rt), "selected", "后台页签里的控件不能进入悬停");
+  }
+  {
+    const rt = await freshRuntime();
+    rt.dispatch(btn, "mouseenter");
+    rt.dockOp("close", { dock: "inspectorDock" });
+    await rt.waitForIdle();
+    rt.dockOp("open", { dock: "inspectorDock" });
+    await rt.waitForIdle();
+    assert.equal(stateOf(rt), "selected", "关闭再打开不残留 hover");
+    rt.dispatch(btn, "mousedown");
+    assert.equal(stateOf(rt), "pressed");
+    rt.dockOp("close", { dock: "inspectorDock" });
+    await rt.waitForIdle();
+    rt.dockOp("open", { dock: "inspectorDock" });
+    await rt.waitForIdle();
+    assert.equal(stateOf(rt), "selected", "关闭再打开不残留 pressed");
+  }
+  {
+    const rt = await freshRuntime();
+    rt.dispatch(btn, "mouseenter");
+    rt.dockOp("move", { dock: "inspectorDock", area: "left" });
+    assert.equal(stateOf(rt), "selected", "面板重排后不残留 hover");
+    rt.dispatch(btn, "mouseenter");
+    rt.dockOp("float", { dock: "inspectorDock" });
+    assert.equal(stateOf(rt), "selected", "面板浮出后不残留 hover");
+    rt.dispatch(btn, "mouseenter");
+    rt.dispatch(btn, "mousedown");
+    rt.dispatch(btn, "mouseleave");
+    assert.equal(stateOf(rt), "selected", "移出时悬停和按下一起清掉");
+  }
+
   console.log("PASS 1. 停靠纯模型运算、layoutedit 同步、3组分栏缩放、关闭激活页签自动切换、持久化撤销重做与 FloatBox 独立显隐检查");
 }
 
@@ -1360,10 +1414,16 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
       const out = execFileSync(ANIMEAN_QT_EXE, ["--steps", steps], { encoding: "utf8", env: qtEnv });
       const lines = out.split(/\r?\n/).filter(Boolean);
       for (const l of lines.filter((x) => x.startsWith("check "))) assert.equal(l, "check ok", `${steps}\n${l}`);
-      const docks = JSON.parse(lines.find((l) => l.startsWith("docks "))!.slice("docks ".length));
+      const docksRow = lines.find((l) => l.startsWith("docks "));
+      const docks = docksRow ? JSON.parse(docksRow.slice("docks ".length)) : undefined;
+      const states = lines.filter((l) => l.startsWith("state ")).map((l) => JSON.parse(l.slice("state ".length)));
       const layoutRow = lines.find((l) => l.startsWith("layout "));
       const boxes = layoutRow ? JSON.parse(layoutRow.slice("layout ".length)) : {};
-      return { docks, boxes } as { docks: DockLayoutSpec; boxes: Record<string, { width: number; height: number }> };
+      return { docks, boxes, states } as {
+        docks: DockLayoutSpec;
+        boxes: Record<string, { width: number; height: number }>;
+        states: Array<{ views: Record<string, { visualState?: string }> }>;
+      };
     };
 
     // [审核三 阻塞 1] 顶部、底部停靠区能缩小，面板移入后不撑大
@@ -1395,6 +1455,19 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     // 窗口来回缩放后叠页签组和分栏都保持，比较用当前窗口下的实际尺寸
     const qtRoundTrip = qtRun(`${threeTabs}dock:split:layersDock:timelineDock:after;check;resize:800x600;wait:120;check;resize:1280x800;wait:120;check;docks`);
     assert.equal(qtRoundTrip.docks.areas.left.groups.length, 2);
+
+    // [审核四] Qt 里悬停的按钮所在面板切走、关闭后状态不残留
+    const hoverSeen = (steps: string) => qtRun(steps).states.map((s) => s.views.colorPanelToggleBtn.visualState);
+    assert.deepEqual(
+      hoverSeen("dock:tabify:layersDock:inspectorDock;enter:colorPanelToggleBtn;state;dock:tab:layersDock;dock:tab:inspectorDock;state"),
+      ["hover", "selected"],
+      "Qt 切走页签再切回不残留 hover",
+    );
+    assert.deepEqual(
+      hoverSeen("enter:colorPanelToggleBtn;state;dock:close:inspectorDock;dock:open:inspectorDock;state"),
+      ["hover", "selected"],
+      "Qt 关闭再打开不残留 hover",
+    );
 
     // 窗口放不下时 Qt 不被停靠面板撑大
     const qtHuge = qtRun("dock:resize:bottom:700;check;docks;layout");

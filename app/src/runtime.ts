@@ -16,6 +16,7 @@ import {
   type DockFloatRect,
   type DockLayoutSpec,
   type DockSplitOrientation,
+  dockFindLocation,
 } from "./dock.ts";
 import { evalExpr, parseAssignment, parseExpr, type Expr, type Value } from "./expr.ts";
 import {
@@ -39,6 +40,7 @@ import {
   type StateImageKey,
   type StateLeaf,
   type Step,
+  parentOfNode,
 } from "./model.ts";
 
 export interface LogEntry {
@@ -366,47 +368,52 @@ export class Runtime {
     });
     this.dockLayouts.set(winId, normalized);
     this.lastSceneDockLayouts.set(winId, JSON.stringify(winNode?.dockLayout ?? null));
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   dockTabify(targetDockId: string, dockId: string, winId = this.project.scene.root): void {
     const cur = this.getDockLayout(winId);
     const next = dockTabify(cur, this.project.scene, this.project.scene.nodes[winId], targetDockId, dockId);
     this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
     this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`叠入页签组 ${targetDockId}`] });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   dockActivateTab(dockId: string, winId = this.project.scene.root): void {
     const cur = this.getDockLayout(winId);
     const next = dockActivateTab(cur, this.project.scene, this.project.scene.nodes[winId], dockId);
     this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
     this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`切换激活页签 ${dockId}`] });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   dockFloat(dockId: string, rect?: Partial<DockFloatRect>, winId = this.project.scene.root): void {
     const cur = this.getDockLayout(winId);
     const next = dockFloat(cur, this.project.scene, this.project.scene.nodes[winId], dockId, rect);
     this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
     this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`浮出为独立面板`] });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   dockRestore(dockId: string, targetArea?: DockArea, winId = this.project.scene.root): void {
     const cur = this.getDockLayout(winId);
     const next = dockRestore(cur, this.project.scene, this.project.scene.nodes[winId], dockId, targetArea);
     this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
     this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`从浮窗恢复停靠`] });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   dockMoveToArea(dockId: string, area: DockArea, index?: number, winId = this.project.scene.root): void {
     const cur = this.getDockLayout(winId);
     const next = dockMoveToArea(cur, this.project.scene, this.project.scene.nodes[winId], dockId, area, index);
     this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
     this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`吸附到停靠区 ${area}`] });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   dockSplit(
@@ -427,24 +434,27 @@ export class Runtime {
       orientation,
     );
     this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
     this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`与 ${targetDockId} 并排（${position}）`] });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   dockResizeArea(area: DockArea, size: number, winId = this.project.scene.root): void {
     const cur = this.getDockLayout(winId);
     const next = dockResizeArea(cur, this.project.scene, this.project.scene.nodes[winId], area, size);
     this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
     this.hooks.onLog({ title: `停靠区 ${area}`, lines: [`调整尺寸为 ${next.areas[area].size}px`] });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   dockResizeSplit(area: DockArea, groupIndex: number, size: number, winId = this.project.scene.root): void {
     const cur = this.getDockLayout(winId);
     const next = dockResizeSplit(cur, this.project.scene, this.project.scene.nodes[winId], area, groupIndex, size);
     this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
     this.hooks.onLog({ title: `停靠区 ${area}`, lines: [`调整并排组 #${groupIndex} 尺寸为 ${Math.round(size)}px`] });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   /** 当停靠面板显隐变化后，若某个页签组的当前 active 面板已隐藏，则自动切换到同组内仍可见的页签。 */
@@ -644,7 +654,7 @@ export class Runtime {
   setActionSimulation(name: string, config: Partial<ActionSimConfig>): void {
     const cur = this.getActionSimulation(name);
     this.actionSims.set(name, { ...cur, ...config });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   isWindowOpen(id: string): boolean {
@@ -706,7 +716,7 @@ export class Runtime {
         });
       }
     });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   stateSnapshot(): Array<[string, Value]> {
@@ -809,9 +819,6 @@ export class Runtime {
       }
     }
     const enabled = props.enabled !== false;
-    if (!enabled) {
-      this.pressedControls.delete(id);
-    }
     const selected = Boolean(props.selected ?? props.checked ?? (props.variant === "primary"));
     const resolvedState = resolveStateImage(decl, {
       enabled,
@@ -827,13 +834,63 @@ export class Runtime {
     };
   }
 
+  /** 所有变更都从这里通知界面：先清掉已经不可能被鼠标碰到的控件的悬停和按下，view() 只读不改。 */
+  private notifyChanged(): void {
+    for (const set of [this.hoveredControls, this.pressedControls]) {
+      for (const id of [...set]) {
+        if (!this.canTakePointer(id)) set.delete(id);
+      }
+    }
+    this.hooks.onChange();
+  }
+
+  /** 叠页签组里显示的那个面板；激活页签已关闭时是组里第一个没关闭的。 */
+  private isShownDockTab(dockId: string): boolean {
+    const layout = this.dockLayouts.get(this.windowOf(dockId));
+    const loc = layout ? dockFindLocation(layout, dockId) : null;
+    if (loc?.kind !== "area") return true;
+    const { active, tabs } = loc.group;
+    const shown = active && tabs.includes(active) && this.view(active).visible ? active : tabs.find((tid) => this.view(tid).visible);
+    return shown === dockId;
+  }
+
+  /** 控件此刻显示在界面上并且可用。view().visible 只看控件自己，这里还看所属窗口、容器和停靠页签。 */
+  private canTakePointer(id: string): boolean {
+    const scene = this.project.scene;
+    if (!this.view(id).enabled) return false;
+    for (let cur: string | null = id; cur && cur !== scene.root; cur = parentOfNode(scene, cur)) {
+      const node = scene.nodes[cur];
+      const curView = this.view(cur);
+      if (!node || !curView.visible) return false;
+      if (node.type === "Dock" && !this.isShownDockTab(cur)) return false;
+      // 浮出的 FloatBox 脱离原来的容器单独显示，原父面板切走或关闭都不影响它
+      if (node.type === "FloatBox" && curView.props.floating) return true;
+    }
+    return true;
+  }
+
+  /** 面板重排后控件换了位置，不一定还在鼠标底下，而界面不一定收到移出事件，所以停靠面板里的悬停和按下一律清掉。 */
+  private releaseDockedPointerStates(): void {
+    const scene = this.project.scene;
+    for (const set of [this.hoveredControls, this.pressedControls]) {
+      for (const id of [...set]) {
+        for (let cur: string | null = id; cur; cur = parentOfNode(scene, cur)) {
+          if (scene.nodes[cur]?.type === "Dock") {
+            set.delete(id);
+            break;
+          }
+        }
+      }
+    }
+  }
+
   // ---------- 事件 ----------
 
   toggleTextCondition(id: string): void {
     const next = !(this.textConditions.get(id) ?? false);
     this.textConditions.set(id, next);
     this.hooks.onLog({ title: `条件 ${id}`, lines: [`手动切换：${next ? "否 → 是" : "是 → 否"}`] });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   /** nodeId 为 null 表示全局事件。 */
@@ -900,7 +957,7 @@ export class Runtime {
               title: `${nodeId}.${event}`,
               lines: [`浮动嵌入框 ${nodeId}: ${nextFloat ? "嵌入 → 浮动" : "浮动 → 嵌入"}`],
             });
-            this.hooks.onChange();
+            this.notifyChanged();
           }
         } else if (event === "move" && value && typeof value === "object" && !Array.isArray(value)) {
           const cur = this.floatBoxes.get(nodeId) ?? { floating: Boolean(view.props.floating) };
@@ -916,33 +973,30 @@ export class Runtime {
             ...(nw !== undefined ? { floatWidth: nw } : {}),
             ...(nh !== undefined ? { floatHeight: nh } : {}),
           });
-          this.hooks.onChange();
+          this.notifyChanged();
         }
       }
     }
     if (nodeId) {
       if (event === "mouseleave") {
-        const changed = this.hoveredControls.delete(nodeId) || this.pressedControls.delete(nodeId);
-        if (changed) this.hooks.onChange();
+        const wasHovered = this.hoveredControls.delete(nodeId);
+        const wasPressed = this.pressedControls.delete(nodeId);
+        if (wasHovered || wasPressed) this.notifyChanged();
       } else if (event === "mouseup") {
-        if (this.pressedControls.delete(nodeId)) this.hooks.onChange();
+        if (this.pressedControls.delete(nodeId)) this.notifyChanged();
       } else if (event === "mouseenter" || event === "mousedown") {
-        const winId = this.windowOf(nodeId);
-        const winOpen = winId === scene.root || this.view(winId).visible;
-        const curView = this.view(nodeId);
-        if (winOpen && curView.visible && curView.enabled) {
+        if (this.canTakePointer(nodeId)) {
           if (event === "mouseenter") this.hoveredControls.add(nodeId);
           else this.pressedControls.add(nodeId);
-          this.hooks.onChange();
+          this.notifyChanged();
         }
       } else if (event === "change" && (value === "pressed" || value === "released")) {
         const decl = node ? declFor(this.project, node.type) : null;
         if (decl?.stateImages) {
-          const curView = this.view(nodeId);
-          if (curView.visible && curView.enabled) {
+          if (this.canTakePointer(nodeId)) {
             if (value === "pressed") this.pressedControls.add(nodeId);
             else this.pressedControls.delete(nodeId);
-            this.hooks.onChange();
+            this.notifyChanged();
           }
           if (!logic.objects?.[nodeId]?.bind && !logic.objects?.[nodeId]?.events?.change) return;
         }
@@ -1086,7 +1140,7 @@ export class Runtime {
     if (sameStateValue(before, value)) return null;
     this.state.set(path, cloneValue(value));
     this.hooks.onLog({ title: "业务写回状态", lines: [`${path}: ${show(before ?? null)} → ${show(value)}`] });
-    this.hooks.onChange();
+    this.notifyChanged();
     return null;
   }
 
@@ -1134,7 +1188,7 @@ export class Runtime {
       if (batch.lines.length === 0) batch.lines.push("（没有状态变化）");
       this.hooks.onLog({ title, lines: batch.lines });
     }
-    if (changed) this.hooks.onChange();
+    if (changed) this.notifyChanged();
 
     for (const item of batch.pending) this.raise(item.name, item.args);
     for (const call of batch.calls) this.executeAction(call.name, call.input);
