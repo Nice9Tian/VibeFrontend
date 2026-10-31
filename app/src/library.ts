@@ -1105,8 +1105,10 @@ let fileJournal: FileJournal | null = null;
 
 async function writeProjectFile(path: string, content: string): Promise<void> {
   if (!host) return;
-  if (fileJournal) fileJournal.push({ path, prev: await host.readText(path) });
+  const journal = fileJournal;
+  const prev = journal ? await host.readText(path) : null;
   await host.writeText(path, content);
+  journal?.push({ path, prev });
 }
 
 /** 执行一次要改几个文件的操作。失败时把已改的写回原内容再抛出，写回也失败时错误里列出哪些文件不一致。 */
