@@ -4740,7 +4740,8 @@ function syncDocRetryButton(): void {
   const button = document.createElement("button");
   button.type = "button";
   button.dataset.docRetry = "true";
-  button.textContent = `重试保存（${failed} 处说明没存上）`;
+  button.textContent = `重试保存（${failed}）`;
+  button.title = `${failed} 处说明没存上`;
   button.addEventListener("click", () => void saveDoc());
   note.append(button);
 }
