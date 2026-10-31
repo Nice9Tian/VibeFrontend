@@ -1099,6 +1099,54 @@ const renameHints: Problem[] = [];
 const deletedProjectFiles = new Set<string>();
 let renderVersion = 0;
 
+/** 一次操作里改过的文件和它们原来的内容，中途失败时用来写回去 */
+type FileJournal = Array<{ path: string; prev: string | null }>;
+let fileJournal: FileJournal | null = null;
+
+async function writeProjectFile(path: string, content: string): Promise<void> {
+  if (!host) return;
+  const journal = fileJournal;
+  const prev = journal ? await host.readText(path) : null;
+  await host.writeText(path, content);
+  journal?.push({ path, prev });
+}
+
+/** 执行一次要改几个文件的操作。失败时把已改的写回原内容再抛出，写回也失败时错误里列出哪些文件不一致。 */
+async function withFileRollback<T>(work: () => Promise<T>): Promise<T> {
+  if (fileJournal) return work();
+  const journal: FileJournal = [];
+  fileJournal = journal;
+  try {
+    return await work();
+  } catch (e) {
+    fileJournal = null;
+    const stuck: string[] = [];
+    for (const { path, prev } of journal.reverse()) {
+      try {
+        if (prev !== null) await host?.writeText(path, prev);
+        else await host?.removeFile?.(path);
+        deletedProjectFiles.delete(path);
+      } catch {
+        stuck.push(path);
+      }
+    }
+    const reason = (e as Error).message ?? String(e);
+    if (stuck.length === 0) throw new Error(reason);
+    throw new Error(`${reason}。${stuck.join("、")} 写不回去，磁盘上的文件现在不一致，修好写入问题后请检查这些文件`);
+  } finally {
+    fileJournal = null;
+  }
+}
+
+/** 素材库的菜单动作：失败时回滚已写的文件并提示，不留下未处理的 Promise 拒绝。 */
+async function runLibraryAction(work: () => Promise<void>): Promise<void> {
+  try {
+    await withFileRollback(work);
+  } catch (e) {
+    host?.toast(`素材库操作失败：${(e as Error).message ?? String(e)}`);
+  }
+}
+
 async function readOrigins(): Promise<OriginsFile> {
   if (!host) return emptyOrigins();
   const text = await host.readText(ORIGINS_PATH);
@@ -1116,7 +1164,7 @@ async function readOrigins(): Promise<OriginsFile> {
 
 async function writeOrigins(origins: OriginsFile): Promise<void> {
   if (!host || isPreviewWindowLocation()) return;
-  await host.writeText(ORIGINS_PATH, JSON.stringify(origins, null, 2) + "\n");
+  await writeProjectFile(ORIGINS_PATH, JSON.stringify(origins, null, 2) + "\n");
 }
 
 async function readProjectId(): Promise<string> {
@@ -1180,11 +1228,12 @@ async function writeComponentFolder(
     if (!isSafePathSegment(name)) continue;
     const relPath = `components/${folder}/${name}`;
     deletedProjectFiles.delete(relPath);
-    await host.writeText(relPath, content);
+    await writeProjectFile(relPath, content);
   }
   for (const rmName of removedFiles) {
     if (!isSafePathSegment(rmName) || rmName in files) continue;
     const relPath = `components/${folder}/${rmName}`;
+    if (fileJournal) fileJournal.push({ path: relPath, prev: await host.readText(relPath) });
     deletedProjectFiles.add(relPath);
     if (host.removeFile) {
       try {
@@ -1227,34 +1276,45 @@ async function promptRenameProjectComponent(
   const nextLabel = decl.label && decl.label !== oldKey ? decl.label.replace(/（收藏）$/, "") : rawNext;
   const rewritten = rewriteComponentIdentity(files, rawNext, nextLabel);
 
-  await writeComponentFolder(rawNext, rewritten);
-  // 清理旧目录中的文件
-  await writeComponentFolder(oldKey, {}, Object.keys(files));
+  const currentHost = host;
+  try {
+    await withFileRollback(async () => {
+      await writeComponentFolder(rawNext, rewritten);
 
-  // 同步更新 scene.json 中使用该控件类型的节点，并更新历史栈中的组件类型引用
-  if (host.onComponentRenamed) {
-    await host.onComponentRenamed([oldKey, oldType], rawNext);
-  } else {
-    let sceneChanged = false;
-    for (const n of Object.values(project.scene.nodes)) {
-      if (n.type === oldKey || n.type === oldType) {
-        n.type = rawNext;
-        sceneChanged = true;
+      // 同步更新 origins.json
+      const nextOriginsMap: Record<string, OriginRecord> = { ...origins.origins };
+      const oldRec = nextOriginsMap[oldKey] ?? nextOriginsMap[oldType];
+      if (oldRec) {
+        delete nextOriginsMap[oldKey];
+        delete nextOriginsMap[oldType];
+        nextOriginsMap[rawNext] = { ...oldRec };
+        await writeOrigins({ version: 1, origins: nextOriginsMap });
       }
-    }
-    if (sceneChanged) {
-      await host.writeText("ui/scene.json", JSON.stringify(project.scene, null, 2) + "\n");
-    }
-  }
 
-  // 同步更新 origins.json
-  const nextOriginsMap: Record<string, OriginRecord> = { ...origins.origins };
-  const oldRec = nextOriginsMap[oldKey] ?? nextOriginsMap[oldType];
-  if (oldRec) {
-    delete nextOriginsMap[oldKey];
-    delete nextOriginsMap[oldType];
-    nextOriginsMap[rawNext] = { ...oldRec };
-    await writeOrigins({ version: 1, origins: nextOriginsMap });
+      // scene.json 和历史放在最后：它失败时前面写的文件都能写回去
+      if (currentHost.onComponentRenamed) {
+        await currentHost.onComponentRenamed([oldKey, oldType], rawNext);
+      } else {
+        const renamedNodes = Object.values(project.scene.nodes).filter((n) => n.type === oldKey || n.type === oldType);
+        const previousTypes = renamedNodes.map((n) => n.type);
+        for (const n of renamedNodes) n.type = rawNext;
+        if (renamedNodes.length > 0) {
+          try {
+            await writeProjectFile("ui/scene.json", JSON.stringify(project.scene, null, 2) + "\n");
+          } catch (e) {
+            renamedNodes.forEach((n, index) => (n.type = previousTypes[index]));
+            throw e;
+          }
+        }
+      }
+
+      // 清理旧目录中的文件
+      await writeComponentFolder(oldKey, {}, Object.keys(files));
+    });
+  } catch (e) {
+    host.toast(`重命名控件失败：${(e as Error).message ?? String(e)}`);
+    await renderLibraryPalette();
+    return;
   }
 
   host.toast(`已将控件“${oldKey}”重命名为“${rawNext}”`);
@@ -1545,7 +1605,7 @@ async function writePairedEffectsToProject(
     if (!isSafePathSegment(effName)) continue;
     for (const [fileName, content] of Object.entries(files)) {
       if (!isSafePathSegment(fileName) || typeof content !== "string") continue;
-      await host.writeText(`effects/${effName}/${fileName}`, content);
+      await writeProjectFile(`effects/${effName}/${fileName}`, content);
     }
   }
   const sanitizedIncoming = sanitizePairedEffects(pairedEffects);
@@ -1561,7 +1621,7 @@ async function writePairedEffectsToProject(
       // 忽略
     }
     const merged = { ...existing, ...sanitizedIncoming };
-    await host.writeText(PAIRED_EFFECTS_PATH, JSON.stringify({ version: 1, effects: merged }, null, 2) + "\n");
+    await writeProjectFile(PAIRED_EFFECTS_PATH, JSON.stringify({ version: 1, effects: merged }, null, 2) + "\n");
   }
 }
 
@@ -1592,13 +1652,20 @@ async function ensureFavoriteInProject(fav: LibraryItem): Promise<string | null>
     projectQtEffects,
   );
 
-  if (prepared.copiedFiles) {
-    await writeComponentFolder(prepared.localType, prepared.copiedFiles);
+  try {
+    await withFileRollback(async () => {
+      if (prepared.copiedFiles) {
+        await writeComponentFolder(prepared.localType, prepared.copiedFiles);
+      }
+      if (prepared.copiedEffects || prepared.pairedEffects) {
+        await writePairedEffectsToProject(prepared.copiedEffects ?? {}, prepared.pairedEffects ?? {});
+      }
+      await writeOrigins(prepared.origins);
+    });
+  } catch (e) {
+    host.toast(`把收藏素材放进项目失败：${(e as Error).message ?? String(e)}`);
+    return null;
   }
-  if (prepared.copiedEffects || prepared.pairedEffects) {
-    await writePairedEffectsToProject(prepared.copiedEffects ?? {}, prepared.pairedEffects ?? {});
-  }
-  await writeOrigins(prepared.origins);
   if (prepared.hint) {
     renameHints.push({ level: "hint", message: prepared.hint });
   }
@@ -1693,7 +1760,11 @@ export async function renderLibraryPalette(): Promise<void> {
 
   const reconciled = reconcileProjectLibrary(projectComponents, library, origins);
   if (reconciled.originsChanged) {
-    await writeOrigins(reconciled.origins);
+    try {
+      await writeOrigins(reconciled.origins);
+    } catch (e) {
+      host.toast(`保存来源记录失败：${(e as Error).message ?? String(e)}`);
+    }
   }
 
   // 同步来源记录与改名复制相关的提示到 project.problems
@@ -1770,7 +1841,7 @@ export async function renderLibraryPalette(): Promise<void> {
         menuItems.push({
           label: "更新收藏",
           action: () => {
-            void (async () => {
+            void runLibraryAction(async () => {
               const localFiles = projectComponents[matched.localType];
               if (!localFiles) return;
               const res = updateLibraryItemFromProject(
@@ -1781,11 +1852,11 @@ export async function renderLibraryPalette(): Promise<void> {
                 projectPairedEffects,
               );
               if (!res) return;
-              await saveUserLibrary(res.library);
               await writeOrigins(res.origins);
+              await saveUserLibrary(res.library);
               host?.toast(`已用本项目的版本更新收藏“${fav.label}”`);
               await renderLibraryPalette();
-            })();
+            });
           },
         });
       }
@@ -1794,7 +1865,7 @@ export async function renderLibraryPalette(): Promise<void> {
         menuItems.push({
           label: "更新为收藏版本",
           action: () => {
-            void (async () => {
+            void runLibraryAction(async () => {
               const localFiles = projectComponents[matched.localType] ?? {};
               const targetDeclType = parseComponentDecl(localFiles, matched.localType).type || matched.localType;
               const res = replaceProjectComponentWithLibrary(matched.localType, fav, reconciled.origins, localFiles);
@@ -1809,7 +1880,7 @@ export async function renderLibraryPalette(): Promise<void> {
               await writeOrigins(res.origins);
               host?.toast(`已将“${matched.localType}”更新为收藏版本`);
               await host?.reload();
-            })();
+            });
           },
         });
       }
@@ -1825,7 +1896,7 @@ export async function renderLibraryPalette(): Promise<void> {
               fav,
               matched.status,
               () => {
-                void (async () => {
+                void runLibraryAction(async () => {
                   const res = updateLibraryItemFromProject(
                     matched.localType,
                     localFiles,
@@ -1834,14 +1905,14 @@ export async function renderLibraryPalette(): Promise<void> {
                     projectPairedEffects,
                   );
                   if (!res) return;
-                  await saveUserLibrary(res.library);
                   await writeOrigins(res.origins);
+                  await saveUserLibrary(res.library);
                   host?.toast(`已用本项目的版本更新收藏“${fav.label}”`);
                   await renderLibraryPalette();
-                })();
+                });
               },
               () => {
-                void (async () => {
+                void runLibraryAction(async () => {
                   const targetDeclType = parseComponentDecl(localFiles, matched.localType).type || matched.localType;
                   const res = replaceProjectComponentWithLibrary(matched.localType, fav, reconciled.origins, localFiles);
                   const filesToWrite =
@@ -1855,7 +1926,7 @@ export async function renderLibraryPalette(): Promise<void> {
                   await writeOrigins(res.origins);
                   host?.toast(`已将“${matched.localType}”更新为收藏版本`);
                   await host?.reload();
-                })();
+                });
               },
             );
           },
@@ -1873,24 +1944,24 @@ export async function renderLibraryPalette(): Promise<void> {
           menuItems.push({
             label: isSigMatch ? `确认关联到同接口控件“${cand}”` : `关联来源记录到“${cand}”`,
             action: () => {
-              void (async () => {
+              void runLibraryAction(async () => {
                 const updated = relinkOrphanedOrigin(reconciled.origins, orphanForFav.missingType, cand);
                 await writeOrigins(updated);
                 host?.toast(`已将“${fav.label}”重新关联到 ${cand}`);
                 await renderLibraryPalette();
-              })();
+              });
             },
           });
         }
         menuItems.push({
           label: `清理失效来源记录（${orphanForFav.missingType}）`,
           action: () => {
-            void (async () => {
+            void runLibraryAction(async () => {
               const updated = removeOrphanedOrigin(reconciled.origins, orphanForFav.missingType);
               await writeOrigins(updated);
               host?.toast(`已清理失效来源记录 ${orphanForFav.missingType}`);
               await renderLibraryPalette();
-            })();
+            });
           },
         });
       }
@@ -1898,13 +1969,13 @@ export async function renderLibraryPalette(): Promise<void> {
       menuItems.push({
         label: "取消收藏",
         action: () => {
-          void (async () => {
+          void runLibraryAction(async () => {
             const res = unfavoriteFromLibrary(fav.id, library, reconciled.origins);
-            await saveUserLibrary(res.library, [fav.id]);
             await writeOrigins(res.origins);
+            await saveUserLibrary(res.library, [fav.id]);
             host?.toast(`已取消收藏“${fav.label}”`);
             await renderLibraryPalette();
-          })();
+          });
         },
       });
 
@@ -2051,7 +2122,7 @@ export async function renderLibraryPalette(): Promise<void> {
         {
           label: "收藏素材",
           action: () => {
-            void (async () => {
+            void runLibraryAction(async () => {
               const files = projectComponents[folderKey];
               if (!files) return;
               const res = collectComponentInLibrary(
@@ -2063,11 +2134,11 @@ export async function renderLibraryPalette(): Promise<void> {
                 undefined,
                 projectPairedEffects,
               );
-              await saveUserLibrary(res.library);
               await writeOrigins(res.origins);
+              await saveUserLibrary(res.library);
               host?.toast(`已收藏“${res.item.label}”`);
               await renderLibraryPalette();
-            })();
+            });
           },
         },
         "separator",

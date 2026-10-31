@@ -1205,7 +1205,7 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(heldBox.x), y: Math.round(heldBox.y), button: "left" });
     await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: Math.round(heldBox.x), y: Math.round(heldBox.y), button: "left", buttons: 1, clickCount: 1 });
     fs.appendFileSync(logicFile, "# 按住时外部改的\n");
-    await new Promise((r) => setTimeout(r, 450));
+    await new Promise((r) => setTimeout(r, 650));
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: Math.round(heldBox.x), y: Math.round(heldBox.y), button: "left", buttons: 0, clickCount: 1 });
     await waitUntil("鼠标按住时的外部修改不应吞掉这次点击", () =>
       cdp!.eval<boolean>(`Boolean(document.querySelector('#layers .layer.selected[data-id="layerList"]'))`),
@@ -1257,8 +1257,10 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
       return text.includes("duringSlowRead") && text.includes("afterSlowRead");
     });
 
-    // 规则：YAML 编辑器里有还没保存的内容时，外部修改不覆盖编辑器，停止输入后以编辑器为准
+    // 规则：YAML 编辑器里有还没保存的内容时，外部修改不覆盖编辑器，停止输入后以编辑器为准，并提示用户外部修改被忽略
     await cdp.eval(`(() => {
+      const t = document.getElementById("toast");
+      if (t) { t.textContent = ""; t.classList.remove("show"); }
       const el = document.querySelector("#yaml-text");
       el.value = el.value + "# 本地还没保存\\n";
       el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1266,7 +1268,564 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     fs.appendFileSync(logicFile, "# 编辑时外部改的\n");
     await new Promise((r) => setTimeout(r, 350));
     if (!(await yamlEditorHas("本地还没保存"))) timingProblems.push("外部修改覆盖了编辑器里没保存的内容");
+    await waitUntil("YAML 防抖窗口内外部修改应弹出忽略提示", () =>
+      cdp!.eval<boolean>(`(() => {
+        const t = document.getElementById("toast");
+        return Boolean(t && t.textContent && t.textContent.includes("外部修改") && t.textContent.includes("忽略"));
+      })()`),
+    );
     await waitUntil("编辑器里的内容应在停止输入后落盘", () => fs.readFileSync(logicFile, "utf8").includes("本地还没保存"));
+
+    // 文档编辑器在 600ms 防抖窗口内遇到外部修改同一文件时，同样保留编辑器内容、事后覆盖并提示用户
+    const docFile = path.join(tmpDir, "docs", "page.md");
+    await cdp.clickSelector("#tab-doc");
+    if (await cdp.eval<boolean>(`Boolean(document.querySelector("#doc-note button"))`)) {
+      await cdp.clickSelector("#doc-note button");
+      await waitUntil("创建控件说明后文档编辑框应可编辑", () => cdp!.eval<boolean>(`!document.querySelector("#doc-text").disabled`));
+    }
+    await cdp.eval(`(() => {
+      const t = document.getElementById("toast");
+      if (t) { t.textContent = ""; t.classList.remove("show"); }
+      const el = document.querySelector("#doc-text");
+      el.value = el.value + "\\n本地文档还没保存\\n";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+    fs.appendFileSync(docFile, "\n外部改的文档\n");
+    await new Promise((r) => setTimeout(r, 350));
+    await waitUntil("文档防抖窗口内外部修改应弹出忽略提示", () =>
+      cdp!.eval<boolean>(`(() => {
+        const t = document.getElementById("toast");
+        return Boolean(t && t.textContent && t.textContent.includes("外部修改") && t.textContent.includes("忽略"));
+      })()`),
+    );
+    await waitUntil("文档编辑器里的内容应在停止输入后落盘", () => fs.readFileSync(docFile, "utf8").includes("本地文档还没保存"));
+
+    // 预览模式下 #stage-iframe 内部按住控件（含 iframe 重建后）时，外部修改不应在按下途中触发 renderAll()
+    await cdp.eval(`(() => {
+      document.getElementById("stage-iframe")?.remove();
+    })()`);
+    await cdp.clickSelector("#mode-preview");
+    const iframeBtnPt = await cdp.eval<{ x: number; y: number } | null>(`(() => {
+      const iframe = document.getElementById("stage-iframe");
+      const doc = iframe?.contentDocument;
+      const wrapper = doc?.querySelector('.vf-node[data-vf-id="moveLayerDownBtn"]');
+      if (!iframe || !wrapper) return null;
+      wrapper.__vfHeldMarker = true;
+      wrapper.scrollIntoView({ block: "center", inline: "center" });
+      const ir = iframe.getBoundingClientRect();
+      const wr = wrapper.getBoundingClientRect();
+      const scaleX = ir.width / (iframe.offsetWidth || 1);
+      const scaleY = ir.height / (iframe.offsetHeight || 1);
+      return {
+        x: ir.left + (wr.left + wr.width / 2) * scaleX,
+        y: ir.top + (wr.top + wr.height / 2) * scaleY,
+      };
+    })()`);
+    assert.ok(iframeBtnPt, "预览模式下应能在重建后的 #stage-iframe 内找到 addLayerBtn");
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(iframeBtnPt.x), y: Math.round(iframeBtnPt.y), button: "left" });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: Math.round(iframeBtnPt.x), y: Math.round(iframeBtnPt.y), button: "left", buttons: 1, clickCount: 1 });
+    fs.appendFileSync(logicFile, "# 预览按住时外部改的\n");
+    await new Promise((r) => setTimeout(r, 650));
+    const markerStillAliveWhileHeld = await cdp.eval<boolean>(`(() => {
+      const doc = document.getElementById("stage-iframe")?.contentDocument;
+      const wrapper = doc?.querySelector('.vf-node[data-vf-id="moveLayerDownBtn"]');
+      return Boolean(wrapper && wrapper.__vfHeldMarker === true);
+    })()`);
+    if (!markerStillAliveWhileHeld) {
+      timingProblems.push("预览模式下 #stage-iframe 内按住鼠标时外部修改仍在途中触发了重绘");
+    }
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: Math.round(iframeBtnPt.x), y: Math.round(iframeBtnPt.y), button: "left", buttons: 0, clickCount: 1 });
+    await waitUntil("预览模式下松开鼠标后补上延后的刷新", () => yamlEditorHas("预览按住时外部改的"));
+    await cdp.clickSelector("#mode-edit");
+
+    // devFetch 写入与删除失败时应抛出 Error，readText 对 404 仍返回 null
+    const fsErrorCheck = await cdp.eval<{ read404Null: boolean; write400Threw: boolean; remove400Threw: boolean; write500Threw: boolean }>(`(async () => {
+      const fsMod = await import("/src/fs.ts");
+      const read404Null = (await fsMod.readText("no-such-file-404.txt")) === null;
+      let write400Threw = false;
+      try {
+        await fsMod.writeText("../outside-bad-path.txt", "x");
+      } catch {
+        write400Threw = true;
+      }
+      let remove400Threw = false;
+      try {
+        await fsMod.removeFile("../outside-bad-path.txt");
+      } catch {
+        remove400Threw = true;
+      }
+      const origFetch = window.fetch;
+      window.fetch = (url, init) => {
+        if (String(url).includes("/__fs/write")) {
+          return Promise.resolve(new Response("disk full", { status: 500 }));
+        }
+        return origFetch(url, init);
+      };
+      let write500Threw = false;
+      try {
+        await fsMod.writeText("docs/main.md", "fail");
+      } catch {
+        write500Threw = true;
+      } finally {
+        window.fetch = origFetch;
+      }
+      return { read404Null, write400Threw, remove400Threw, write500Threw };
+    })()`);
+    if (!fsErrorCheck.read404Null) timingProblems.push("readText 对 404 应返回 null");
+    if (!fsErrorCheck.write400Threw) timingProblems.push("writeText 越界 400 未抛异常");
+    if (!fsErrorCheck.remove400Threw) timingProblems.push("removeFile 越界 400 未抛异常");
+    if (!fsErrorCheck.write500Threw) timingProblems.push("writeText 500 未抛异常");
+
+    // 回归 1：saveYaml / saveDoc 在 readText 延迟期间用户继续打字时，不能把自身连续输入误报为外部修改，且内容必须写盘
+    const selfEditDuringReadCheck = await cdp.eval<{
+      yamlToasts: string[];
+      docToasts: string[];
+    }>(`(async () => {
+      const origFetch = window.fetch;
+      const toastEl = document.getElementById("toast");
+      const yamlToasts = [];
+      const docToasts = [];
+      const obs = new MutationObserver(() => {
+        const txt = toastEl?.textContent?.trim() ?? "";
+        if (txt) {
+          if (window.__vfWatchPhase === "yaml") yamlToasts.push(txt);
+          if (window.__vfWatchPhase === "doc") docToasts.push(txt);
+        }
+      });
+      if (toastEl) obs.observe(toastEl, { childList: true, characterData: true, subtree: true, attributes: true });
+
+      try {
+        window.__vfWatchPhase = "yaml";
+        if (toastEl) { toastEl.textContent = ""; toastEl.classList.remove("show"); }
+        let yamlReadHooked = false;
+        window.fetch = async (url, init) => {
+          const u = String(url);
+          if (!yamlReadHooked && u.includes("/__fs/read") && u.includes("app.logic.yaml")) {
+            yamlReadHooked = true;
+            const res = await origFetch(url, init);
+            const el = document.querySelector("#yaml-text");
+            el.value = el.value + "# 连续打字V2\\n";
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            return res;
+          }
+          return origFetch(url, init);
+        };
+        const yamlEl = document.querySelector("#yaml-text");
+        yamlEl.value = yamlEl.value + "# 连续打字V1\\n";
+        yamlEl.dispatchEvent(new Event("input", { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 1500));
+
+        window.__vfWatchPhase = "doc";
+        if (toastEl) { toastEl.textContent = ""; toastEl.classList.remove("show"); }
+        let docReadHooked = false;
+        window.fetch = async (url, init) => {
+          const u = String(url);
+          if (!docReadHooked && u.includes("/__fs/read") && u.includes("docs%2Fpage.md")) {
+            docReadHooked = true;
+            const res = await origFetch(url, init);
+            const el = document.querySelector("#doc-text");
+            el.value = el.value + "\\n连续打字文档V2\\n";
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            return res;
+          }
+          return origFetch(url, init);
+        };
+        const docEl = document.querySelector("#doc-text");
+        docEl.value = docEl.value + "\\n连续打字文档V1\\n";
+        docEl.dispatchEvent(new Event("input", { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 1500));
+      } finally {
+        window.fetch = origFetch;
+        window.__vfWatchPhase = "";
+        obs.disconnect();
+      }
+      return { yamlToasts, docToasts };
+    })()`);
+    if (selfEditDuringReadCheck.yamlToasts.some((t) => t.includes("外部修改"))) {
+      timingProblems.push(`YAML 连续打字误报外部修改：${selfEditDuringReadCheck.yamlToasts.join(" | ")}`);
+    }
+    if (selfEditDuringReadCheck.docToasts.some((t) => t.includes("外部修改"))) {
+      timingProblems.push(`文档连续打字误报外部修改：${selfEditDuringReadCheck.docToasts.join(" | ")}`);
+    }
+    if (!fs.readFileSync(logicFile, "utf8").includes("# 连续打字V2")) {
+      timingProblems.push("YAML 在 readText 延迟期间连续打字后未写入磁盘");
+    }
+    if (!fs.readFileSync(docFile, "utf8").includes("连续打字文档V2")) {
+      timingProblems.push("文档在 readText 延迟期间连续打字后未写入磁盘");
+    }
+
+    // 回归 2：写失败时用 toast 提示、保留 dirty 以便重试、不出现 unhandledrejection、导出流程给出明确错误
+    const writeFailCheck = await cdp.eval<{
+      unhandled: string[];
+      failToasts: string[];
+      modalOpenedOrHandled: boolean;
+    }>(`(async () => {
+      const origFetch = window.fetch;
+      const unhandled = [];
+      const failToasts = [];
+      const onUnhandled = (e) => {
+        unhandled.push(String(e.reason?.message || e.reason || e));
+        e.preventDefault();
+      };
+      window.addEventListener("unhandledrejection", onUnhandled);
+      const toastEl = document.getElementById("toast");
+      const obs = new MutationObserver(() => {
+        const txt = toastEl?.textContent?.trim() ?? "";
+        if (txt) failToasts.push(txt);
+      });
+      if (toastEl) {
+        toastEl.textContent = "";
+        toastEl.classList.remove("show");
+        obs.observe(toastEl, { childList: true, characterData: true, subtree: true, attributes: true });
+      }
+      let modalOpenedOrHandled = false;
+      try {
+        window.fetch = async (url, init) => {
+          if (String(url).includes("/__fs/write")) {
+            return new Response("模拟磁盘已满 500", { status: 500 });
+          }
+          return origFetch(url, init);
+        };
+        const yamlEl = document.querySelector("#yaml-text");
+        yamlEl.value = yamlEl.value + "# 失败后重试保存的内容\\n";
+        yamlEl.dispatchEvent(new Event("input", { bubbles: true }));
+        yamlEl.dispatchEvent(new Event("blur"));
+        const docEl = document.querySelector("#doc-text");
+        docEl.value = docEl.value + "\\n失败后重试保存的文档\\n";
+        docEl.dispatchEvent(new Event("input", { bubbles: true }));
+        docEl.dispatchEvent(new Event("blur"));
+        await new Promise((r) => setTimeout(r, 150));
+        if (toastEl) toastEl.textContent = "";
+        document.getElementById("export-qt-btn")?.click();
+        await new Promise((r) => setTimeout(r, 150));
+        const modal = document.getElementById("export-qt-modal");
+        modalOpenedOrHandled = !modal && Boolean(toastEl?.textContent?.includes("失败") || toastEl?.textContent?.includes("500"));
+        modal?.remove();
+
+        // 恢复写盘后不再重新输入，仅靠之前保留的 dirty 触发 blur 重试落盘
+        window.fetch = origFetch;
+        yamlEl.dispatchEvent(new Event("blur"));
+        docEl.dispatchEvent(new Event("blur"));
+        await new Promise((r) => setTimeout(r, 300));
+      } finally {
+        window.fetch = origFetch;
+        window.removeEventListener("unhandledrejection", onUnhandled);
+        obs.disconnect();
+      }
+      return { unhandled, failToasts, modalOpenedOrHandled };
+    })()`);
+    if (writeFailCheck.unhandled.length > 0) {
+      timingProblems.push(`写失败产生了未处理的 Promise 拒绝：${writeFailCheck.unhandled.join(" | ")}`);
+    }
+    if (!writeFailCheck.failToasts.some((t) => t.includes("失败") || t.includes("500"))) {
+      timingProblems.push(`写失败未弹出 toast 错误提示：${writeFailCheck.failToasts.join(" | ")}`);
+    }
+    if (!writeFailCheck.modalOpenedOrHandled) {
+      timingProblems.push("导出前写失败未中止弹窗并给出明确错误提示");
+    }
+    if (!fs.readFileSync(logicFile, "utf8").includes("# 失败后重试保存的内容")) {
+      timingProblems.push("YAML 写失败后 dirty 丢失，恢复写盘后重试未能把内容写入磁盘");
+    }
+    if (!fs.readFileSync(docFile, "utf8").includes("失败后重试保存的文档")) {
+      timingProblems.push("文档写失败后 dirty 丢失，恢复写盘后重试未能把内容写入磁盘");
+    }
+
+    // 11) 保存途中切换选中、写失败时的状态。延迟和失败都在页面里用 fetch 包装注入
+    await cdp.clickSelector("#tab-doc");
+    const fsRule = (rule: string) =>
+      cdp!.eval(`(() => {
+        window.__vfOrigFetch ??= window.fetch;
+        const original = window.__vfOrigFetch;
+        const counts = {};
+        const rule = ${rule};
+        window.fetch = async (url, init) => {
+          const u = decodeURIComponent(String(url));
+          const key = u.includes("/__fs/write") ? "write" : u.includes("/__fs/read") ? "read" : "";
+          if (!key) return original(url, init);
+          const name = key + ":" + u.split("path=")[1];
+          counts[name] = (counts[name] ?? 0) + 1;
+          const act = rule(key, u, counts[name]);
+          if (act === "fail") return new Response("模拟磁盘已满", { status: 500 });
+          if (typeof act === "number") await new Promise((r) => setTimeout(r, act));
+          return original(url, init);
+        };
+      })()`);
+    const clearFsRule = () => cdp!.eval(`window.fetch = window.__vfOrigFetch ?? window.fetch`);
+    const typeDoc = (text: string) =>
+      cdp!.eval(`(() => {
+        const el = document.querySelector("#doc-text");
+        el.value = ${JSON.stringify(text)};
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      })()`);
+    const docValue = () => inputValue("#doc-text");
+    const docNote = () => cdp!.eval<string>(`document.querySelector("#doc-note").textContent`);
+    const toastText = () => cdp!.eval<string>(`document.querySelector("#toast").textContent`);
+    const clearToast = () => cdp!.eval(`document.querySelector("#toast").textContent = ""`);
+    const clickNoteButton = () => cdp!.eval(`document.querySelector("#doc-note button")?.click()`);
+    const sectionOnDisk = (name: string) =>
+      new RegExp(`<!-- ui-section: ${name} -->([\\s\\S]*?)<!-- /ui-section -->`).exec(fs.readFileSync(docFile, "utf8"))?.[1] ?? "";
+    const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const hasLayer = (id: string) =>
+      cdp!.eval<boolean>(`Boolean(document.querySelector('#layers .layer[data-id="${id}"]'))`);
+    const saveProblems: string[] = [];
+    const expectTrue = (what: string, ok: boolean) => {
+      if (!ok) saveProblems.push(what);
+    };
+
+    await clearFsRule();
+    for (const [id, section] of [["layerList", "layer-list"], ["addLayerBtn", "add-layer-btn"]] as const) {
+      if ((await inputValue("#selection-id")) !== id) await selectLayerInTree(id);
+      if ((await docNote()).includes("没有说明")) await clickNoteButton();
+      await waitUntil(`创建 ${id} 的说明`, async () => (await docNote()).includes(`#${section}`));
+    }
+
+    // 情形 A：改了又删回原样，保存途中切到别的控件，文档页要立刻跟过去
+    await selectLayerInTree("layerList");
+    await waitUntil("选中 layerList 后文档页跟过去", async () => (await docNote()).includes("#layer-list"));
+    const layerListBase = await docValue();
+    await fsRule(`(key) => (key === "read" ? 500 : undefined)`);
+    await typeDoc(layerListBase + "临时");
+    await typeDoc(layerListBase);
+    await selectLayerInTree("addLayerBtn");
+    await pause(120);
+    expectTrue("情形 A：保存途中切换，文档页没有立刻跟到新控件", (await docNote()).includes("#add-layer-btn"));
+    await pause(800);
+    expectTrue("情形 A：保存结束后文档页停在旧控件", (await docNote()).includes("#add-layer-btn"));
+    await clearFsRule();
+
+    // 情形 B：切换后立即打字，两份文字各写进自己的小节
+    await selectLayerInTree("layerList");
+    await waitUntil("回到 layerList", async () => (await docNote()).includes("#layer-list"));
+    const firstDraft = (await docValue()) + "\n写给列表的说明";
+    await fsRule(`(key, url, n) => (key === "write" && n === 1 ? 500 : undefined)`);
+    await typeDoc(firstDraft);
+    await selectLayerInTree("addLayerBtn");
+    await waitUntil("切到 addLayerBtn", async () => (await docNote()).includes("#add-layer-btn"), 300);
+    const secondDraft = (await docValue()) + "\n写给按钮的说明";
+    await typeDoc(secondDraft);
+    await cdp.eval(`document.querySelector("#doc-text").dispatchEvent(new Event("blur"))`);
+    await waitUntil("情形 B：两份说明都应落盘", () => sectionOnDisk("layer-list").includes("写给列表的说明") && sectionOnDisk("add-layer-btn").includes("写给按钮的说明"));
+    expectTrue("情形 B：新控件的文字被写进了旧控件的小节", !sectionOnDisk("layer-list").includes("写给按钮的说明"));
+    expectTrue("情形 B：旧控件的文字被写进了新控件的小节", !sectionOnDisk("add-layer-btn").includes("写给列表的说明"));
+    await clearFsRule();
+    await pause(100);
+
+    // 情形 C：保存失败时切换，界面跟到新控件，内容不丢，能重试；回到旧控件能看到没保存的内容
+    await selectLayerInTree("layerList");
+    await waitUntil("回到 layerList", async () => (await docNote()).includes("#layer-list"));
+    const failedDraft = (await docValue()) + "\n失败时写的说明";
+    await fsRule(`(key) => (key === "write" ? "fail" : undefined)`);
+    await typeDoc(failedDraft);
+    await selectLayerInTree("addLayerBtn");
+    await pause(300);
+    expectTrue("情形 C：保存失败时文档页没有跟到新控件", (await docNote()).includes("#add-layer-btn"));
+    expectTrue("情形 C：选中和文档目标错位", (await inputValue("#selection-id")) === "addLayerBtn" && !(await docValue()).includes("失败时写的说明"));
+    await selectLayerInTree("layerList");
+    await pause(150);
+    expectTrue("情形 C：回到旧控件时看不到没保存的内容", (await docValue()).includes("失败时写的说明"));
+    await selectLayerInTree("addLayerBtn");
+    await pause(150);
+    await clearFsRule();
+    await cdp.eval(`document.querySelector("[data-doc-retry]")?.click()`);
+    await waitUntil("情形 C：恢复后重试应把内容写进旧控件的小节", () => sectionOnDisk("layer-list").includes("失败时写的说明"));
+
+    // 改名同时写 logic 和 scene，第二个失败：写回 logic，内存和界面回到改名之前
+    const renameTo = async (from: string, to: string) => {
+      await selectLayerInTree(from);
+      await waitUntil(`选中 ${from}`, async () => (await inputValue("#selection-id")) === from);
+      await clearToast();
+      await cdp!.setInputValue("#selection-id", to);
+    };
+    const logicBefore = fs.readFileSync(logicFile, "utf8");
+    await fsRule(`(key, url) => (key === "write" && url.includes("scene.json") ? "fail" : undefined)`);
+    await renameTo("layerList", "layerListRenamed");
+    await waitUntil("部分写入失败应提示", async () => (await toastText()).includes("失败"));
+    await pause(500);
+    await clearFsRule();
+    await pause(400);
+    expectTrue("两文件写入第二个失败：logic 没有写回原内容", fs.readFileSync(logicFile, "utf8") === logicBefore);
+    expectTrue("两文件写入第二个失败：界面没有回到改名之前", (await hasLayer("layerList")) && !(await hasLayer("layerListRenamed")));
+    expectTrue("两文件写入第二个失败：选中没有回到原控件", (await inputValue("#selection-id")) === "layerList");
+
+    // 写回也失败：明确告诉用户磁盘的状态
+    await fsRule(`(key, url, n) => (key === "write" && (url.includes("scene.json") || n >= 2) ? "fail" : undefined)`);
+    await renameTo("layerList", "layerListRenamed2");
+    await waitUntil("写回也失败时应提示", async () => (await toastText()).includes("失败"));
+    await pause(150);
+    expectTrue(`写回失败要说明磁盘不一致，实际：${await toastText()}`, (await toastText()).includes("不一致"));
+    await clearFsRule();
+    fs.writeFileSync(logicFile, logicBefore);
+    await waitUntil("手动修好文件后界面恢复", () => yamlEditorHas("layerList:"));
+    await pause(400);
+
+    // 单文件写失败：内存回到之前，下一次修改不带上失败的内容
+    await fsRule(`(key, url) => (key === "write" && url.includes("scene.json") ? "fail" : undefined)`);
+    await renameTo("externalLabel", "failedLabelName");
+    await waitUntil("单文件写失败应提示", async () => (await toastText()).includes("失败"));
+    await pause(100);
+    await clearFsRule();
+    expectTrue("单文件写失败：界面停在失败的新值", (await hasLayer("externalLabel")) && !(await hasLayer("failedLabelName")));
+    if (await hasLayer("externalLabel")) await renameTo("externalLabel", "savedLabelName");
+    await waitUntil("恢复后下一次修改落盘", () => fs.readFileSync(sceneFile, "utf8").includes("savedLabelName"));
+    expectTrue("单文件写失败：下一次修改带上了失败的内容", !fs.readFileSync(sceneFile, "utf8").includes("failedLabelName"));
+    await pause(200);
+
+    // 撤销、重做、恢复版本写失败：历史不丢这一步
+    await fsRule(`(key) => (key === "write" ? "fail" : undefined)`);
+    await clearToast();
+    await cdp.clickSelector('[data-action="undo"]');
+    await waitUntil("撤销写失败应提示", async () => (await toastText()).includes("失败"));
+    await clearFsRule();
+    expectTrue("撤销写失败：界面变了", await hasLayer("savedLabelName"));
+    await cdp.clickSelector('[data-action="undo"]');
+    await waitUntil("撤销写失败后再撤销应恢复这一步", () => fs.readFileSync(sceneFile, "utf8").includes('"externalLabel"'));
+    await pause(250);
+    await fsRule(`(key) => (key === "write" ? "fail" : undefined)`);
+    await clearToast();
+    await cdp.clickSelector('[data-action="redo"]');
+    await waitUntil("重做写失败应提示", async () => (await toastText()).includes("失败"));
+    await clearFsRule();
+    await cdp.clickSelector('[data-action="redo"]');
+    await waitUntil("重做写失败后再重做应恢复这一步", () => fs.readFileSync(sceneFile, "utf8").includes("savedLabelName"));
+    await pause(250);
+    const versionItems = `[...document.body.querySelectorAll("*")].filter((e) => e.children.length === 0 && /#\\d+ /.test(e.textContent))`;
+    await cdp.clickSelector('[data-action="versions"]');
+    const currentVersion = await cdp.eval<string>(`${versionItems}.find((e) => e.textContent.includes("●"))?.textContent ?? ""`);
+    await fsRule(`(key) => (key === "write" ? "fail" : undefined)`);
+    await clearToast();
+    await cdp.eval(`${versionItems}.find((e) => !e.textContent.includes("●"))?.click()`);
+    await waitUntil("恢复版本写失败应提示", async () => (await toastText()).includes("失败"));
+    expectTrue("恢复版本写失败：仍提示已恢复", !(await toastText()).includes("已恢复"));
+    await clearFsRule();
+    await cdp.eval(`document.body.click()`);
+    await cdp.clickSelector('[data-action="versions"]');
+    expectTrue("恢复版本写失败：历史游标动了", (await cdp.eval<string>(`${versionItems}.find((e) => e.textContent.includes("●"))?.textContent ?? ""`)) === currentVersion);
+    await cdp.eval(`document.body.click()`);
+
+    // 创建说明写两个文件，第二个失败：写回文档，界面不变，之后能重新创建
+    await selectLayerInTree("toggleVisibleBtn");
+    await waitUntil("选中没有说明的控件", async () => (await docNote()).includes("没有说明"));
+    const docBeforeCreate = fs.readFileSync(docFile, "utf8");
+    await fsRule(`(key, url) => (key === "write" && url.includes("app.logic.yaml") ? "fail" : undefined)`);
+    await clearToast();
+    await clickNoteButton();
+    await waitUntil("创建说明失败应提示", async () => (await toastText()).includes("失败"));
+    await pause(300);
+    await clearFsRule();
+    expectTrue("创建说明第二个文件失败：文档没有写回原内容", fs.readFileSync(docFile, "utf8") === docBeforeCreate);
+    expectTrue("创建说明失败：界面不是原来的样子", (await docNote()).includes("没有说明"));
+    await clickNoteButton();
+    await waitUntil("恢复后能重新创建说明", () => sectionOnDisk("toggle-visible-btn") !== "");
+
+    // 12) 素材库和预设的写入失败：内存、磁盘回到操作之前，并提示用户
+    const widgetDir = path.join(tmpDir, "components", "LocalWidget");
+    const renamedDir = path.join(tmpDir, "components", "RenamedWidget");
+    const originsFile = path.join(tmpDir, ".designer", "origins.json");
+    const presetsFile = path.join(tmpDir, "ui", "presets.json");
+    fs.mkdirSync(widgetDir, { recursive: true });
+    fs.mkdirSync(path.dirname(originsFile), { recursive: true });
+    fs.writeFileSync(path.join(widgetDir, "component.json"), JSON.stringify({ type: "LocalWidget", label: "本地控件", entry: "index.js", defaultSize: { width: 80, height: 30 } }, null, 2) + "\n");
+    fs.writeFileSync(path.join(widgetDir, "index.js"), "export default function create() { return { el: document.createElement('div') }; }\n");
+    fs.writeFileSync(path.join(widgetDir, "style.css"), "");
+    const originsBefore = JSON.stringify({ version: 1, origins: { LocalWidget: { libraryId: "lib-x", baseHash: "h", sourceProject: "p" } } }, null, 2) + "\n";
+    fs.writeFileSync(originsFile, originsBefore);
+    const sceneForLibrary = JSON.parse(fs.readFileSync(sceneFile, "utf8")) as Scene;
+    sceneForLibrary.nodes.localWidgetNode = { type: "LocalWidget", x: 8, y: 40, width: 80, height: 30 };
+    sceneForLibrary.nodes.presetShape = { type: "Shape", x: 8, y: 80, width: 60, height: 40, props: { shape: "rect" } };
+    sceneForLibrary.nodes[sceneForLibrary.root].children = [...(sceneForLibrary.nodes[sceneForLibrary.root].children ?? []), "localWidgetNode", "presetShape"];
+    fs.writeFileSync(sceneFile, JSON.stringify(sceneForLibrary, null, 2) + "\n");
+    await waitUntil("外部添加的控件出现在素材栏", () =>
+      cdp!.eval<boolean>(`Boolean(document.querySelector('.palette-item[data-type="LocalWidget"]'))`),
+    );
+    await waitUntil("外部添加的节点出现在图层", () => hasLayer("presetShape"));
+    await pause(500); // 外部修改引发的素材栏重绘是异步的，等它换完元素再操作
+    await cdp.eval(`(() => {
+      window.__vfUnhandled = [];
+      window.addEventListener("unhandledrejection", (e) => {
+        window.__vfUnhandled.push(String(e.reason?.message ?? e.reason));
+        e.preventDefault();
+      });
+      window.prompt = () => "RenamedWidget";
+    })()`);
+    const paletteAction = async (label: string) => {
+      await clearToast();
+      const menuItem = `[...document.body.querySelectorAll("*")].find((e) => e.children.length === 0 && e.textContent.trim() === ${JSON.stringify(label)})`;
+      const openPaletteMenu = `document.querySelector('.palette-item[data-type="LocalWidget"]')?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }))`;
+      // 素材栏重绘时元素会被换掉，菜单没出现就是还没绑上，等界面就绪
+      await waitUntil(`素材栏菜单出现 ${label}`, async () => {
+        await cdp!.eval(openPaletteMenu);
+        await pause(150);
+        return cdp!.eval<boolean>(`Boolean(${menuItem})`);
+      }, 8000);
+      await cdp!.eval(`${menuItem}?.click()`);
+    };
+    const nodeTypeOnDisk = () => (JSON.parse(fs.readFileSync(sceneFile, "utf8")) as Scene).nodes.localWidgetNode?.type;
+    const unhandledCount = () => cdp!.eval<number>(`window.__vfUnhandled.length`);
+    const expectRenameRolledBack = async (what: string) => {
+      await waitUntil(`${what}：应提示失败`, async () => (await toastText()).includes("失败"));
+      await pause(300);
+      await clearFsRule();
+      expectTrue(`${what}：scene.json 里的类型变了`, nodeTypeOnDisk() === "LocalWidget");
+      expectTrue(`${what}：旧控件目录没有恢复`, fs.existsSync(path.join(widgetDir, "index.js")) && fs.existsSync(path.join(widgetDir, "component.json")));
+      expectTrue(`${what}：新控件目录有残留`, !fs.existsSync(path.join(renamedDir, "component.json")) && !fs.existsSync(path.join(renamedDir, "index.js")));
+      expectTrue(`${what}：origins.json 变了`, fs.readFileSync(originsFile, "utf8") === originsBefore);
+      await selectLayerInTree("localWidgetNode");
+      await pause(120);
+      expectTrue(`${what}：内存里的类型没有回退，实际 ${await cdp!.eval<string>(`document.querySelector("#selection-type").textContent`)}`, (await cdp!.eval<string>(`document.querySelector("#selection-type").textContent`)).includes("LocalWidget"));
+      await selectLayerInTree("localWidgetNode");
+      await pause(80);
+    };
+
+    // 读文件拖慢：错误一出来就看内存，这时重载还没把磁盘内容读回来，看到的是回退本身
+    await fsRule(`(key, url) => (key === "write" && url.includes("scene.json") ? "fail" : key === "read" ? 1500 : undefined)`);
+    await selectLayerInTree("localWidgetNode");
+    await pause(120);
+    await paletteAction("重命名控件");
+    await waitUntil("重命名写 scene.json 失败：应提示失败", async () => (await toastText()).includes("失败"), 12000);
+    await selectLayerInTree("presetShape");
+    await selectLayerInTree("localWidgetNode");
+    const typeRightAfterFailure = await cdp.eval<string>(`document.querySelector("#selection-type").textContent`);
+    expectTrue(`重命名写 scene.json 失败：内存里的 n.type 没有回退，实际 ${typeRightAfterFailure}`, typeRightAfterFailure.includes("LocalWidget"));
+    await selectLayerInTree("presetShape");
+    await expectRenameRolledBack("重命名写 scene.json 失败");
+
+    await fsRule(`(key, url) => (key === "write" && url.includes("RenamedWidget/index.js") ? "fail" : undefined)`);
+    await paletteAction("重命名控件");
+    await expectRenameRolledBack("重命名写控件文件失败");
+
+    await fsRule(`(key, url) => (key === "write" && url.includes("origins.json") ? "fail" : undefined)`);
+    await paletteAction("重命名控件");
+    await expectRenameRolledBack("重命名写 origins.json 失败");
+
+    // 收藏时写 origins.json 失败：要提示，不能只留一个未处理的 Promise 拒绝
+    await fsRule(`(key, url) => (key === "write" && url.includes("origins.json") ? "fail" : undefined)`);
+    await paletteAction("收藏素材");
+    await waitUntil("收藏写 origins.json 失败应提示", async () => (await toastText()).includes("失败"));
+    await clearFsRule();
+    expectTrue("收藏写失败：不应提示已收藏", !(await toastText()).includes("已收藏"));
+    expectTrue(`素材库写失败不应有未处理的 Promise 拒绝：${await cdp.eval<string>(`window.__vfUnhandled.join(" | ")`)}`, (await unhandledCount()) === 0);
+
+    // 存预设写失败：错误提示不能被“已存为预设”盖掉
+    await selectLayerInTree("presetShape");
+    await pause(120);
+    const presetsBefore = fs.existsSync(presetsFile) ? fs.readFileSync(presetsFile, "utf8") : null;
+    await fsRule(`(key, url) => (key === "write" && url.includes("presets.json") ? "fail" : undefined)`);
+    await clearToast();
+    await cdp.eval(`[...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "存为预设")?.click()`);
+    await waitUntil("存预设写失败应提示", async () => (await toastText()).includes("失败"));
+    await pause(150);
+    await clearFsRule();
+    expectTrue(`存预设写失败：提示被成功消息盖掉，实际 ${await toastText()}`, !(await toastText()).includes("已存为预设"));
+    expectTrue("存预设写失败：磁盘变了", (fs.existsSync(presetsFile) ? fs.readFileSync(presetsFile, "utf8") : null) === presetsBefore);
+
+    // 恢复后重命名能完整成功
+    await paletteAction("重命名控件");
+    await waitUntil("恢复后重命名成功", () => nodeTypeOnDisk() === "RenamedWidget" && fs.existsSync(path.join(renamedDir, "component.json")));
+    await pause(300);
+    expectTrue("重命名成功后 origins 应改到新名字", (JSON.parse(fs.readFileSync(originsFile, "utf8")) as { origins: Record<string, unknown> }).origins.RenamedWidget !== undefined);
+    expectTrue("重命名成功后旧目录应清掉", !fs.existsSync(path.join(widgetDir, "component.json")));
+
+    assert.deepEqual(saveProblems, [], "保存途中切换与写失败");
 
     assert.deepEqual(timingProblems, [], "保存与重载时序");
   } finally {

@@ -9,12 +9,25 @@ export interface DirEntry {
 
 const inTauri = "__TAURI_INTERNALS__" in window;
 
-async function devFetch(endpoint: string, path = "", init?: RequestInit): Promise<Response> {
-  return fetch(`/__fs/${endpoint}?path=${encodeURIComponent(path)}`, init);
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>(cmd, args);
+  } catch (e) {
+    throw e instanceof Error ? e : new Error(String(e));
+  }
+}
+
+async function devFetch(endpoint: string, path = "", init?: RequestInit, allow404 = false): Promise<Response> {
+  const res = await fetch(`/__fs/${endpoint}?path=${encodeURIComponent(path)}`, init);
+  if (!res.ok && !(allow404 && res.status === 404)) {
+    const detail = (await res.text().catch(() => "")).trim();
+    throw new Error(detail || `${endpoint} ${path} 失败（HTTP ${res.status}）`);
+  }
+  return res;
 }
 
 export async function projectRoot(): Promise<string> {
-  if (inTauri) return invoke<string>("project_root");
+  if (inTauri) return tauriInvoke<string>("project_root");
   return (await devFetch("root")).text();
 }
 
@@ -22,9 +35,9 @@ export async function projectRoot(): Promise<string> {
 export async function readText(path: string): Promise<string | null> {
   let text: string | null;
   if (inTauri) {
-    text = await invoke<string | null>("read_text", { path });
+    text = await tauriInvoke<string | null>("read_text", { path });
   } else {
-    const res = await devFetch("read", path);
+    const res = await devFetch("read", path, undefined, true);
     text = res.status === 404 ? null : await res.text();
   }
   return text === null ? null : text.replace(/\r\n/g, "\n");
@@ -57,20 +70,20 @@ export async function writesSettled(): Promise<void> {
 
 export function writeText(path: string, content: string): Promise<void> {
   return enqueueFileChange(path, async () => {
-    if (inTauri) return invoke<void>("write_text", { path, content });
+    if (inTauri) return tauriInvoke<void>("write_text", { path, content });
     await devFetch("write", path, { method: "POST", body: content });
   });
 }
 
 export function removeFile(path: string): Promise<void> {
   return enqueueFileChange(path, async () => {
-    if (inTauri) return invoke<void>("remove_file", { path });
+    if (inTauri) return tauriInvoke<void>("remove_file", { path });
     await devFetch("remove", path, { method: "POST" });
   });
 }
 
 export async function listDir(path: string): Promise<DirEntry[]> {
-  if (inTauri) return invoke<DirEntry[]>("list_dir", { path });
+  if (inTauri) return tauriInvoke<DirEntry[]>("list_dir", { path });
   return (await devFetch("list", path)).json();
 }
 
