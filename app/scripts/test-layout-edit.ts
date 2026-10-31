@@ -1717,6 +1717,114 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     await clickNoteButton();
     await waitUntil("恢复后能重新创建说明", () => sectionOnDisk("toggle-visible-btn") !== "");
 
+    // 12) 素材库和预设的写入失败：内存、磁盘回到操作之前，并提示用户
+    const widgetDir = path.join(tmpDir, "components", "LocalWidget");
+    const renamedDir = path.join(tmpDir, "components", "RenamedWidget");
+    const originsFile = path.join(tmpDir, ".designer", "origins.json");
+    const presetsFile = path.join(tmpDir, "ui", "presets.json");
+    fs.mkdirSync(widgetDir, { recursive: true });
+    fs.mkdirSync(path.dirname(originsFile), { recursive: true });
+    fs.writeFileSync(path.join(widgetDir, "component.json"), JSON.stringify({ type: "LocalWidget", label: "本地控件", entry: "index.js", defaultSize: { width: 80, height: 30 } }, null, 2) + "\n");
+    fs.writeFileSync(path.join(widgetDir, "index.js"), "export default function create() { return { el: document.createElement('div') }; }\n");
+    fs.writeFileSync(path.join(widgetDir, "style.css"), "");
+    const originsBefore = JSON.stringify({ version: 1, origins: { LocalWidget: { libraryId: "lib-x", baseHash: "h", sourceProject: "p" } } }, null, 2) + "\n";
+    fs.writeFileSync(originsFile, originsBefore);
+    const sceneForLibrary = JSON.parse(fs.readFileSync(sceneFile, "utf8")) as Scene;
+    sceneForLibrary.nodes.localWidgetNode = { type: "LocalWidget", x: 8, y: 40, width: 80, height: 30 };
+    sceneForLibrary.nodes.presetShape = { type: "Shape", x: 8, y: 80, width: 60, height: 40, props: { shape: "rect" } };
+    sceneForLibrary.nodes[sceneForLibrary.root].children = [...(sceneForLibrary.nodes[sceneForLibrary.root].children ?? []), "localWidgetNode", "presetShape"];
+    fs.writeFileSync(sceneFile, JSON.stringify(sceneForLibrary, null, 2) + "\n");
+    await waitUntil("外部添加的控件出现在素材栏", () =>
+      cdp!.eval<boolean>(`Boolean(document.querySelector('.palette-item[data-type="LocalWidget"]'))`),
+    );
+    await waitUntil("外部添加的节点出现在图层", () => hasLayer("presetShape"));
+    await pause(500); // 外部修改引发的素材栏重绘是异步的，等它换完元素再操作
+    await cdp.eval(`(() => {
+      window.__vfUnhandled = [];
+      window.addEventListener("unhandledrejection", (e) => {
+        window.__vfUnhandled.push(String(e.reason?.message ?? e.reason));
+        e.preventDefault();
+      });
+      window.prompt = () => "RenamedWidget";
+    })()`);
+    const paletteAction = async (label: string) => {
+      await clearToast();
+      const menuItem = `[...document.body.querySelectorAll("*")].find((e) => e.children.length === 0 && e.textContent.trim() === ${JSON.stringify(label)})`;
+      const openPaletteMenu = `document.querySelector('.palette-item[data-type="LocalWidget"]')?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }))`;
+      // 素材栏重绘时元素会被换掉，菜单没出现就是还没绑上，等界面就绪
+      await waitUntil(`素材栏菜单出现 ${label}`, async () => {
+        await cdp!.eval(openPaletteMenu);
+        await pause(150);
+        return cdp!.eval<boolean>(`Boolean(${menuItem})`);
+      }, 8000);
+      await cdp!.eval(`${menuItem}?.click()`);
+    };
+    const nodeTypeOnDisk = () => (JSON.parse(fs.readFileSync(sceneFile, "utf8")) as Scene).nodes.localWidgetNode?.type;
+    const unhandledCount = () => cdp!.eval<number>(`window.__vfUnhandled.length`);
+    const expectRenameRolledBack = async (what: string) => {
+      await waitUntil(`${what}：应提示失败`, async () => (await toastText()).includes("失败"));
+      await pause(300);
+      await clearFsRule();
+      expectTrue(`${what}：scene.json 里的类型变了`, nodeTypeOnDisk() === "LocalWidget");
+      expectTrue(`${what}：旧控件目录没有恢复`, fs.existsSync(path.join(widgetDir, "index.js")) && fs.existsSync(path.join(widgetDir, "component.json")));
+      expectTrue(`${what}：新控件目录有残留`, !fs.existsSync(path.join(renamedDir, "component.json")) && !fs.existsSync(path.join(renamedDir, "index.js")));
+      expectTrue(`${what}：origins.json 变了`, fs.readFileSync(originsFile, "utf8") === originsBefore);
+      await selectLayerInTree("localWidgetNode");
+      await pause(120);
+      expectTrue(`${what}：内存里的类型没有回退，实际 ${await cdp!.eval<string>(`document.querySelector("#selection-type").textContent`)}`, (await cdp!.eval<string>(`document.querySelector("#selection-type").textContent`)).includes("LocalWidget"));
+      await selectLayerInTree("localWidgetNode");
+      await pause(80);
+    };
+
+    // 读文件拖慢：错误一出来就看内存，这时重载还没把磁盘内容读回来，看到的是回退本身
+    await fsRule(`(key, url) => (key === "write" && url.includes("scene.json") ? "fail" : key === "read" ? 1500 : undefined)`);
+    await selectLayerInTree("localWidgetNode");
+    await pause(120);
+    await paletteAction("重命名控件");
+    await waitUntil("重命名写 scene.json 失败：应提示失败", async () => (await toastText()).includes("失败"), 12000);
+    await selectLayerInTree("presetShape");
+    await selectLayerInTree("localWidgetNode");
+    const typeRightAfterFailure = await cdp.eval<string>(`document.querySelector("#selection-type").textContent`);
+    expectTrue(`重命名写 scene.json 失败：内存里的 n.type 没有回退，实际 ${typeRightAfterFailure}`, typeRightAfterFailure.includes("LocalWidget"));
+    await selectLayerInTree("presetShape");
+    await expectRenameRolledBack("重命名写 scene.json 失败");
+
+    await fsRule(`(key, url) => (key === "write" && url.includes("RenamedWidget/index.js") ? "fail" : undefined)`);
+    await paletteAction("重命名控件");
+    await expectRenameRolledBack("重命名写控件文件失败");
+
+    await fsRule(`(key, url) => (key === "write" && url.includes("origins.json") ? "fail" : undefined)`);
+    await paletteAction("重命名控件");
+    await expectRenameRolledBack("重命名写 origins.json 失败");
+
+    // 收藏时写 origins.json 失败：要提示，不能只留一个未处理的 Promise 拒绝
+    await fsRule(`(key, url) => (key === "write" && url.includes("origins.json") ? "fail" : undefined)`);
+    await paletteAction("收藏素材");
+    await waitUntil("收藏写 origins.json 失败应提示", async () => (await toastText()).includes("失败"));
+    await clearFsRule();
+    expectTrue("收藏写失败：不应提示已收藏", !(await toastText()).includes("已收藏"));
+    expectTrue(`素材库写失败不应有未处理的 Promise 拒绝：${await cdp.eval<string>(`window.__vfUnhandled.join(" | ")`)}`, (await unhandledCount()) === 0);
+
+    // 存预设写失败：错误提示不能被“已存为预设”盖掉
+    await selectLayerInTree("presetShape");
+    await pause(120);
+    const presetsBefore = fs.existsSync(presetsFile) ? fs.readFileSync(presetsFile, "utf8") : null;
+    await fsRule(`(key, url) => (key === "write" && url.includes("presets.json") ? "fail" : undefined)`);
+    await clearToast();
+    await cdp.eval(`[...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "存为预设")?.click()`);
+    await waitUntil("存预设写失败应提示", async () => (await toastText()).includes("失败"));
+    await pause(150);
+    await clearFsRule();
+    expectTrue(`存预设写失败：提示被成功消息盖掉，实际 ${await toastText()}`, !(await toastText()).includes("已存为预设"));
+    expectTrue("存预设写失败：磁盘变了", (fs.existsSync(presetsFile) ? fs.readFileSync(presetsFile, "utf8") : null) === presetsBefore);
+
+    // 恢复后重命名能完整成功
+    await paletteAction("重命名控件");
+    await waitUntil("恢复后重命名成功", () => nodeTypeOnDisk() === "RenamedWidget" && fs.existsSync(path.join(renamedDir, "component.json")));
+    await pause(300);
+    expectTrue("重命名成功后 origins 应改到新名字", (JSON.parse(fs.readFileSync(originsFile, "utf8")) as { origins: Record<string, unknown> }).origins.RenamedWidget !== undefined);
+    expectTrue("重命名成功后旧目录应清掉", !fs.existsSync(path.join(widgetDir, "component.json")));
+
     assert.deepEqual(saveProblems, [], "保存途中切换与写失败");
 
     assert.deepEqual(timingProblems, [], "保存与重载时序");

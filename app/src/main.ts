@@ -4300,20 +4300,21 @@ async function reverseLine(id: string): Promise<void> {
 
 // ---------- 用户的预设 ----------
 
-async function writePresets(presets: ShapePreset[]): Promise<void> {
-  if (!(await flushEditors())) return;
+async function writePresets(presets: ShapePreset[]): Promise<boolean> {
+  if (!(await flushEditors())) return false;
   const nextText = currentPresetsText(presets);
   const before = currentSnapshot();
   try {
     await writeText(PRESETS_PATH, nextText);
   } catch (e) {
     toast(`保存预设失败：${(e as Error).message ?? String(e)}`);
-    return;
+    return false;
   }
   if (nextText !== before.presetsText) {
     history = pushHistory(history, before, { ...before, presetsText: nextText }, "修改预设");
   }
   await reload();
+  return true;
 }
 
 /** 把选中的形状或线条的样式存成预设，出现在素材栏“我的预设”里。 */
@@ -4340,8 +4341,7 @@ async function saveAsPreset(id: string): Promise<void> {
     height: n.type === "Shape" ? n.height : 0,
     props,
   };
-  await writePresets([...project.presets, preset]);
-  toast(`已存为预设“${label}”`);
+  if (await writePresets([...project.presets, preset])) toast(`已存为预设“${label}”`);
 }
 
 async function deletePreset(presetId: string): Promise<void> {
@@ -5697,8 +5697,9 @@ async function main(): Promise<void> {
     writeText,
     removeFile,
     onComponentRenamed: async (oldTypes, nextType) => {
-      if (!(await flushEditors())) return;
+      if (!(await flushEditors())) throw new Error("编辑器里有内容没存上");
       const oldSet = new Set(oldTypes.filter(Boolean));
+      const prevSceneText = project.sceneText;
       let sceneChanged = false;
       for (const n of Object.values(project.scene.nodes)) {
         if (oldSet.has(n.type)) {
@@ -5708,14 +5709,11 @@ async function main(): Promise<void> {
       }
       if (sceneChanged) {
         const nextSceneText = JSON.stringify(project.scene, null, 2) + "\n";
-        const prevSceneText = project.sceneText;
         project.sceneText = nextSceneText;
-        try {
-          await writeText(SCENE_PATH, nextSceneText);
-        } catch (e) {
-          project.sceneText = prevSceneText;
-          toast(`保存画布失败：${(e as Error).message ?? String(e)}`);
-          return;
+        const failure = await writeFilesTogether([{ path: SCENE_PATH, next: nextSceneText, prev: prevSceneText }]);
+        if (failure !== null) {
+          rollbackScene(prevSceneText);
+          throw new Error(failure);
         }
       }
       history = renameComponentTypeInHistory(history, oldSet, nextType);
