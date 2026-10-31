@@ -764,7 +764,7 @@ export default function paint(el, { props, width, height }) {
   1. **子菜单**：菜单项写 `items` 数组即可递归嵌套多层子菜单。
   2. **分隔线**：写 `"separator": true` 或 `"kind": "separator"`。
   3. **快捷键**：写 `"shortcut": "Ctrl+N"` 等，在菜单项右侧显示快捷键提示，在预览模式与导出后的 `QAction` 中均可按键触发。
-  4. **可勾选菜单项**：写 `"checkable": true`（或 `"kind": "check"`）与初始 `"checked"`，也可在 YAML `objects.<菜单项ID>.props.checked` 中由表达式驱动，或在 `events.toggle` / `events.click` 中响应。
+  4. **可勾选菜单项**：写 `"checkable": true`（或 `"kind": "check"`）与初始 `"checked"`，也可在 YAML `objects.<菜单项ID>.props.checked` 中由表达式驱动，或在 `events.click` 中响应（通过 `value` 读取切换后的勾选布尔值）。
   5. **互斥单选组**：写 `"kind": "radio"` 与 `"group": "<组名>"`，同组菜单项互斥单选（导出成 Qt 时生成 `QActionGroup`）。
   6. **停靠面板开关**：菜单项如果写了 `"dock": "<停靠面板ID>"`，点击该菜单项会自动切换对应停靠面板的显示和隐藏，并同步菜单项的勾选状态；面板隐藏后，中央区自动扩大填满空出的位置。
   7. **右键菜单（`contextMenu`）**：任何控件节点上可以写 `"contextMenu": [ ...菜单项... ]`，在预览模式右键点击该控件（或导出成 Qt 后触发 `customContextMenuRequested`）时弹出。
