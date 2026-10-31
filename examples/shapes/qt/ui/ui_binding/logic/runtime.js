@@ -6642,6 +6642,8 @@ var VF = (function(exports) {
 		}
 		/** 所有变更都从这里通知界面：先清掉已经不可能被鼠标碰到的控件的悬停和按下，view() 只读不改。 */
 		notifyChanged() {
+			this.viewSnapshot = null;
+			this.stackContainersSnapshot = null;
 			for (const set of [this.hoveredControls, this.pressedControls]) for (const id of [...set]) if (!this.canTakePointer(id)) set.delete(id);
 			this.hooks.onChange();
 		}

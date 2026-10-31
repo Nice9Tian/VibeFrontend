@@ -310,11 +310,30 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
         qApp->installEventFilter(&blocker);
     }
     const auto clearBlocker = qScopeGuard([] { osPointerBlocker = nullptr; });
+
+    // 不变量：除了明确改窗口的步骤，主窗口尺寸不变。布局代码把窗口撑大时在这里报错
+    QSize expectedWindowSize = ui.window()->size();
+    QString previousStep;
+    const auto checkWindowSize = [&] {
+        const QString previousVerb = previousStep.section(QLatin1Char(':'), 0, 0);
+        const QSize actual = ui.window()->size();
+        if (previousVerb == QLatin1String("resize") || previousVerb == QLatin1String("window")) {
+            expectedWindowSize = actual;
+        } else if (actual != expectedWindowSize) {
+            output.append(QStringLiteral("check MISMATCH windowSize step=%1 wanted=%2x%3 actual=%4x%5")
+                              .arg(previousStep).arg(expectedWindowSize.width()).arg(expectedWindowSize.height())
+                              .arg(actual.width()).arg(actual.height()));
+            expectedWindowSize = actual;
+        }
+    };
+    const auto finalWindowCheck = qScopeGuard(checkWindowSize);
     QApplication::processEvents();
     for (const QString &raw : steps) {
         const QString step = raw.trimmed();
         if (step.isEmpty())
             continue;
+        checkWindowSize();
+        previousStep = step;
         const QString verb = step.section(QLatin1Char(':'), 0, 0);
         const QString id = step.section(QLatin1Char(':'), 1, 1);
 

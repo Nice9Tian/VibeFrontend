@@ -1564,6 +1564,7 @@ struct Ui::Private
     void registerFloatBox(const QString &id, QFrame *frame, QWidget *header, QWidget *body, int headerHeight, int designWidth, int designHeight);
     void applyDockLayout(const QJSValue &views);
     void rebuildDockSplitters();
+    QString dockSplitterKey() const;
     void applyFloatBoxes(const QJSValue &views, const QJSValue *knownBoxes = nullptr);
     void finishDockPass(bool prevApplying);
     void beginDockDrag(const QString &dockId, const QString &visibleDockId, const QPoint &globalPos);
@@ -1620,9 +1621,14 @@ Ui::Ui(QObject *parent)
     });
 
     d->build();
-    // 中央区的大小由停靠排列决定：放不下时和预览一样裁切内容，不能反过来把窗口撑大
-    if (!d->docks.isEmpty() && d->window.centralWidget())
-        d->window.centralWidget()->setMinimumSize(1, 1);
+    // 窗口尺寸只由用户决定，布局在放下的范围里排。Qt 的分隔线比排版模型多占几像素，
+    // 面板又有尺寸下限，默认约束下布局会反过来把顶层窗口撑大
+    if (!d->docks.isEmpty()) {
+        d->window.layout()->setSizeConstraint(QLayout::SetNoConstraint);
+        // 中央区放不下时和预览一样裁切内容
+        if (d->window.centralWidget())
+            d->window.centralWidget()->setMinimumSize(1, 1);
+    }
     const QString globalQss = d->window.styleSheet() + QStringLiteral(
         " QListWidget, QTreeWidget { background-color: #182030; color: #e2e8f0; border: 1px solid #334155; border-radius: 5px; outline: none; }"
         " QListWidget::item, QTreeWidget::item { padding: 3px 4px; border-radius: 3px; }"
@@ -2194,7 +2200,9 @@ bool Ui::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == &d->window) {
         if (event->type() == QEvent::Resize || event->type() == QEvent::Show) {
-            d->lastDockPassKey.clear();
+            // 窗口尺寸已经在布局的键里，只有重新显示时才要强制重排
+            if (event->type() == QEvent::Show)
+                d->lastDockPassKey.clear();
             d->syncWindowLayout();
         }
     }
@@ -3298,8 +3306,9 @@ void Ui::Private::applyDockLayout(const QJSValue &views)
                 targetH = qMax(30, gObj.value(QStringLiteral("size")).toInt(docks[activeId].designHeight));
             }
             const bool isInSplitArea = (groups.size() >= 2);
-            // 并排的组之间各有 1 像素分隔线，尺寸下限留出这点余量；留多了 QMainWindow 会把差额全压给叠页签的组
-            const int splitSlack = int(groups.size()) - 1;
+            // n 组之间和停靠区两端共有 n + 1 条 1 像素分隔线，每组留 2 像素就分摊得下，偏差也不超过 2 像素。
+            // 留多了 QMainWindow 会把差额全压给叠页签的组
+            const int splitSlack = 2;
 
             for (int ti = 0; ti < allTabs.size(); ++ti) {
                 const QString &tid = allTabs.at(ti);
@@ -3523,21 +3532,22 @@ void Ui::Private::applyDockLayout(const QJSValue &views)
             cw->layout()->activate();
     }
 
-    if (draggingSplitterIdx < 0) {
-        // 分隔条要删掉重建，只在面板的位置或显隐变了才做
-        QStringList splitterParts;
-        for (auto it = docks.cbegin(); it != docks.cend(); ++it) {
-            const QRect r = it->dock->geometry();
-            splitterParts << QStringLiteral("%1,%2,%3,%4,%5,%6,%7").arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height())
-                                 .arg(it->dock->isHidden()).arg(it->dock->isFloating()).arg(it->isActiveInGroup);
-        }
-        const QString splitterKey = splitterParts.join(QLatin1Char(';'));
-        if (splitterKey != lastSplitterKey) {
-            lastSplitterKey = splitterKey;
-            rebuildDockSplitters();
-        }
-    }
+    // 分隔条要删掉重建，只在它依赖的东西变了才做；拖动中不动正按着的那根
+    if (draggingSplitterIdx < 0 && dockSplitterKey() != lastSplitterKey)
+        rebuildDockSplitters();
     finishDockPass(prevApplying);
+}
+
+// 分隔条的位置、起始尺寸和序号都取自这些值，键和分隔条在 rebuildDockSplitters 里一起更新
+QString Ui::Private::dockSplitterKey() const
+{
+    QStringList parts;
+    for (auto it = docks.cbegin(); it != docks.cend(); ++it) {
+        const QRect r = it->dock->geometry();
+        parts << QStringLiteral("%1,%2,%3,%4,%5,%6,%7,%8").arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height())
+                     .arg(it->dock->isHidden()).arg(it->dock->isFloating()).arg(it->isActiveInGroup).arg(it->groupOrder);
+    }
+    return parts.join(QLatin1Char(';'));
 }
 
 void Ui::Private::finishDockPass(bool prevApplying)
@@ -3557,6 +3567,7 @@ void Ui::Private::finishDockPass(bool prevApplying)
 
 void Ui::Private::rebuildDockSplitters()
 {
+    lastSplitterKey = dockSplitterKey();
     for (const DockSplitterEntry &sp : dockSplitters) {
         if (sp.widget) {
             sp.widget->removeEventFilter(q);

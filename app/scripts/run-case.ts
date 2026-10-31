@@ -301,6 +301,29 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string; noEffects
     steps:
       "enter:colorPanelToggleBtn;check;state;click:newProjectBtn;leave:colorPanelToggleBtn;check;state;click:confirmNewProjectBtn;check;state",
   },
+  {
+    name: "56. 拖停靠区分隔条后面板恢复原宽度，再拖分隔条：分隔条位置和起始尺寸不过期",
+    steps: "dock:resize:left:320;check;state;dock:move:layersDock:left;check;state;dock:resize:left:260;check;state",
+  },
+  {
+    name: "57. 拖分栏分隔条后分栏恢复原比例，再拖分隔条：分隔条位置和起始尺寸不过期",
+    steps:
+      "dock:split:timelineDock:inspectorDock:after:horizontal;dock:resizeSplit:bottom:0:400;check;state;dock:split:timelineDock:inspectorDock:after:horizontal;check;state;dock:resizeSplit:bottom:0:500;check;state",
+  },
+  {
+    name: "58. 左侧竖向分栏后点按钮：布局不撑大主窗口",
+    steps: "dock:split:layersDock:inspectorDock:after;check;click:toolEraserBtn;click:toolBrushBtn;check;state",
+  },
+  {
+    name: "59. 横向分栏、竖向分栏与不同窗口尺寸：布局不撑大主窗口",
+    steps:
+      "resize:1024x720;wait:120;dock:split:layersDock:inspectorDock:after:horizontal;click:toolEraserBtn;check;state;dock:split:layersDock:timelineDock:after:vertical;click:toolBrushBtn;check;state;resize:800x600;wait:120;check;click:toolEraserBtn;check;state",
+  },
+  {
+    name: "60. 已关闭的面板换区后分隔条序号跟着变",
+    steps:
+      "dock:split:layersDock:timelineDock:after;dock:split:timelineDock:inspectorDock:after;dock:close:layersDock;dock:move:layersDock:right;check;state;dock:resizeSplit:left:0:220;check;state",
+  },
 ];
 
 interface FlatTreeRow {
