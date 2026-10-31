@@ -1,5 +1,6 @@
 /build
 /tools/python312
+/external
 CMakeLists.txt.user
 *.pyc
 /Layerorframe_refer
