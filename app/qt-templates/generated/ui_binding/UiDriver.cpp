@@ -35,6 +35,8 @@
 #include <QTreeWidget>
 #include <QWidget>
 
+#include <algorithm>
+
 namespace vf {
 
 namespace {
@@ -161,24 +163,23 @@ QDockWidget *shownDockOfGroup(Ui &ui, QDockWidget *dock)
 // 找不到说明这个操作拖不出来（比如面板太薄，都落在窗口边缘的吸附带里），和预览里的手势一样做不到
 bool findDropPoint(Ui &ui, const QString &dockId, QDockWidget *target, const QString &wanted, const QPoint &preferred, QPoint *outGlobal)
 {
-    bool found = false;
-    qint64 bestDist = 0;
+    // 判定一个点要过一次逻辑层，所以由近及远试，命中就停
+    QList<QPoint> points;
     for (int y = 1; y < target->height(); y += 5) {
-        for (int x = 1; x < target->width(); x += 5) {
-            const QPoint global = target->mapToGlobal(QPoint(x, y));
-            if (ui.dockDropAt(dockId, global) != wanted)
-                continue;
-            const qint64 dx = x - preferred.x();
-            const qint64 dy = y - preferred.y();
-            const qint64 dist = dx * dx + dy * dy;
-            if (!found || dist < bestDist) {
-                found = true;
-                bestDist = dist;
-                *outGlobal = global;
-            }
+        for (int x = 1; x < target->width(); x += 5)
+            points.append(QPoint(x, y));
+    }
+    std::sort(points.begin(), points.end(), [&preferred](const QPoint &a, const QPoint &b) {
+        return (a - preferred).manhattanLength() < (b - preferred).manhattanLength();
+    });
+    for (const QPoint &p : points) {
+        const QPoint global = target->mapToGlobal(p);
+        if (ui.dockDropAt(dockId, global) == wanted) {
+            *outGlobal = global;
+            return true;
         }
     }
-    return found;
+    return false;
 }
 
 // 标题栏上没有按钮的一点；按钮把标题栏占满时返回 false
