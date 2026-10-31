@@ -13,7 +13,8 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 function buildQtEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
+  // Windows 上 Qt 的警告默认进调试输出，这里要它写到 stderr，下面才查得到
+  const env: NodeJS.ProcessEnv = { ...process.env, QT_FORCE_STDERR_LOGGING: "1" };
   if (process.platform === "win32") {
     const extraDirs = ["C:\\Qt\\6.9.1\\mingw_64\\bin", "C:\\Qt\\Tools\\mingw1310_64\\bin"].filter((d) =>
       fs.existsSync(d),
@@ -236,6 +237,130 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string; noEffects
     steps:
       "select:workspaceTabBar:9;check;state;collapse:layerList:0:true;check;state;select:layerList:1;check;state;select:layerList:2;check;state;collapse:layerList:0:false;check;state;select:layerList:1;check;state",
   },
+  {
+    name: "43. 停靠面板连续编排（叠页签 → 切页签 → 浮出 → 恢复 → 改大小 → 分栏并排 → 改分栏大小 → 关闭与菜单重开）",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;check;state;dock:tab:layersDock;check;state;dock:float:inspectorDock:320,140,280,460;check;state;dock:restore:inspectorDock;check;state;dock:resize:left:260;check;state;dock:split:layersDock:inspectorDock:after;check;state;dock:resizeSplit:left:0:240;check;state;dock:close:timelineDock;check;state;click:menuToggleTimeline;check;state;dock:move:inspectorDock:right;dock:resize:left:240;check;state",
+  },
+  {
+    name: "44. 浮动嵌入框（FloatBox）嵌入与窗口内浮出切换及拖拽移位",
+    steps:
+      "toggle:onionSkinBox;check;state;floatbox:move:onionSkinBox:420,180;check;state;toggle:onionSkinBox;check;state",
+  },
+  {
+    name: "45. 底部与顶部停靠区：缩小、侧边面板移入后厚度跟随停靠区，只有换行面板按内容撑高",
+    steps:
+      "dock:resize:bottom:100;check;state;dock:resize:bottom:132;check;state;dock:tabify:timelineDock:inspectorDock;check;state;dock:tab:timelineDock;check;state;dock:move:inspectorDock:top;check;state;dock:move:layersDock:bottom;check;state",
+  },
+  {
+    name: "46. 底部竖向分栏：分栏后厚度不变，拖停靠区分隔条按比例缩放各组，拖分栏分隔条改比例",
+    steps:
+      "dock:split:timelineDock:inspectorDock:after:vertical;check;state;dock:resize:bottom:200;check;state;dock:resizeSplit:bottom:0:80;check;state",
+  },
+  {
+    name: "47. 三个页签占满标题栏：拖激活页签拆出分栏不产生浮窗，组里其余页签保持",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;check;state;dock:tabify:layersDock:timelineDock;check;state;dock:split:layersDock:timelineDock:after;check;state",
+  },
+  {
+    name: "48. 三个页签：直接拖没激活的页签拆分栏、移到别的停靠区、切页签",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;dock:tabify:layersDock:timelineDock;check;state;dock:split:layersDock:inspectorDock:after;check;state;dock:tabify:layersDock:inspectorDock;check;state;dock:tab:layersDock;check;state;dock:move:timelineDock:right;check;state",
+  },
+  {
+    name: "49. 叠页签组与分栏在窗口来回缩放后保持，换行面板在窄窗口撑高",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;dock:split:layersDock:timelineDock:after;check;state;resize:800x600;wait:120;check;state;resize:1280x800;wait:120;check;state",
+  },
+  {
+    name: "50. 窗口放不下的停靠区厚度：只收窄实际尺寸，中央区保留余地，缩小后恢复",
+    steps: "dock:resize:bottom:700;check;state;resize:1024x720;wait:120;check;dock:resize:bottom:132;check;state",
+  },
+  {
+    name: "51. 关闭的组夹在并排组中间：并排方向与分隔条序号不错位，关闭的激活页签叠入后显示另一个页签",
+    steps:
+      "dock:split:layersDock:timelineDock:after:horizontal;dock:split:timelineDock:inspectorDock:after;dock:close:timelineDock;check;state;dock:resizeSplit:left:0:100;check;state;click:menuToggleTimeline;check;state;dock:close:inspectorDock;dock:tabify:layersDock:inspectorDock;check;state",
+  },
+  {
+    name: "52. 悬停的按钮所在面板切走页签再切回：悬停状态不残留",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;enter:colorPanelToggleBtn;check;state;dock:tab:layersDock;check;state;dock:tab:inspectorDock;check;state",
+  },
+  {
+    name: "53. 悬停或按下的按钮所在面板关闭再打开、重排：状态不残留",
+    steps:
+      "enter:colorPanelToggleBtn;check;state;dock:close:inspectorDock;dock:open:inspectorDock;check;state;press:colorPanelToggleBtn;check;state;dock:close:inspectorDock;dock:open:inspectorDock;check;state;enter:colorPanelToggleBtn;dock:move:inspectorDock:left;check;state",
+  },
+  {
+    name: "54. 最小化再恢复窗口：停靠面板不被当成关闭",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;check;state;window:minimize;wait:200;state;window:restore;wait:200;check;state",
+  },
+  {
+    name: "55. 悬停时弹出模态框：背景控件不残留悬停，模态拦截不变",
+    steps:
+      "enter:colorPanelToggleBtn;check;state;click:newProjectBtn;leave:colorPanelToggleBtn;check;state;click:confirmNewProjectBtn;check;state",
+  },
+  {
+    name: "56. 拖停靠区分隔条后面板恢复原宽度，再拖分隔条：分隔条位置和起始尺寸不过期",
+    steps: "dock:resize:left:320;check;state;dock:move:layersDock:left;check;state;dock:resize:left:260;check;state",
+  },
+  {
+    name: "57. 拖分栏分隔条后分栏恢复原比例，再拖分隔条：分隔条位置和起始尺寸不过期",
+    steps:
+      "dock:split:timelineDock:inspectorDock:after:horizontal;dock:resizeSplit:bottom:0:400;check;state;dock:split:timelineDock:inspectorDock:after:horizontal;check;state;dock:resizeSplit:bottom:0:500;check;state",
+  },
+  {
+    name: "58. 左侧竖向分栏后点按钮：布局不撑大主窗口",
+    steps: "dock:split:layersDock:inspectorDock:after;check;click:toolEraserBtn;click:toolBrushBtn;check;state",
+  },
+  {
+    name: "59. 横向分栏、竖向分栏与不同窗口尺寸：布局不撑大主窗口",
+    steps:
+      "resize:1024x720;wait:120;dock:split:layersDock:inspectorDock:after:horizontal;click:toolEraserBtn;check;state;dock:split:layersDock:timelineDock:after:vertical;click:toolBrushBtn;check;state;resize:800x600;wait:120;check;click:toolEraserBtn;check;state",
+  },
+  {
+    name: "60. 已关闭的面板换区后分隔条序号跟着变",
+    steps:
+      "dock:split:layersDock:timelineDock:after;dock:split:timelineDock:inspectorDock:after;dock:close:layersDock;dock:move:layersDock:right;check;state;dock:resizeSplit:left:0:220;check;state",
+  },
+  {
+    name: "61. 真实坐标拖分隔条：初始状态四个停靠区的分隔条都拖得动",
+    steps: "dock:resize:left:300;check;state;dock:resize:right:300;check;state;dock:resize:bottom:160;check;state;dock:resize:top:90;check;state",
+  },
+  {
+    name: "62. 真实坐标拖分隔条：点按钮之后分栏分隔条和停靠区分隔条仍拖得动",
+    steps:
+      "dock:split:layersDock:inspectorDock:after;click:toolEraserBtn;check;dock:resizeSplit:left:0:330;check;state;click:toolBrushBtn;dock:resizeSplit:left:0:260;check;state;click:toolEraserBtn;dock:resize:left:280;check;state",
+  },
+  {
+    name: "63. 真实坐标拖分隔条：拖后回到原尺寸再拖",
+    steps: "click:toolEraserBtn;dock:resize:left:320;check;state;dock:resize:left:236;check;state;click:toolBrushBtn;dock:resize:left:260;check;state",
+  },
+  {
+    name: "64. 窗口内的浮动嵌入框压在分隔条上时不被盖住",
+    steps:
+      "toggle:onionSkinBox;floatbox:move:onionSkinBox:116,300;check;state;click:toolEraserBtn;floatbox:move:onionSkinBox:420,180;check;state;dock:resize:left:280;check;state",
+  },
+  {
+    name: "65. 真实坐标操作浮窗：浮出按钮、拖标题栏、拖缩放手柄、还原按钮、关闭按钮",
+    steps:
+      "dock:float:layersDock:640,200,300,420;check;state;dock:restore:layersDock;check;state;dock:float:inspectorDock;check;state;dock:close:inspectorDock;check;state",
+  },
+  {
+    name: "66. 松开分隔条后窗口内的浮动嵌入框仍在分隔条上面",
+    steps:
+      "toggle:onionSkinBox;floatbox:move:onionSkinBox:116,300;dock:resize:right:300;check;state;floatbox:move:onionSkinBox:420,180;check;state",
+  },
+  {
+    name: "67. 松开分栏分隔条后停靠区分隔条仍在分栏分隔条上面",
+    steps: "dock:split:layersDock:inspectorDock:after;dock:resizeSplit:left:0:275;check;state;dock:resize:left:280;check;state",
+  },
+  {
+    name: "68. 带坐标浮出后台页签：拖页签把手出来，再调位置和大小，组里激活页签不变",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;dock:tabify:layersDock:timelineDock;check;state;dock:float:inspectorDock:320,140,280,460;check;state;dock:restore:inspectorDock;check;state",
+  },
 ];
 
 interface FlatTreeRow {
@@ -316,6 +441,8 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
       verb === "size" ||
       verb === "shot" ||
       verb === "resize" ||
+      verb === "window" ||
+      verb === "break" ||
       verb === "layout"
     ) {
       continue;
@@ -336,6 +463,65 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
       const [modeStr = "real", delayStr] = rest.split(":");
       const delayMs = delayStr !== undefined && Number.isFinite(Number(delayStr)) ? Math.max(0, Number(delayStr)) : 0;
       runtime.setActionSimulation(id, { mode: (modeStr || "real") as ActionSimMode, delayMs });
+    } else if (verb === "dock") {
+      const op = id.trim();
+      const parts = rest.split(":").map((s) => s.trim());
+      const arg1 = parts[0] ?? "";
+      const arg2 = parts[1] ?? "";
+      const arg3 = parts[2] ?? "";
+      const arg4 = parts[3] ?? "";
+      const args: Record<string, Value> = {};
+      if (op === "tabify") {
+        args.target = arg1;
+        args.dock = arg2;
+      } else if (op === "tab" || op === "activateTab") {
+        args.dock = arg1;
+      } else if (op === "float") {
+        args.dock = arg1;
+        if (arg2) {
+          const coords = arg2.split(",").map((s) => Number(s.trim()));
+          if (coords.length >= 2) {
+            args.x = coords[0];
+            args.y = coords[1];
+          }
+          if (coords.length >= 4) {
+            args.width = coords[2];
+            args.height = coords[3];
+          }
+        }
+      } else if (op === "restore") {
+        args.dock = arg1;
+        if (arg2) args.area = arg2;
+      } else if (op === "move") {
+        args.dock = arg1;
+        args.area = arg2;
+        if (arg3) args.index = Number(arg3);
+      } else if (op === "split") {
+        args.target = arg1;
+        args.dock = arg2;
+        if (arg3) args.position = arg3;
+        if (arg4) args.orientation = arg4;
+      } else if (op === "resize" || op === "resizeArea") {
+        args.area = arg1;
+        args.size = Number(arg2);
+      } else if (op === "resizeSplit") {
+        args.area = arg1;
+        args.groupIndex = Number(arg2);
+        args.size = Number(arg3);
+      } else if (op === "close" || op === "open" || op === "toggle") {
+        args.dock = arg1;
+      }
+      runtime.dockOp(op, args);
+    } else if (verb === "floatbox" && id.trim() === "move") {
+      const parts = rest.split(":").map((s) => s.trim());
+      const fbId = parts[0] ?? "";
+      const coords = (parts[1] ?? "").split(",").map((s) => Number(s.trim()));
+      if (fbId && coords.length >= 2) {
+        runtime.dispatch(fbId, "move", {
+          x: coords[0],
+          y: coords[1],
+        });
+      }
     } else if (!project.scene.nodes[id] && !findMenuItem(project.scene, id)) {
       outLines.push(`error 找不到控件 ${id}（步骤 ${step}）`);
     } else if (verb === "check") {
@@ -566,6 +752,10 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
         runtime.dispatch(id, "change", !view.props.value);
       } else if (node?.type === "Button" && view.props.checkable) {
         runtime.dispatch(id, "toggle", !view.props.checked);
+      } else if (node?.type === "FloatBox") {
+        const nextVal = !Boolean(view.props.floating);
+        runtime.dispatch(id, "toggle", nextVal);
+        runtime.dispatch(id, "change", nextVal);
       }
     } else {
       outLines.push(`error 不认识的步骤 ${step}`);
@@ -573,6 +763,24 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
     await runtime.waitForIdle();
   }
   return outLines;
+}
+
+/** 两行 state 的差异字段，一行一个，不打印整段 JSON。 */
+function stateDiffLines(web: string | undefined, qt: string | undefined): string[] {
+  if (web === undefined || qt === undefined) return [`web: ${web ?? "<无>"}`, `qt : ${qt ?? "<无>"}`];
+  const out: string[] = [];
+  const walk = (a: unknown, b: unknown, at: string) => {
+    if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
+      const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+      for (const k of keys) {
+        walk((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], at ? `${at}.${k}` : k);
+      }
+    } else if (a !== b) {
+      out.push(`${at}: web=${JSON.stringify(a)} qt=${JSON.stringify(b)}`);
+    }
+  };
+  walk(JSON.parse(web.slice("state ".length)), JSON.parse(qt.slice("state ".length)), "");
+  return out.length > 0 ? out : ["JSON 内容相同，只有键的顺序或空白不同"];
 }
 
 async function main(): Promise<number> {
@@ -599,6 +807,7 @@ async function main(): Promise<number> {
       qtStates: string[];
       qtChecks: string[];
       badChecks: string[];
+      qtWarnings: string[];
       stateMatch: boolean;
     }> = new Array(ANIMEAN_SUITE_CASES.length);
 
@@ -610,7 +819,7 @@ async function main(): Promise<number> {
         const webLines = await runStepsOnWeb(project, c.steps);
         const webStates = webLines.filter((l) => l.startsWith("state "));
         const qtArgs = c.noEffects ? ["--no-effects", "--steps", c.steps] : ["--steps", c.steps];
-        const { stdout: qtOut } = await execFileAsync(qtExe, qtArgs, {
+        const { stdout: qtOut, stderr: qtErr } = await execFileAsync(qtExe, qtArgs, {
           encoding: "utf8",
           env: qtEnv,
           maxBuffer: 16 * 1024 * 1024,
@@ -619,6 +828,7 @@ async function main(): Promise<number> {
         const qtStates = qtLines.filter((l) => l.startsWith("state "));
         const qtChecks = qtLines.filter((l) => l.startsWith("check "));
         const badChecks = qtChecks.filter((l) => l !== "check ok");
+        const qtWarnings = qtErr.split(/\r?\n/).filter((l) => l.includes("resizeDocks"));
 
         let stateMatch = webStates.length === qtStates.length;
         if (stateMatch) {
@@ -629,14 +839,14 @@ async function main(): Promise<number> {
             }
           }
         }
-        results[idx] = { name: c.name, webStates, qtStates, qtChecks, badChecks, stateMatch };
+        results[idx] = { name: c.name, webStates, qtStates, qtChecks, badChecks, qtWarnings, stateMatch };
       }
     });
     await Promise.all(workers);
 
     let failed = false;
     for (const r of results) {
-      if (!r.stateMatch || r.badChecks.length > 0) {
+      if (!r.stateMatch || r.badChecks.length > 0 || r.qtWarnings.length > 0) {
         failed = true;
         console.log(`FAIL ${r.name}`);
         if (!r.stateMatch) {
@@ -645,12 +855,12 @@ async function main(): Promise<number> {
           for (let i = 0; i < maxLen; i++) {
             if (r.webStates[i] !== r.qtStates[i]) {
               console.log(`  第 ${i + 1} 个 state 不一致：`);
-              console.log(`    web: ${r.webStates[i] ?? "<无>"}`);
-              console.log(`    qt : ${r.qtStates[i] ?? "<无>"}`);
+              for (const line of stateDiffLines(r.webStates[i], r.qtStates[i])) console.log(`    ${line}`);
             }
           }
         }
         for (const bc of r.badChecks) console.log(`  Qt check 失败：${bc}`);
+        for (const w of r.qtWarnings) console.log(`  Qt 警告：${w}`);
       } else {
         console.log(`PASS ${r.name}（state=${r.webStates.length} 处逐字一致，check=${r.qtChecks.length} 处全部 ok）`);
       }

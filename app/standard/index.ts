@@ -1,4 +1,4 @@
-// 工具自带的 16 种标准控件：文字、按钮、输入框、多行文本、数字框、滑条、滚动条、下拉框、复选框、页签栏、列表、树、对话框按钮组、分隔线、占位区、数据生成表单。
+// 工具自带的 17 种标准控件与标准容器：文字、按钮、输入框、多行文本、数字框、滑条、滚动条、下拉框、复选框、页签栏、列表、树、对话框按钮组、分隔线、占位区、数据生成表单、浮动嵌入框。
 // 每种包含共用声明（component.json）、网页实现（index.js / style.css）和对应的 Qt 映射。
 import type { Value } from "../src/expr.ts";
 import {
@@ -16,6 +16,7 @@ import checkBoxDecl from "./CheckBox/component.json" with { type: "json" };
 import comboBoxDecl from "./ComboBox/component.json" with { type: "json" };
 import dataFormDecl from "./DataForm/component.json" with { type: "json" };
 import dialogButtonBoxDecl from "./DialogButtonBox/component.json" with { type: "json" };
+import floatBoxDecl from "./FloatBox/component.json" with { type: "json" };
 import labelDecl from "./Label/component.json" with { type: "json" };
 import listDecl from "./List/component.json" with { type: "json" };
 import scrollBarDecl from "./ScrollBar/component.json" with { type: "json" };
@@ -643,6 +644,95 @@ const createSeparator: ComponentCreate = (el, { props }) => {
   return { update, destroy: () => line.remove() };
 };
 
+const createFloatBox: ComponentCreate = (el, { props, emit, mode }) => {
+  const root = document.createElement("div");
+  root.className = "vf-std-floatbox";
+  const header = document.createElement("div");
+  header.className = "vf-std-floatbox-header";
+  const title = document.createElement("span");
+  title.className = "vf-std-floatbox-title";
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.className = "vf-std-floatbox-toggle";
+  header.append(title, toggleBtn);
+  const body = document.createElement("div");
+  body.className = "vf-std-floatbox-body";
+  root.append(header, body);
+  el.append(root);
+
+  let current = props;
+
+  toggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (current.enabled === false) return;
+    const next = !Boolean(current.floating);
+    emit("toggle", next);
+    emit("change", next);
+  });
+
+  header.addEventListener("pointerdown", (e) => {
+    if (mode !== "preview" || current.enabled === false || !Boolean(current.floating)) return;
+    if (e.button !== 0 || e.target === toggleBtn) return;
+    e.stopPropagation();
+    const doc = root.ownerDocument || document;
+    const win = doc.defaultView || window;
+    const frameEl = win.frameElement as HTMLElement | null;
+    const outerWin = frameEl && frameEl.ownerDocument ? frameEl.ownerDocument.defaultView : null;
+    const toLocalPoint = (pe: PointerEvent, fromOuter = false) => {
+      const eventInOuter = Boolean(outerWin && frameEl && (fromOuter || pe.view === outerWin));
+      if (eventInOuter && frameEl) {
+        const fRect = frameEl.getBoundingClientRect();
+        const scaleX = fRect.width > 0 && frameEl.offsetWidth > 0 ? fRect.width / frameEl.offsetWidth : 1;
+        const scaleY = fRect.height > 0 && frameEl.offsetHeight > 0 ? fRect.height / frameEl.offsetHeight : 1;
+        return { x: (pe.clientX - fRect.left) / scaleX, y: (pe.clientY - fRect.top) / scaleY };
+      }
+      const rect = root.getBoundingClientRect();
+      const zoom = rect.width > 0 && root.offsetWidth > 0 ? rect.width / root.offsetWidth : 1;
+      return { x: pe.clientX / zoom, y: pe.clientY / zoom };
+    };
+    const startPt = toLocalPoint(e, false);
+    const baseX = Number(current.floatX ?? 60);
+    const baseY = Number(current.floatY ?? 80);
+    const onMove = (me: PointerEvent, fromOuter = false) => {
+      const curPt = toLocalPoint(me, fromOuter);
+      const dx = Math.round(curPt.x - startPt.x);
+      const dy = Math.round(curPt.y - startPt.y);
+      emit("move", { x: Math.max(0, baseX + dx), y: Math.max(0, baseY + dy) });
+    };
+    const onInnerMove = (me: PointerEvent) => onMove(me, false);
+    const onOuterMove = (me: PointerEvent) => onMove(me, true);
+    const onUp = () => {
+      win.removeEventListener("pointermove", onInnerMove);
+      win.removeEventListener("pointerup", onUp);
+      if (outerWin && outerWin !== win) {
+        outerWin.removeEventListener("pointermove", onOuterMove);
+        outerWin.removeEventListener("pointerup", onUp);
+      }
+    };
+    win.addEventListener("pointermove", onInnerMove);
+    win.addEventListener("pointerup", onUp);
+    if (outerWin && outerWin !== win) {
+      outerWin.addEventListener("pointermove", onOuterMove);
+      outerWin.addEventListener("pointerup", onUp);
+    }
+  });
+
+  const update = (next: Record<string, Value>) => {
+    current = next;
+    const floating = Boolean(next.floating);
+    const hdrH = Number(next.headerHeight ?? 24);
+    header.style.height = `${hdrH}px`;
+    root.dataset.floating = String(floating);
+    root.dataset.disabled = String(next.enabled === false);
+    title.textContent = String(next.title ?? "浮动嵌入框");
+    toggleBtn.textContent = floating ? "嵌入" : "浮动";
+    toggleBtn.title = floating ? "嵌入回原布局" : "脱离布局浮动";
+    toggleBtn.disabled = next.enabled === false;
+  };
+  update(props);
+  return { update, destroy: () => root.remove() };
+};
+
 const createSpacer: ComponentCreate = (el) => {
   const spacer = document.createElement("div");
   spacer.className = "vf-std-spacer";
@@ -1243,6 +1333,18 @@ export const STANDARD_COMPONENT_LIST: StandardComponent[] = [
     styleText: `.vf-std-separator { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
 .vf-std-separator::after { content: ""; display: block; width: 100%; height: 1px; background: var(--color-border, #e2e8f0); }
 .vf-std-separator[data-orientation="vertical"]::after { width: 1px; height: 100%; }`,
+  },
+  {
+    decl: floatBoxDecl as ComponentDecl,
+    folder: "FloatBox",
+    create: createFloatBox,
+    styleText: `.vf-std-floatbox { box-sizing: border-box; display: flex; flex-direction: column; width: 100%; height: 100%; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); pointer-events: none; overflow: hidden; }
+.vf-std-floatbox[data-floating="true"] { border-color: var(--color-primary, #2563eb); box-shadow: 0 12px 28px rgba(15, 23, 42, 0.35); }
+.vf-std-floatbox-header { box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 8px; height: 24px; background: rgba(148, 163, 184, 0.14); border-bottom: 1px solid var(--color-border, #cbd5e1); color: var(--color-text, #1e293b); font-size: 12px; font-weight: 600; user-select: none; pointer-events: auto; cursor: grab; }
+.vf-std-floatbox-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vf-std-floatbox-toggle { padding: 1px 6px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #ffffff); color: var(--color-text, #1e293b); font-size: 11px; line-height: 1.3; cursor: pointer; }
+.vf-std-floatbox-toggle:hover:not(:disabled) { border-color: var(--color-primary, #2563eb); color: var(--color-primary, #2563eb); }
+.vf-std-floatbox-body { flex: 1; min-height: 0; pointer-events: none; }`,
   },
   {
     decl: spacerDecl as ComponentDecl,

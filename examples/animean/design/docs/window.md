@@ -77,6 +77,12 @@
 类型为 `ColorPicker`，在 `component.json` 中声明需要翻译的自绘效果 `ColorPickerDraw`（`effects/ColorPickerDraw`）。在工具端用 Canvas 2D 绘制 HSV 饱和度-明度渐变方块、色相条与颜色预览条；在 Qt 端由 `ui_effects/ColorPickerDrawEffect` 用 `QPainter` 与 `QLinearGradient` 实现，未提供实现或加 `--no-effects` 时显示虚线占位框。
 <!-- /ui-section -->
 
+<!-- ui-section: onion-skin-box -->
+## 洋葱皮预览浮动嵌入框（onionSkinBox）
+
+类型为内置容器 `FloatBox`，默认嵌入在右侧检查器底部，支持点击标题栏“浮出”按钮切换为窗口内独立浮出卡片并拖动定位，点击“还原”按钮归回原容器。
+<!-- /ui-section -->
+
 <!-- ui-section: timeline-dock -->
 ## 底部时间轴面板（timelineDock）
 

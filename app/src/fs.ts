@@ -30,14 +30,43 @@ export async function readText(path: string): Promise<string | null> {
   return text === null ? null : text.replace(/\r\n/g, "\n");
 }
 
-export async function writeText(path: string, content: string): Promise<void> {
-  if (inTauri) return invoke("write_text", { path, content });
-  await devFetch("write", path, { method: "POST", body: content });
+// 同一个文件的写入和删除按发起顺序一个接一个做：两个请求同时在路上时，后到磁盘的不一定是后发起的
+const fileQueues = new Map<string, Promise<unknown>>();
+let localWrites = 0;
+
+function enqueueFileChange<T>(path: string, change: () => Promise<T>): Promise<T> {
+  localWrites++;
+  const result = (fileQueues.get(path) ?? Promise.resolve()).then(change, change);
+  const settled = result.catch(() => undefined);
+  fileQueues.set(path, settled);
+  void settled.then(() => {
+    if (fileQueues.get(path) === settled) fileQueues.delete(path);
+  });
+  return result;
 }
 
-export async function removeFile(path: string): Promise<void> {
-  if (inTauri) return invoke("remove_file", { path });
-  await devFetch("remove", path, { method: "POST" });
+/** 本窗口发起过多少次文件修改。读文件前后比较它，就知道读的过程中有没有新的本地修改。 */
+export function localWriteCount(): number {
+  return localWrites;
+}
+
+/** 等本窗口已发起的文件修改全部做完。 */
+export async function writesSettled(): Promise<void> {
+  while (fileQueues.size > 0) await Promise.all(fileQueues.values());
+}
+
+export function writeText(path: string, content: string): Promise<void> {
+  return enqueueFileChange(path, async () => {
+    if (inTauri) return invoke<void>("write_text", { path, content });
+    await devFetch("write", path, { method: "POST", body: content });
+  });
+}
+
+export function removeFile(path: string): Promise<void> {
+  return enqueueFileChange(path, async () => {
+    if (inTauri) return invoke<void>("remove_file", { path });
+    await devFetch("remove", path, { method: "POST" });
+  });
 }
 
 export async function listDir(path: string): Promise<DirEntry[]> {

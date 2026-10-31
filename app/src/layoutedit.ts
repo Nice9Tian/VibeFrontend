@@ -5,6 +5,17 @@
 // 4) 摆放与配置主窗口停靠面板（Dock：left / right / top / bottom、标题、标题栏高度、主窗口分区 central / statusBar / docks）；
 // 5) 所有修改均受锁定保护（节点自身或祖先鎖定时禁止修改）并记录进撤销/重做历史。
 import { isMap, isSeq, type Document } from "yaml";
+import {
+  cloneDockLayout,
+  defaultSplitOrientation,
+  DOCK_AREAS,
+  dockFindLocation,
+  dockIdsOfLayout,
+  dockMoveToArea,
+  normalizeDockLayout,
+  removeDockLayoutReferences,
+  windowDockIds,
+} from "./dock.ts";
 import type { Value } from "./expr.ts";
 import {
   canNodeHoldChildren,
@@ -23,6 +34,9 @@ import {
   layoutOf,
   LAYOUT_TYPE_KINDS,
   parentOfNode,
+  prefHeight,
+  prefWidth,
+  syncResizedNodeDimensions,
   type ComputedBox,
   type DockArea,
   type DockDropTarget,
@@ -182,6 +196,7 @@ function insertDockIntoWindowList(
   area: DockArea,
   indexInArea: number,
 ): void {
+  const baseLayout = normalizeDockLayout(scene, winNode);
   winNode.docks = (winNode.docks ?? []).filter((did) => did !== dockId);
   if (winNode.children) {
     winNode.children = winNode.children.filter((cid) => cid !== dockId);
@@ -203,6 +218,28 @@ function insertDockIntoWindowList(
     const pos = winNode.docks.indexOf(beforeId);
     winNode.docks.splice(Math.max(0, pos), 0, dockId);
   }
+
+  const loc = dockFindLocation(baseLayout, dockId);
+  const areaGroupCount = baseLayout.areas[area].groups.length;
+  const targetGroupIdx = Math.max(0, Math.min(areaGroupCount, indexInArea));
+  let nextLayout = baseLayout;
+  if (!loc || loc.kind !== "area" || loc.area !== area || (loc.group.tabs.length === 1 && loc.groupIndex !== targetGroupIdx)) {
+    nextLayout = dockMoveToArea(baseLayout, scene, winNode, dockId, area, targetGroupIdx);
+  }
+  const dNode = scene.nodes[dockId];
+  if (dNode) {
+    if (nextLayout.areas[area].groups.length === 1) {
+      nextLayout.areas[area].size = area === "left" || area === "right" ? prefWidth(dNode) : prefHeight(dNode);
+    } else {
+      const newLoc = dockFindLocation(nextLayout, dockId);
+      if (newLoc?.kind === "area") {
+        const orient = nextLayout.areas[area].splitOrientation ?? defaultSplitOrientation(area);
+        nextLayout.areas[area].groups[newLoc.groupIndex].size =
+          orient === "horizontal" ? prefWidth(dNode) : prefHeight(dNode);
+      }
+    }
+  }
+  winNode.dockLayout = cloneDockLayout(nextLayout);
 }
 
 /**
@@ -231,6 +268,7 @@ export function insertOrMoveNodeInLayout(
     if (oldParent) {
       if (oldParent.children) oldParent.children = oldParent.children.filter((cid) => cid !== nodeId);
       if (oldParent.docks) oldParent.docks = oldParent.docks.filter((cid) => cid !== nodeId);
+      if (oldParent.dockLayout) removeDockLayoutReferences(oldParent.dockLayout, new Set([nodeId]));
       if (oldParent.central === nodeId) delete oldParent.central;
       if (oldParent.statusBar === nodeId) delete oldParent.statusBar;
     }
@@ -278,7 +316,8 @@ export function reorderChildInLayout(
   const parent = scene.nodes[parentId];
   if (!parent) return false;
 
-  const list = parent.docks?.includes(childId)
+  const isDockList = Boolean(parent.docks?.includes(childId));
+  const list = isDockList
     ? parent.docks
     : parent.children?.includes(childId)
       ? parent.children
@@ -292,6 +331,23 @@ export function reorderChildInLayout(
 
   list.splice(oldIdx, 1);
   list.splice(nextIdx, 0, childId);
+
+  if (isDockList && parent.dockLayout) {
+    const rankOf = (id: string) => {
+      const idx = list.indexOf(id);
+      return idx >= 0 ? idx : 9999;
+    };
+    const norm = normalizeDockLayout(scene, parent);
+    for (const area of DOCK_AREAS) {
+      for (const g of norm.areas[area].groups) {
+        g.tabs.sort((a, b) => rankOf(a) - rankOf(b));
+      }
+      norm.areas[area].groups.sort(
+        (a, b) => Math.min(...a.tabs.map(rankOf)) - Math.min(...b.tabs.map(rankOf)),
+      );
+    }
+    parent.dockLayout = cloneDockLayout(norm);
+  }
   return true;
 }
 
@@ -403,6 +459,10 @@ export function updateNodeSizePolicy(
   if (n.size?.fixedHeight !== undefined) n.height = Math.round(n.size.fixedHeight);
   else if (n.size?.preferredHeight !== undefined) n.height = clampHeight(n, n.size.preferredHeight);
   else n.height = clampHeight(n, n.height);
+
+  if (n.type === "Dock") {
+    syncResizedNodeDimensions(n, n.width, n.height, 8, scene, nodeId);
+  }
 
   return true;
 }
@@ -524,6 +584,7 @@ export function setWindowPartitionRole(
   }
 
   if (winNode.docks) winNode.docks = winNode.docks.filter((did) => did !== nodeId);
+  if (winNode.dockLayout) removeDockLayoutReferences(winNode.dockLayout, new Set([nodeId]));
   if (winNode.central === nodeId) delete winNode.central;
   if (winNode.statusBar === nodeId) delete winNode.statusBar;
   if (winNode.children) winNode.children = winNode.children.filter((cid) => cid !== nodeId);
@@ -594,6 +655,9 @@ export function updateNodePropsAndMeta(
     if (n.size?.fixedHeight !== undefined) n.size.fixedHeight = rawH;
     if (n.size?.preferredHeight !== undefined) n.size.preferredHeight = rawH;
     n.height = clampHeight(n, rawH);
+  }
+  if (n.type === "Dock" && (meta.width !== undefined || meta.height !== undefined)) {
+    syncResizedNodeDimensions(n, n.width, n.height, 8, scene, nodeId);
   }
   if (meta.title !== undefined) {
     if (meta.title) n.title = meta.title;
@@ -1071,7 +1135,7 @@ export function renderLayoutEditPane(): void {
   if (!isRoot && (parentId === scene.root || n.type === "Dock")) {
     const dockSec = createSection("主窗口分区与停靠面板");
     const currentRole: "none" | "dock" | "central" | "statusBar" =
-      rootWin?.docks?.includes(selectedId) || n.type === "Dock"
+      rootWin?.docks?.includes(selectedId) || dockIdsOfLayout(rootWin?.dockLayout).includes(selectedId) || n.type === "Dock"
         ? "dock"
         : rootWin?.central === selectedId
           ? "central"
@@ -1103,6 +1167,14 @@ export function renderLayoutEditPane(): void {
     dockSec.append(roleBar);
 
     if (n.type === "Dock" || currentRole === "dock") {
+      const normDockLayout = rootWin ? normalizeDockLayout(scene, rootWin) : undefined;
+      const dockLoc = normDockLayout ? dockFindLocation(normDockLayout, selectedId) : null;
+      const curArea: DockArea =
+        dockLoc?.kind === "area"
+          ? dockLoc.area
+          : dockLoc?.kind === "floating"
+            ? dockLoc.item.lastArea
+            : (n.dockArea ?? "left");
       const areaRow = document.createElement("div");
       areaRow.className = "vf-row-between";
       const areaLabel = document.createElement("span");
@@ -1110,7 +1182,6 @@ export function renderLayoutEditPane(): void {
       areaLabel.textContent = "停靠侧 (dockArea)";
       const areaBtns = document.createElement("div");
       areaBtns.className = "vf-seg-bar";
-      const curArea: DockArea = n.dockArea ?? "left";
       for (const [areaVal, areaText] of [
         ["left", "左侧 (left)"],
         ["right", "右侧 (right)"],
@@ -1141,7 +1212,7 @@ export function renderLayoutEditPane(): void {
           disabled: locked,
           min: 18,
           onChange: (val) => {
-            if (setDockPanelArea(scene, selectedId, n.dockArea ?? "left", undefined, { headerHeight: val })) {
+            if (setDockPanelArea(scene, selectedId, curArea, undefined, { headerHeight: val })) {
               void deps?.saveScene({ label: `修改停靠面板 ${selectedId} 标题栏高度` });
             }
           },
@@ -1155,7 +1226,7 @@ export function renderLayoutEditPane(): void {
     const winPartSec = createSection("主窗口分区概览");
     const info = document.createElement("div");
     info.className = "vf-muted-note";
-    const dockList = rootWin.docks ?? [];
+    const dockList = windowDockIds(scene, rootWin);
     info.textContent = `停靠面板：${dockList.length ? dockList.join("、") : "无"}　|　中央区：${rootWin.central ?? "无"}　|　状态栏：${rootWin.statusBar ?? "无"}`;
     winPartSec.append(info);
     pane.append(winPartSec);

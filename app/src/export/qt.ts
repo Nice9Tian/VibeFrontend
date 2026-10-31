@@ -2,6 +2,7 @@
 // 所以同样的输入一定得到同样的输出。读写磁盘在 scripts/export-qt.ts 里。
 //
 // 导出的工程分五层，结构和约束见 app/qt-templates/generated/AGENTS.md（它会被原样放进导出的工程）。
+import { windowDockIds } from "../dock.ts";
 import type { Value } from "../expr.ts";
 import {
   allStateLeaves,
@@ -149,7 +150,7 @@ export interface ControlPlan {
   /** 子控件挂载的父变量名（例如 QDockWidget 内部装内容的 QWidget） */
   bodyVariable: string;
   parentVariable: string;
-  kind: "component" | "container" | "external" | "placeholder" | "dock" | "dialog" | "shape" | "line" | "stateImage" | "paintEffect";
+  kind: "component" | "container" | "external" | "placeholder" | "dock" | "dialog" | "floatbox" | "shape" | "line" | "stateImage" | "paintEffect";
   rotation?: number;
   /** 设计项目里的类型名 */
   type: string;
@@ -209,10 +210,10 @@ const IDENTIFIER = /^[A-Za-z][A-Za-z0-9_]*$/;
 const QT_CLASS = /^Q[A-Za-z0-9]+$/;
 /** QObject 和界面类自己已经有的函数名，生成的名字不能和它们相同。 */
 const RESERVED = new Set([
-  "blockSignals", "children", "clock", "connect", "deleteLater", "destroyed", "disconnect", "dumpObjectInfo", "dumpObjectTree",
+  "blockSignals", "children", "clock", "connect", "deleteLater", "destroyed", "disconnect", "dockDump", "dumpObjectInfo", "dumpObjectTree",
   "dynamicPropertyNames", "effects", "event", "eventFilter", "findChild", "findChildren", "inherits", "installEventFilter",
   "isWidgetType", "isWindowType", "killTimer", "layoutDump", "metaObject", "moveToThread", "objectName", "objectNameChanged", "parent",
-  "property", "removeEventFilter", "reorderControl", "sender", "setActionSimulation", "setClock", "setDataFormField", "setObjectName", "setParent", "setProperty", "show", "signalsBlocked",
+  "property", "removeEventFilter", "reorderControl", "runDockOp", "sender", "setActionSimulation", "setClock", "setDataFormField", "setObjectName", "setParent", "setProperty", "show", "signalsBlocked",
   "start", "startTimer", "stateDump", "thread", "toggleTreeCheck", "toggleTreeCollapse", "triggerRequest", "widgetDump", "window",
 ]);
 
@@ -353,7 +354,7 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
   const root = scene.nodes[scene.root];
   if (!root) error(`画布里找不到根窗口 ${scene.root}`);
   const partitioned = isPartitionedWindow(root) || (root?.children ?? []).some((cid) => scene.nodes[cid]?.type === "Dock");
-  const dockIds = root?.docks ?? (root?.children ?? []).filter((cid) => scene.nodes[cid]?.type === "Dock");
+  const dockIds = windowDockIds(scene, root);
   const window: WindowPlan = {
     id: scene.root,
     variable: `w_${sanitize(scene.root)}`,
@@ -444,6 +445,22 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
       plan.qtClass = "QDialog";
       plan.title = node.title ?? (typeof node.props?.title === "string" ? node.props.title : id);
       plan.modal = node.modal !== false;
+    } else if (node.type === "FloatBox") {
+      plan.kind = "floatbox";
+      plan.qtClass = "QFrame";
+      plan.bodyVariable = `body_${variable}`;
+      variables.add(plan.bodyVariable);
+      plan.headerHeight = Math.max(0, Number(node.props?.headerHeight ?? node.headerHeight ?? 24));
+      plan.title = node.title ?? (typeof node.props?.title === "string" ? node.props.title : "浮动面板");
+      plan.props = [
+        ["title", "vfTitle"],
+        ["floating", "vfFloating"],
+        ["headerHeight", "vfHeaderHeight"],
+        ["floatX", "vfFloatX"],
+        ["floatY", "vfFloatY"],
+        ["floatWidth", "vfFloatWidth"],
+        ["floatHeight", "vfFloatHeight"],
+      ];
     } else if (
       node.type === "Container" ||
       node.type === "VBox" ||
@@ -533,7 +550,7 @@ export function exportQt(project: Project, assets: QtAssets, previous: Manifest 
     if (id && id !== scene.root && scene.nodes[id] && !topIds.includes(id)) topIds.push(id);
   };
   for (const cid of root?.children ?? []) addTop(cid);
-  for (const did of root?.docks ?? []) addTop(did);
+  for (const did of dockIds) addTop(did);
   addTop(root?.central);
   addTop(root?.statusBar);
   for (const wid of allWindowIds(scene)) {

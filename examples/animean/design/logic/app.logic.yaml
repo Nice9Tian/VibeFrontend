@@ -1078,6 +1078,8 @@ objects:
   colorHexLabel:
     props:
       text: '"当前颜色：" + inspector.hexColor'
+  onionSkinBox:
+    doc: docs/window.md#onion-skin-box
 
   timelineDock:
     doc: docs/window.md#timeline-dock

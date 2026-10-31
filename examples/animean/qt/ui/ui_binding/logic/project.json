@@ -268,6 +268,55 @@
           "inspectorDock",
           "timelineDock"
         ],
+        "dockLayout": {
+          "areas": {
+            "top": {
+              "size": 62,
+              "groups": [
+                {
+                  "tabs": [
+                    "toolsDock"
+                  ],
+                  "active": "toolsDock"
+                }
+              ]
+            },
+            "left": {
+              "size": 236,
+              "groups": [
+                {
+                  "tabs": [
+                    "layersDock"
+                  ],
+                  "active": "layersDock"
+                }
+              ]
+            },
+            "right": {
+              "size": 264,
+              "groups": [
+                {
+                  "tabs": [
+                    "inspectorDock"
+                  ],
+                  "active": "inspectorDock"
+                }
+              ]
+            },
+            "bottom": {
+              "size": 132,
+              "groups": [
+                {
+                  "tabs": [
+                    "timelineDock"
+                  ],
+                  "active": "timelineDock"
+                }
+              ]
+            }
+          },
+          "floating": []
+        },
         "children": [
           "toolsDock",
           "layersDock",
@@ -980,8 +1029,8 @@
         "title": "工具选项与检查器",
         "layout": {
           "kind": "vbox",
-          "padding": 4,
-          "gap": 2
+          "padding": 2,
+          "gap": 1
         },
         "children": [
           "toolOptHeader",
@@ -990,13 +1039,14 @@
           "inspectorTabs",
           "inspectorStack",
           "colorPanelToggleBtn",
-          "colorPanel"
+          "colorPanel",
+          "onionSkinBox"
         ]
       },
       "toolOptHeader": {
         "type": "Label",
         "width": 256,
-        "height": 16,
+        "height": 15,
         "props": {
           "text": "工具选项 (Tool Options)",
           "tone": "title"
@@ -1005,7 +1055,7 @@
       "toolOptionsForm": {
         "type": "DataForm",
         "width": 256,
-        "height": 82,
+        "height": 58,
         "props": {
           "schema": {},
           "values": {},
@@ -1023,7 +1073,7 @@
       "inspectorTabs": {
         "type": "Grid",
         "width": 256,
-        "height": 22,
+        "height": 20,
         "layout": {
           "kind": "grid",
           "columns": 3,
@@ -1048,7 +1098,7 @@
         "row": 0,
         "column": 0,
         "width": 82,
-        "height": 22,
+        "height": 20,
         "props": {
           "text": "图层属性",
           "variant": "primary"
@@ -1059,7 +1109,7 @@
         "row": 0,
         "column": 1,
         "width": 82,
-        "height": 22,
+        "height": 20,
         "props": {
           "text": "历史记录",
           "variant": "secondary"
@@ -1070,7 +1120,7 @@
         "row": 0,
         "column": 2,
         "width": 82,
-        "height": 22,
+        "height": 20,
         "props": {
           "text": "渲染导出",
           "variant": "secondary"
@@ -1289,7 +1339,7 @@
       "colorPanelToggleBtn": {
         "type": "StateButton",
         "width": 256,
-        "height": 22,
+        "height": 20,
         "props": {
           "text": "收起调色盘",
           "selected": true
@@ -1302,7 +1352,7 @@
         "size": {
           "stretch": 1,
           "vertical": "expanding",
-          "minHeight": 42,
+          "minHeight": 38,
           "maxHeight": 96
         },
         "layout": {
@@ -1322,7 +1372,7 @@
         "size": {
           "stretch": 1,
           "vertical": "expanding",
-          "minHeight": 24
+          "minHeight": 20
         },
         "props": {
           "hue": 210,
@@ -1337,6 +1387,38 @@
         "height": 12,
         "props": {
           "text": "当前颜色：#3394eb",
+          "tone": "muted"
+        }
+      },
+      "onionSkinBox": {
+        "type": "FloatBox",
+        "width": 256,
+        "height": 42,
+        "headerHeight": 20,
+        "layout": {
+          "kind": "vbox",
+          "padding": 2,
+          "gap": 2
+        },
+        "props": {
+          "title": "洋葱皮预览",
+          "floating": false,
+          "headerHeight": 20,
+          "floatX": 360,
+          "floatY": 160,
+          "floatWidth": 240,
+          "floatHeight": 96
+        },
+        "children": [
+          "onionSkinLabel"
+        ]
+      },
+      "onionSkinLabel": {
+        "type": "Label",
+        "width": 252,
+        "height": 16,
+        "props": {
+          "text": "前后各显示 2 帧残影",
           "tone": "muted"
         }
       },
@@ -4254,6 +4336,9 @@
           "text": "\"当前颜色：\" + inspector.hexColor"
         }
       },
+      "onionSkinBox": {
+        "doc": "docs/window.md#onion-skin-box"
+      },
       "timelineDock": {
         "doc": "docs/window.md#timeline-dock"
       },
@@ -5486,6 +5571,85 @@
         "set": {
           "frameShape": 4,
           "frameShadow": 48
+        }
+      }
+    },
+    "FloatBox": {
+      "type": "FloatBox",
+      "label": "浮动嵌入框",
+      "description": "可在嵌入布局与窗口内浮动面板之间切换的标准容器",
+      "defaultSize": {
+        "width": 220,
+        "height": 120
+      },
+      "entry": "index.js",
+      "style": "style.css",
+      "props": {
+        "title": {
+          "type": "string",
+          "default": "浮动嵌入框",
+          "logic": true
+        },
+        "floating": {
+          "type": "boolean",
+          "default": false,
+          "logic": true
+        },
+        "floatX": {
+          "type": "number",
+          "default": 60,
+          "logic": true
+        },
+        "floatY": {
+          "type": "number",
+          "default": 80,
+          "logic": true
+        },
+        "floatWidth": {
+          "type": "number",
+          "default": 220,
+          "logic": true
+        },
+        "floatHeight": {
+          "type": "number",
+          "default": 120,
+          "logic": true
+        },
+        "headerHeight": {
+          "type": "number",
+          "default": 24
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "logic": true
+        }
+      },
+      "events": [
+        "toggle",
+        "change",
+        "move"
+      ],
+      "children": true,
+      "qt": {
+        "widget": "QFrame",
+        "props": {
+          "title": "vfTitle",
+          "floating": "vfFloating",
+          "floatX": "vfFloatX",
+          "floatY": "vfFloatY",
+          "floatWidth": "vfFloatWidth",
+          "floatHeight": "vfFloatHeight"
+        },
+        "events": {
+          "toggle": {
+            "signal": "toggled",
+            "type": "boolean"
+          },
+          "change": {
+            "signal": "toggled",
+            "type": "boolean"
+          }
         }
       }
     },

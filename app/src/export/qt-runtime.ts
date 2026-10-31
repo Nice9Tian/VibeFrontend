@@ -39,6 +39,7 @@ import {
   worldToNodeLocalInScene,
 } from "../transform.ts";
 import { Runtime, type ActionSimMode, type NodeView } from "../runtime.ts";
+import { effectiveDockLayout } from "../dock.ts";
 import { dumpRuntime } from "./dump.ts";
 
 /** 导出时写进 project.json 的内容：逻辑运行层需要的那一部分项目数据。 */
@@ -220,23 +221,51 @@ export function getState(path: string): Value {
 
 /** 每个控件（及菜单项）当前应有的样子：ID → 可见、可用、属性。 */
 export function views(): Record<string, NodeView> {
-  const result: Record<string, NodeView> = {};
-  for (const id of Object.keys(scene.nodes)) result[id] = runtime.view(id);
-  for (const { item } of allMenuItems(scene)) {
-    if (!result[item.id]) result[item.id] = runtime.view(item.id);
-  }
-  return result;
+  return runtime.readSnapshot(() => {
+    const result: Record<string, NodeView> = {};
+    for (const id of Object.keys(scene.nodes)) result[id] = runtime.view(id);
+    for (const { item } of allMenuItems(scene)) {
+      if (!result[item.id]) result[item.id] = runtime.view(item.id);
+    }
+    return result;
+  });
 }
 
 export function computeLayout(width: number, height: number): Record<string, { x: number; y: number; width: number; height: number; absX: number; absY: number; visible: boolean; windowId: string }> {
-  const boxes = computeSceneLayout(scene, {
-    rootSize: { width, height },
-    isVisible: (id) => runtime.view(id).visible,
-    getProp: (id, prop) => runtime.view(id).props[prop] ?? null,
-  });
+  const boxes = runtime.readSnapshot(() =>
+    computeSceneLayout(scene, {
+      rootSize: { width, height },
+      isVisible: (id) => runtime.view(id).visible,
+      getProp: (id, prop) => runtime.view(id).props[prop] ?? null,
+      getDockLayout: (winId) => runtime.getDockLayout(winId),
+    }),
+  );
   const out: Record<string, { x: number; y: number; width: number; height: number; absX: number; absY: number; visible: boolean; windowId: string }> = {};
   for (const [id, box] of boxes) out[id] = box;
   return out;
+}
+
+export function dockLayout(): string {
+  return JSON.stringify(runtime.getDockLayout(scene.root));
+}
+
+/** 当前窗口尺寸下应有的实际排列，check 用它和 Qt 实测比较。 */
+export function effectiveDockLayoutAt(width: number, height: number): string {
+  const boxes = computeLayout(width, height);
+  return JSON.stringify(effectiveDockLayout(runtime.getDockLayout(scene.root), (id) => boxes[id]));
+}
+
+export function dockOp(op: string, argsJson: string): OutgoingEvent[] {
+  let args: Record<string, Value> = {};
+  if (argsJson) {
+    try {
+      args = JSON.parse(argsJson) as Record<string, Value>;
+    } catch {
+      // 忽略格式错误
+    }
+  }
+  runtime.dockOp(op, args);
+  return take();
 }
 
 export function dump(): string {

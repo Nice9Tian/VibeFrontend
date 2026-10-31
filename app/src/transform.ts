@@ -632,7 +632,7 @@ export function applyGroupResize(
       n.x = res.x;
       n.y = res.y;
     }
-    syncResizedNodeDimensions(n, res.width, res.height, minSize);
+    syncResizedNodeDimensions(n, res.width, res.height, minSize, scene, id);
     if (res.props) n.props = res.props;
   }
   return nextBounds;

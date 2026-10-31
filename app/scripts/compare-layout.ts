@@ -86,6 +86,7 @@ function buildHtmlPage(): string {
     import { graphics as computeQtGraphics, init as initQtRuntime } from "/src/export/qt-runtime.ts";
     import {
       allWindowIds,
+      childrenOfNode,
       computeSceneLayout,
       isPaintEffect,
       LAYOUT_TYPE_KINDS,
@@ -191,16 +192,7 @@ function buildHtmlPage(): string {
     }
 
     function childrenOf(n) {
-      if (!n) return [];
-      const list = [];
-      const add = (cid) => {
-        if (cid && !list.includes(cid)) list.push(cid);
-      };
-      for (const cid of n.docks ?? []) add(cid);
-      add(n.central);
-      add(n.statusBar);
-      for (const cid of n.children ?? []) add(cid);
-      return list;
+      return childrenOfNode(n);
     }
 
     function buildNode(id, parentEl) {
@@ -220,7 +212,7 @@ function buildHtmlPage(): string {
       body.className = "vf-body";
       wrapper.append(body);
       parentEl.append(wrapper);
-      const entry = { wrapper, body };
+      const entry = { wrapper, body, parentEl };
       mounted.set(id, entry);
 
       if (n.type === "Dock") {
@@ -300,6 +292,7 @@ function buildHtmlPage(): string {
         rootSize,
         isVisible: (nid) => runtime.view(nid).visible,
         getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
+        getDockLayout: (wid) => runtime.getDockLayout(wid),
       });
       const gfxObj = computeQtGraphics(rootSize.width, rootSize.height);
       for (const [id, entry] of mounted) {
@@ -330,9 +323,20 @@ function buildHtmlPage(): string {
               height: \`\${box.height}px\`,
             });
           } else {
+            const isFloatingFloatBox = n?.type === "FloatBox" && Boolean(view.props.floating);
+            if (n?.type === "FloatBox") {
+              if (isFloatingFloatBox) {
+                if (entry.wrapper.parentElement !== stage) stage.append(entry.wrapper);
+                entry.wrapper.style.zIndex = "35";
+              } else if (entry.parentEl && entry.wrapper.parentElement !== entry.parentEl) {
+                entry.parentEl.append(entry.wrapper);
+                entry.wrapper.style.zIndex = "";
+              }
+            }
+            const useAbs = entry.wrapper.parentElement === stage && id !== project.scene.root;
             Object.assign(entry.wrapper.style, {
-              left: \`\${box.x}px\`,
-              top: \`\${box.y}px\`,
+              left: \`\${useAbs ? box.absX : box.x}px\`,
+              top: \`\${useAbs ? box.absY : box.y}px\`,
               width: \`\${box.width}px\`,
               height: \`\${box.height}px\`,
             });
@@ -465,6 +469,7 @@ async function measureInHeadlessBrowser(
       const urlPath = (req.url ?? "/").split("?")[0];
       if (req.method === "POST" && urlPath === "/report") {
         let body = "";
+        req.setEncoding("utf8");
         req.on("data", (chunk) => (body += chunk));
         req.on("end", () => {
           res.writeHead(200, { "Content-Type": "text/plain" });

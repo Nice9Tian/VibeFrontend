@@ -1,5 +1,23 @@
 // 逻辑运行层：保存状态，计算条件和属性，按批处理事件。
 // 不依赖网页和 Tauri：工具的预览、命令行，以及导出后嵌进 Qt 的 JS 引擎，运行的都是这一份。
+import {
+  cloneDockLayout,
+  dockActivateTab,
+  dockFloat,
+  dockMoveToArea,
+  dockResizeArea,
+  dockResizeSplit,
+  dockRestore,
+  dockSplit,
+  dockTabify,
+  isDockArea,
+  normalizeDockLayout,
+  type DockArea,
+  type DockFloatRect,
+  type DockLayoutSpec,
+  type DockSplitOrientation,
+  dockFindLocation,
+} from "./dock.ts";
 import { evalExpr, parseAssignment, parseExpr, type Expr, type Value } from "./expr.ts";
 import {
   allConditions,
@@ -14,6 +32,7 @@ import {
   findStateLeaf,
   globalSteps,
   isBusinessState,
+  isPartitionedWindow,
   layoutOf,
   requestEvent,
   resolveStateImage,
@@ -21,6 +40,8 @@ import {
   type StateImageKey,
   type StateLeaf,
   type Step,
+  parentOfNode,
+  type SceneNode,
 } from "./model.ts";
 
 export interface LogEntry {
@@ -151,6 +172,14 @@ function readTailValue(base: Value, tail: string[]): Value {
   return cursor;
 }
 
+interface FloatBoxRuntimeState {
+  floating: boolean;
+  floatX?: number;
+  floatY?: number;
+  floatWidth?: number;
+  floatHeight?: number;
+}
+
 /** 一批步骤执行时用到的东西。 */
 interface Batch {
   /** 状态的工作副本：后面的步骤读到前面步骤写入的新值，全部执行完再一次生效 */
@@ -181,6 +210,14 @@ export class Runtime {
   private windows = new Map<string, { open: boolean; modal: boolean }>();
   /** 停靠面板未绑定状态时的显隐开关 */
   private docks = new Map<string, boolean>();
+  /** 主窗口停靠排列状态 */
+  private dockLayouts = new Map<string, DockLayoutSpec>();
+  /** 上次 reset/adopt 时画布节点上的 dockLayout 快照（用于判断 scene.json 中的 dockLayout 是否被外部修改或撤销/重做） */
+  private lastSceneDockLayouts = new Map<string, string>();
+  /** 浮动嵌入框未绑定状态时的运行态属性 */
+  private floatBoxes = new Map<string, FloatBoxRuntimeState>();
+  /** 上次 reset/adopt 时画布 FloatBox 节点的 props 快照 */
+  private lastSceneFloatBoxProps = new Map<string, string>();
   /** 菜单项未绑定状态时的勾选开关 */
   private menuChecked = new Map<string, boolean>();
   /** 预览时钟当前毫秒数 */
@@ -193,6 +230,8 @@ export class Runtime {
   private hoveredControls = new Set<string>();
   /** 当前鼠标按下中的控件 ID 集合（用于状态图片选图） */
   private pressedControls = new Set<string>();
+  private viewSnapshot: Map<string, NodeView> | null = null;
+  private stackContainersSnapshot: Array<[string, SceneNode]> | null = null;
   private activePromises = new Set<Promise<unknown>>();
   private exprCache = new Map<string, Expr>();
   private fnCache = new Map<string, (state: Record<string, unknown>, args: Record<string, Value>) => unknown>();
@@ -213,16 +252,34 @@ export class Runtime {
       if (def?.type === "text") this.textConditions.set(id, def.preview === true);
     }
     this.windows.clear();
+    this.dockLayouts.clear();
+    this.lastSceneDockLayouts.clear();
     for (const winId of allWindowIds(this.project.scene)) {
       const n = this.project.scene.nodes[winId];
       const isRoot = winId === this.project.scene.root;
       const open = isRoot ? true : Boolean(n?.initialOpen ?? n?.props?.open ?? false);
       const modal = isRoot ? false : Boolean(n?.modal ?? n?.props?.modal ?? n?.type === "Dialog");
       this.windows.set(winId, { open, modal });
+      if (isPartitionedWindow(n)) {
+        this.dockLayouts.set(winId, normalizeDockLayout(this.project.scene, n));
+        this.lastSceneDockLayouts.set(winId, JSON.stringify(n?.dockLayout ?? null));
+      }
     }
     this.docks.clear();
+    this.floatBoxes.clear();
+    this.lastSceneFloatBoxProps.clear();
     for (const [id, n] of Object.entries(this.project.scene.nodes)) {
       if (n.type === "Dock") this.docks.set(id, n.props?.visible !== false);
+      if (n.type === "FloatBox") {
+        this.floatBoxes.set(id, {
+          floating: Boolean(n.props?.floating ?? false),
+          ...(typeof n.props?.floatX === "number" ? { floatX: n.props.floatX } : {}),
+          ...(typeof n.props?.floatY === "number" ? { floatY: n.props.floatY } : {}),
+          ...(typeof n.props?.floatWidth === "number" ? { floatWidth: n.props.floatWidth } : {}),
+          ...(typeof n.props?.floatHeight === "number" ? { floatHeight: n.props.floatHeight } : {}),
+        });
+        this.lastSceneFloatBoxProps.set(id, JSON.stringify(n.props ?? null));
+      }
     }
     this.menuChecked.clear();
     for (const { item } of allMenuItems(this.project.scene)) {
@@ -246,9 +303,14 @@ export class Runtime {
 
   /** 换成新加载的项目；状态结构没变的部分保留当前值。 */
   adopt(project: RuntimeProject): void {
+    const prevSceneDockLayouts = new Map(this.lastSceneDockLayouts);
+    const prevSceneFloatBoxProps = new Map(this.lastSceneFloatBoxProps);
     const oldState = new Map(this.state);
     const oldConditions = new Map(this.textConditions);
     const oldWindows = new Map(this.windows);
+    const oldDocks = new Map(this.docks);
+    const oldDockLayouts = new Map(this.dockLayouts);
+    const oldFloatBoxes = new Map(this.floatBoxes);
     const oldSims = new Map(this.actionSims);
     this.project = project;
     this.exprCache.clear();
@@ -264,14 +326,232 @@ export class Runtime {
     for (const [id, win] of oldWindows) {
       if (this.windows.has(id)) this.windows.set(id, win);
     }
+    for (const [id, vis] of oldDocks) {
+      if (this.docks.has(id)) this.docks.set(id, vis);
+    }
+    for (const [winId, layout] of oldDockLayouts) {
+      if (!this.dockLayouts.has(winId)) continue;
+      const oldWinDockLayout = prevSceneDockLayouts.get(winId) ?? "null";
+      const newWinDockLayout = this.lastSceneDockLayouts.get(winId) ?? "null";
+      if (oldWinDockLayout === newWinDockLayout) {
+        this.dockLayouts.set(winId, normalizeDockLayout(project.scene, { ...project.scene.nodes[winId], dockLayout: layout }));
+      }
+    }
+    for (const [id, fb] of oldFloatBoxes) {
+      if (this.floatBoxes.has(id)) {
+        const oldProps = prevSceneFloatBoxProps.get(id) ?? "null";
+        const newProps = this.lastSceneFloatBoxProps.get(id) ?? "null";
+        if (oldProps === newProps) this.floatBoxes.set(id, { ...fb });
+      }
+    }
     for (const [name, sim] of oldSims) {
       this.actionSims.set(name, sim);
     }
+    this.syncActiveTabsWithVisibility();
   }
 
   /** 触发 app.start，预览开始时调用一次。 */
   start(): void {
     this.dispatch(null, "app.start");
+  }
+
+  // ---------- 停靠排列读写与操作 ----------
+
+  getDockLayout(winId = this.project.scene.root): DockLayoutSpec {
+    const existing = this.dockLayouts.get(winId);
+    if (existing) return cloneDockLayout(existing);
+    return normalizeDockLayout(this.project.scene, this.project.scene.nodes[winId]);
+  }
+
+  setDockLayout(layout: DockLayoutSpec, winId = this.project.scene.root): void {
+    const winNode = this.project.scene.nodes[winId];
+    const normalized = normalizeDockLayout(this.project.scene, {
+      ...(winNode ?? { type: "Window", width: 1280, height: 800 }),
+      dockLayout: layout,
+    });
+    this.dockLayouts.set(winId, normalized);
+    this.lastSceneDockLayouts.set(winId, JSON.stringify(winNode?.dockLayout ?? null));
+    this.releaseDockedPointerStates();
+    this.notifyChanged();
+  }
+
+  dockTabify(targetDockId: string, dockId: string, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockTabify(cur, this.project.scene, this.project.scene.nodes[winId], targetDockId, dockId);
+    this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`叠入页签组 ${targetDockId}`] });
+    this.notifyChanged();
+  }
+
+  dockActivateTab(dockId: string, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockActivateTab(cur, this.project.scene, this.project.scene.nodes[winId], dockId);
+    this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`切换激活页签 ${dockId}`] });
+    this.notifyChanged();
+  }
+
+  dockFloat(dockId: string, rect?: Partial<DockFloatRect>, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockFloat(cur, this.project.scene, this.project.scene.nodes[winId], dockId, rect);
+    this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`浮出为独立面板`] });
+    this.notifyChanged();
+  }
+
+  dockRestore(dockId: string, targetArea?: DockArea, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockRestore(cur, this.project.scene, this.project.scene.nodes[winId], dockId, targetArea);
+    this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`从浮窗恢复停靠`] });
+    this.notifyChanged();
+  }
+
+  dockMoveToArea(dockId: string, area: DockArea, index?: number, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockMoveToArea(cur, this.project.scene, this.project.scene.nodes[winId], dockId, area, index);
+    this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`吸附到停靠区 ${area}`] });
+    this.notifyChanged();
+  }
+
+  dockSplit(
+    targetDockId: string,
+    dockId: string,
+    position: "before" | "after" = "after",
+    orientation?: DockSplitOrientation,
+    winId = this.project.scene.root,
+  ): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockSplit(
+      cur,
+      this.project.scene,
+      this.project.scene.nodes[winId],
+      targetDockId,
+      dockId,
+      position,
+      orientation,
+    );
+    this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
+    this.hooks.onLog({ title: `停靠 ${dockId}`, lines: [`与 ${targetDockId} 并排（${position}）`] });
+    this.notifyChanged();
+  }
+
+  dockResizeArea(area: DockArea, size: number, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockResizeArea(cur, this.project.scene, this.project.scene.nodes[winId], area, size);
+    this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
+    this.hooks.onLog({ title: `停靠区 ${area}`, lines: [`调整尺寸为 ${next.areas[area].size}px`] });
+    this.notifyChanged();
+  }
+
+  dockResizeSplit(area: DockArea, groupIndex: number, size: number, winId = this.project.scene.root): void {
+    const cur = this.getDockLayout(winId);
+    const next = dockResizeSplit(cur, this.project.scene, this.project.scene.nodes[winId], area, groupIndex, size);
+    this.dockLayouts.set(winId, next);
+    this.releaseDockedPointerStates();
+    this.hooks.onLog({ title: `停靠区 ${area}`, lines: [`调整并排组 #${groupIndex} 尺寸为 ${Math.round(size)}px`] });
+    this.notifyChanged();
+  }
+
+  /** 当停靠面板显隐变化后，若某个页签组的当前 active 面板已隐藏，则自动切换到同组内仍可见的页签。 */
+  private syncActiveTabsWithVisibility(): boolean {
+    let anyChanged = false;
+    for (const [winId, layout] of this.dockLayouts) {
+      let winChanged = false;
+      const next = cloneDockLayout(layout);
+      for (const area of ["top", "bottom", "left", "right"] as const) {
+        for (const group of next.areas[area]?.groups ?? []) {
+          const activeId = group.active ?? group.tabs[0];
+          if (activeId && !this.view(activeId).visible) {
+            const firstVisible = group.tabs.find((tid) => this.view(tid).visible);
+            if (firstVisible && firstVisible !== group.active) {
+              group.active = firstVisible;
+              winChanged = true;
+            }
+          }
+        }
+      }
+      if (winChanged) {
+        this.dockLayouts.set(winId, next);
+        anyChanged = true;
+      }
+    }
+    return anyChanged;
+  }
+
+  dockSetVisible(dockId: string, visible: boolean): void {
+    if (!this.project.scene.nodes[dockId]) return;
+    const winId = this.windowOf(dockId);
+    if (visible) {
+      const curLayout = this.getDockLayout(winId);
+      this.dockLayouts.set(winId, dockActivateTab(curLayout, this.project.scene, this.project.scene.nodes[winId], dockId));
+    }
+    this.runBatch(`停靠面板 ${dockId}`, false, false, (batch) => {
+      const dockObj = this.project.logic.objects?.[dockId];
+      const visExpr = dockObj?.props?.visible;
+      if (typeof visExpr === "string" && findStateLeaf(this.project.logic, visExpr)) {
+        this.assign(batch, visExpr, visible);
+        return;
+      }
+      const cur = batch.docks.get(dockId) ?? true;
+      if (cur !== visible) {
+        batch.docks.set(dockId, visible);
+        batch.lines.push(`停靠面板 ${dockId}: ${cur ? "显示 → 隐藏" : "隐藏 → 显示"}`);
+      }
+    });
+  }
+
+  /** 统一的停靠指令入口（供测试步骤与 Qt 侧桥接调用）。 */
+  dockOp(op: string, args: Record<string, Value> = {}): void {
+    const dockId = String(args.dock ?? "");
+    const targetId = String(args.target ?? "");
+    if (op === "tabify") {
+      this.dockTabify(targetId, dockId);
+    } else if (op === "tab" || op === "activateTab") {
+      this.dockActivateTab(dockId);
+    } else if (op === "float") {
+      this.dockFloat(dockId, {
+        ...(typeof args.x === "number" ? { x: args.x } : {}),
+        ...(typeof args.y === "number" ? { y: args.y } : {}),
+        ...(typeof args.width === "number" ? { width: args.width } : {}),
+        ...(typeof args.height === "number" ? { height: args.height } : {}),
+      });
+    } else if (op === "restore") {
+      this.dockRestore(dockId, isDockArea(args.area) ? args.area : undefined);
+    } else if (op === "move") {
+      if (isDockArea(args.area)) {
+        this.dockMoveToArea(dockId, args.area, typeof args.index === "number" ? args.index : undefined);
+      }
+    } else if (op === "split") {
+      this.dockSplit(
+        targetId,
+        dockId,
+        args.position === "before" ? "before" : "after",
+        args.orientation === "horizontal" || args.orientation === "vertical" ? args.orientation : undefined,
+      );
+    } else if (op === "resize" || op === "resizeArea") {
+      if (isDockArea(args.area)) {
+        this.dockResizeArea(args.area, Number(args.size ?? 240));
+      }
+    } else if (op === "resizeSplit") {
+      if (isDockArea(args.area)) {
+        this.dockResizeSplit(args.area, Number(args.groupIndex ?? 0), Number(args.size ?? 200));
+      }
+    } else if (op === "close") {
+      this.dockSetVisible(dockId, false);
+    } else if (op === "open") {
+      this.dockSetVisible(dockId, true);
+    } else if (op === "toggle") {
+      this.dockSetVisible(dockId, !this.view(dockId).visible);
+    }
   }
 
   // ---------- 读取 ----------
@@ -378,7 +658,7 @@ export class Runtime {
   setActionSimulation(name: string, config: Partial<ActionSimConfig>): void {
     const cur = this.getActionSimulation(name);
     this.actionSims.set(name, { ...cur, ...config });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   isWindowOpen(id: string): boolean {
@@ -440,7 +720,7 @@ export class Runtime {
         });
       }
     });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   stateSnapshot(): Array<[string, Value]> {
@@ -453,7 +733,38 @@ export class Runtime {
   }
 
   /** 某个节点（或菜单项）当前应有的样子：静态默认值、scene.json 的值、逻辑计算值依次覆盖。 */
+  /**
+   * 连续读很多控件时共用一份结果：一次读取里状态不变，同一个控件不用算第二遍。
+   * 排版计算会反复读同一个控件，不共用时每读一次都要重新求值。read 里不能改状态。
+   */
+  readSnapshot<T>(read: () => T): T {
+    if (this.viewSnapshot) return read();
+    this.viewSnapshot = new Map();
+    this.stackContainersSnapshot = this.findStackContainers();
+    try {
+      return read();
+    } finally {
+      this.viewSnapshot = null;
+      this.stackContainersSnapshot = null;
+    }
+  }
+
+  private findStackContainers(): Array<[string, SceneNode]> {
+    return Object.entries(this.project.scene.nodes).filter(([, n]) => layoutOf(n)?.kind === "stack");
+  }
+
   view(id: string): NodeView {
+    const snapshot = this.viewSnapshot;
+    if (!snapshot) return this.computeView(id);
+    let view = snapshot.get(id);
+    if (!view) {
+      view = this.computeView(id);
+      snapshot.set(id, view);
+    }
+    return view;
+  }
+
+  private computeView(id: string): NodeView {
     const menuItem = findMenuItem(this.project.scene, id);
     if (menuItem && !this.project.scene.nodes[id]) {
       const object = this.project.logic.objects?.[id];
@@ -484,13 +795,21 @@ export class Runtime {
       const value = declared[key].default;
       if (value !== undefined) props[key] = cloneValue(value);
     }
-    if (node?.title !== undefined && (node.type === "Dock" || node.type === "Dialog")) {
+    if (node?.title !== undefined && (node.type === "Dock" || node.type === "Dialog" || node.type === "FloatBox")) {
       props.title = node.title;
     }
     if (node?.props) {
       for (const [k, v] of Object.entries(node.props)) {
         if (k !== "visible") props[k] = cloneValue(v);
       }
+    }
+    if (node?.type === "FloatBox" && this.floatBoxes.has(id)) {
+      const fb = this.floatBoxes.get(id)!;
+      props.floating = fb.floating;
+      if (fb.floatX !== undefined) props.floatX = fb.floatX;
+      if (fb.floatY !== undefined) props.floatY = fb.floatY;
+      if (fb.floatWidth !== undefined) props.floatWidth = fb.floatWidth;
+      if (fb.floatHeight !== undefined) props.floatHeight = fb.floatHeight;
     }
     let visible = true;
     if (this.windows.has(id) && id !== this.project.scene.root) {
@@ -522,8 +841,8 @@ export class Runtime {
       }
     }
     if (visible) {
-      for (const [parentId, parentNode] of Object.entries(this.project.scene.nodes)) {
-        if (layoutOf(parentNode)?.kind === "stack" && parentNode.children?.includes(id)) {
+      for (const [parentId, parentNode] of this.stackContainersSnapshot ?? this.findStackContainers()) {
+        if (parentNode.children?.includes(id)) {
           const pView = this.view(parentId);
           const activeIdx = Number(pView.props.currentIndex ?? 0);
           const activePage = String(pView.props.currentPage ?? "");
@@ -535,9 +854,6 @@ export class Runtime {
       }
     }
     const enabled = props.enabled !== false;
-    if (!enabled) {
-      this.pressedControls.delete(id);
-    }
     const selected = Boolean(props.selected ?? props.checked ?? (props.variant === "primary"));
     const resolvedState = resolveStateImage(decl, {
       enabled,
@@ -553,13 +869,77 @@ export class Runtime {
     };
   }
 
+  /** 所有变更都从这里通知界面：先清掉已经不可能被鼠标碰到的控件的悬停和按下，view() 只读不改。 */
+  private notifyChanged(): void {
+    // 快照只在一次读取内有效，走到这里说明状态变了
+    this.viewSnapshot = null;
+    this.stackContainersSnapshot = null;
+    for (const set of [this.hoveredControls, this.pressedControls]) {
+      for (const id of [...set]) {
+        if (!this.canTakePointer(id)) set.delete(id);
+      }
+    }
+    this.hooks.onChange();
+  }
+
+  /** 叠页签组里显示的那个面板；激活页签已关闭时是组里第一个没关闭的。 */
+  private isShownDockTab(dockId: string): boolean {
+    const layout = this.dockLayouts.get(this.windowOf(dockId));
+    const loc = layout ? dockFindLocation(layout, dockId) : null;
+    if (loc?.kind !== "area") return true;
+    const { active, tabs } = loc.group;
+    const shown = active && tabs.includes(active) && this.view(active).visible ? active : tabs.find((tid) => this.view(tid).visible);
+    return shown === dockId;
+  }
+
+  private releasePointerOn(nodeId: string, event: string): void {
+    const wasHovered = event === "mouseleave" && this.hoveredControls.delete(nodeId);
+    const wasPressed = (event === "mouseleave" || event === "mouseup") && this.pressedControls.delete(nodeId);
+    if (wasHovered || wasPressed) this.notifyChanged();
+  }
+
+  /** 控件此刻显示在界面上并且可用。view().visible 只看控件自己，这里还看所属窗口、容器、停靠页签和打开的模态框。 */
+  private canTakePointer(id: string): boolean {
+    const scene = this.project.scene;
+    if (!this.view(id).enabled) return false;
+    const modalWin = this.activeModalWindow();
+    if (modalWin && !this.isInsideSubtree(modalWin, id)) return false;
+    for (let cur: string | null = id; cur && cur !== scene.root; cur = parentOfNode(scene, cur)) {
+      const node = scene.nodes[cur];
+      const curView = this.view(cur);
+      if (!node || !curView.visible) return false;
+      if (node.type === "Dock" && !this.isShownDockTab(cur)) return false;
+      // 浮出的 FloatBox 脱离原来的容器单独显示，原父面板切走或关闭都不影响它
+      if (node.type === "FloatBox" && curView.props.floating) return true;
+    }
+    return true;
+  }
+
+  /** 面板重排后控件换了位置，不一定还在鼠标底下，而界面不一定收到移出事件，所以停靠面板里的悬停和按下一律清掉。 */
+  private releaseDockedPointerStates(): void {
+    const scene = this.project.scene;
+    for (const set of [this.hoveredControls, this.pressedControls]) {
+      for (const id of [...set]) {
+        for (let cur: string | null = id; cur; cur = parentOfNode(scene, cur)) {
+          const node = scene.nodes[cur];
+          // 已浮出的 FloatBox 脱离了原面板，不跟着重排
+          if (node?.type === "FloatBox" && this.view(cur).props.floating) break;
+          if (node?.type === "Dock") {
+            set.delete(id);
+            break;
+          }
+        }
+      }
+    }
+  }
+
   // ---------- 事件 ----------
 
   toggleTextCondition(id: string): void {
     const next = !(this.textConditions.get(id) ?? false);
     this.textConditions.set(id, next);
     this.hooks.onLog({ title: `条件 ${id}`, lines: [`手动切换：${next ? "否 → 是" : "是 → 否"}`] });
-    this.hooks.onChange();
+    this.notifyChanged();
   }
 
   /** nodeId 为 null 表示全局事件。 */
@@ -569,6 +949,8 @@ export class Runtime {
     if (nodeId !== null) {
       const modalWin = this.activeModalWindow();
       if (modalWin && !this.isInsideSubtree(modalWin, nodeId)) {
+        // 事件本身被拦下，但鼠标确实离开、松开了，界面状态要跟上
+        this.releasePointerOn(nodeId, event);
         if (event !== "mouseenter" && event !== "mouseleave") {
           this.hooks.onLog({ title: `${nodeId}.${event}`, lines: [`已忽略：模态窗口 ${modalWin} 正在打开`] });
         }
@@ -613,30 +995,55 @@ export class Runtime {
       return;
     }
 
+    const node = nodeId ? scene.nodes[nodeId] : undefined;
+    if (nodeId && node?.type === "FloatBox") {
+      const view = this.view(nodeId);
+      if (view.visible && view.enabled) {
+        if (event === "toggle" || (event === "change" && typeof value === "boolean")) {
+          const cur = this.floatBoxes.get(nodeId) ?? { floating: Boolean(view.props.floating) };
+          const nextFloat = typeof value === "boolean" ? value : !cur.floating;
+          if (cur.floating !== nextFloat) {
+            this.floatBoxes.set(nodeId, { ...cur, floating: nextFloat });
+            this.hooks.onLog({
+              title: `${nodeId}.${event}`,
+              lines: [`浮动嵌入框 ${nodeId}: ${nextFloat ? "嵌入 → 浮动" : "浮动 → 嵌入"}`],
+            });
+            this.notifyChanged();
+          }
+        } else if (event === "move" && value && typeof value === "object" && !Array.isArray(value)) {
+          const cur = this.floatBoxes.get(nodeId) ?? { floating: Boolean(view.props.floating) };
+          const nx = typeof value.x === "number" ? Math.round(value.x) : cur.floatX;
+          const ny = typeof value.y === "number" ? Math.round(value.y) : cur.floatY;
+          const nw = typeof value.width === "number" ? Math.round(value.width) : cur.floatWidth;
+          const nh = typeof value.height === "number" ? Math.round(value.height) : cur.floatHeight;
+          this.floatBoxes.set(nodeId, {
+            ...cur,
+            floating: true,
+            ...(nx !== undefined ? { floatX: nx } : {}),
+            ...(ny !== undefined ? { floatY: ny } : {}),
+            ...(nw !== undefined ? { floatWidth: nw } : {}),
+            ...(nh !== undefined ? { floatHeight: nh } : {}),
+          });
+          this.notifyChanged();
+        }
+      }
+    }
     if (nodeId) {
-      if (event === "mouseleave") {
-        const changed = this.hoveredControls.delete(nodeId) || this.pressedControls.delete(nodeId);
-        if (changed) this.hooks.onChange();
-      } else if (event === "mouseup") {
-        if (this.pressedControls.delete(nodeId)) this.hooks.onChange();
+      if (event === "mouseleave" || event === "mouseup") {
+        this.releasePointerOn(nodeId, event);
       } else if (event === "mouseenter" || event === "mousedown") {
-        const winId = this.windowOf(nodeId);
-        const winOpen = winId === scene.root || this.view(winId).visible;
-        const curView = this.view(nodeId);
-        if (winOpen && curView.visible && curView.enabled) {
+        if (this.canTakePointer(nodeId)) {
           if (event === "mouseenter") this.hoveredControls.add(nodeId);
           else this.pressedControls.add(nodeId);
-          this.hooks.onChange();
+          this.notifyChanged();
         }
       } else if (event === "change" && (value === "pressed" || value === "released")) {
-        const node = scene.nodes[nodeId];
         const decl = node ? declFor(this.project, node.type) : null;
         if (decl?.stateImages) {
-          const curView = this.view(nodeId);
-          if (curView.visible && curView.enabled) {
+          if (this.canTakePointer(nodeId)) {
             if (value === "pressed") this.pressedControls.add(nodeId);
             else this.pressedControls.delete(nodeId);
-            this.hooks.onChange();
+            this.notifyChanged();
           }
           if (!logic.objects?.[nodeId]?.bind && !logic.objects?.[nodeId]?.events?.change) return;
         }
@@ -645,7 +1052,7 @@ export class Runtime {
 
     const object = nodeId ? logic.objects?.[nodeId] : undefined;
     const steps = nodeId ? object?.events?.[event] : globalSteps(logic, event);
-    const bindTarget = nodeId && event === "change" && value !== undefined ? object?.bind : undefined;
+    const bindTarget = nodeId && (event === "change" || (node?.type === "FloatBox" && event === "toggle")) && value !== undefined ? object?.bind : undefined;
     if (!steps && !bindTarget) return;
 
     const title = nodeId ? `${nodeId}.${event}` : `全局事件 ${event}`;
@@ -665,7 +1072,6 @@ export class Runtime {
         }
         return;
       }
-      const node = scene.nodes[nodeId];
       if ((node?.type === "SpinBox" || node?.type === "Slider" || node?.type === "ScrollBar") && event === "change" && typeof value === "number" && Number.isFinite(value)) {
         const min = Number(view.props.min ?? 0);
         const max = Number(view.props.max ?? (node.type === "SpinBox" ? 9999 : 100));
@@ -703,14 +1109,22 @@ export class Runtime {
   private toggleDockInBatch(batch: Batch, dockId: string): void {
     const dockObj = this.project.logic.objects?.[dockId];
     const visExpr = dockObj?.props?.visible;
+    let nextVis = true;
     if (typeof visExpr === "string" && findStateLeaf(this.project.logic, visExpr)) {
       const cur = Boolean(batch.work.get(visExpr));
-      this.assign(batch, visExpr, !cur);
-      return;
+      nextVis = !cur;
+      this.assign(batch, visExpr, nextVis);
+    } else {
+      const cur = batch.docks.get(dockId) ?? true;
+      nextVis = !cur;
+      batch.docks.set(dockId, nextVis);
+      batch.lines.push(`停靠面板 ${dockId}: ${cur ? "显示 → 隐藏" : "隐藏 → 显示"}`);
     }
-    const cur = batch.docks.get(dockId) ?? true;
-    batch.docks.set(dockId, !cur);
-    batch.lines.push(`停靠面板 ${dockId}: ${cur ? "显示 → 隐藏" : "隐藏 → 显示"}`);
+    if (nextVis) {
+      const winId = this.windowOf(dockId);
+      const curLayout = this.getDockLayout(winId);
+      this.dockLayouts.set(winId, dockActivateTab(curLayout, this.project.scene, this.project.scene.nodes[winId], dockId));
+    }
   }
 
   /** 外部（如用户按 Esc 或点击窗口标题栏关闭按钮）关闭窗口时，将窗口开关同步回运行层。 */
@@ -773,7 +1187,7 @@ export class Runtime {
     if (sameStateValue(before, value)) return null;
     this.state.set(path, cloneValue(value));
     this.hooks.onLog({ title: "业务写回状态", lines: [`${path}: ${show(before ?? null)} → ${show(value)}`] });
-    this.hooks.onChange();
+    this.notifyChanged();
     return null;
   }
 
@@ -814,11 +1228,14 @@ export class Runtime {
     this.windows = batch.windows;
     this.docks = batch.docks;
     this.menuChecked = batch.menuChecked;
+    if (this.syncActiveTabsWithVisibility()) {
+      changed = true;
+    }
     if (batch.lines.length > 0 || !quietWhenEmpty) {
       if (batch.lines.length === 0) batch.lines.push("（没有状态变化）");
       this.hooks.onLog({ title, lines: batch.lines });
     }
-    if (changed) this.hooks.onChange();
+    if (changed) this.notifyChanged();
 
     for (const item of batch.pending) this.raise(item.name, item.args);
     for (const call of batch.calls) this.executeAction(call.name, call.input);

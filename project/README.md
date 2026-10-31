@@ -700,7 +700,7 @@ export default function paint(el, { props, emit, mode }) {
 
 ### 11.2 主窗口分区、停靠面板与菜单全部形态
 
-根窗口 `Window` 可以配置菜单栏（`menuBar`）、状态栏（`statusBar`）、中央区（`central`）和四个方向的停靠面板（`docks`，对应 `left`、`right`、`top`、`bottom` 四个停靠区）。导出成 Qt 时对应 `QMainWindow` 的 `QMenuBar`、`QStatusBar`、`centralWidget` 和 `QDockWidget`：
+根窗口 `Window` 可以配置菜单栏（`menuBar`）、状态栏（`statusBar`）、中央区（`central`）和四个方向的停靠面板（`docks`，对应 `left`、`right`、`top`、`bottom` 四个停靠区），并可用 `dockLayout` 描述停靠区的厚度、并排分栏（`groups`）、叠页签（`tabs` + `active`）和独立浮窗（`floating`）。导出成 Qt 时对应 `QMainWindow` 的 `QMenuBar`、`QStatusBar`、`centralWidget` 和 `QDockWidget`：
 
 ```json
 "window": {
@@ -731,11 +731,30 @@ export default function paint(el, { props, emit, mode }) {
   "statusBar": "statusBar",
   "central": "centralArea",
   "docks": ["toolsDock", "layersDock", "inspectorDock", "timelineDock"],
+  "dockLayout": {
+    "areas": {
+      "top":    { "size": 68,  "groups": [{ "tabs": ["toolsDock"],     "active": "toolsDock" }] },
+      "left":   { "size": 240, "groups": [{ "tabs": ["layersDock"],    "active": "layersDock" }] },
+      "right":  { "size": 260, "groups": [{ "tabs": ["inspectorDock"], "active": "inspectorDock" }] },
+      "bottom": { "size": 96,  "groups": [{ "tabs": ["timelineDock"],  "active": "timelineDock" }] }
+    },
+    "floating": []
+  },
   "children": ["toolsDock", "layersDock", "centralArea", "inspectorDock", "timelineDock", "statusBar"]
 }
 ```
 
-- 停靠面板节点的 `type` 为 `"Dock"`，用 `dockArea` 指定停在 `"left"`、`"right"`、`"top"` 或 `"bottom"`，用 `title` 指定标题栏文字，`headerHeight` 指定标题栏高度（默认 26）。
+- 停靠面板节点的 `type` 为 `"Dock"`，用 `dockArea` 指定默认停在 `"left"`、`"right"`、`"top"` 或 `"bottom"`，用 `title` 指定标题栏文字，`headerHeight` 指定标题栏高度（默认 26）。
+- 在预览模式和导出的 Qt 界面中，停靠面板支持完整的 `QMainWindow + QDockWidget` 停靠规则：
+  1. **四边吸附（`move`）**：按住面板标题栏拖向主窗口左、右、上、下四边，吸附到对应停靠区。
+  2. **区内并排分栏（`split`）**：拖向另一个已停靠面板的上/下半区（左/右停靠区）或左/右半区（上/下停靠区），在同一停靠区内并排分栏显示。
+  3. **叠成页签（`tabify` / `tab`）**：拖向另一个已停靠面板的中央，两个面板叠成一组页签，点击标题栏上的页签按钮切换当前显示的面板。
+  4. **拖出成浮窗与恢复（`float` / `restore`）**：点击标题栏上的 `⧉` 按钮（或双击标题栏、或拖到空白处）将面板浮出为独立浮窗，浮窗右下角可拖拽缩放大小；点击 `↙` 按钮（或再次双击标题栏）恢复回原停靠区。
+  5. **拖动分隔条改大小（`resize` / `resizeSplit`）**：拖动停靠区与中央区之间的分隔条调整停靠区宽度/高度，或拖动并排面板之间的分隔条调整各分栏尺寸。
+  6. **关闭与从菜单重新打开（`close` / `open`）**：点击标题栏上的 `×` 按钮关闭面板；菜单项如果写了 `"dock": "<停靠面板ID>"`，点击该菜单项会自动切换对应停靠面板的显示和隐藏，并同步菜单项的勾选状态。
+- 控件所在面板切到后台页签、关闭、浮出或被重排时，控件的悬停和按下状态随之清除，切回来显示的是正常状态。
+- 标题栏的空白处和标题栏上的页签都能按住拖动。拖页签只移动这个页签的面板，没拖动松手才是切换页签；组里其余页签留在原位。
+- 停靠区的厚度由 `dockLayout` 决定，面板移进来后跟随停靠区，不取面板自己的设计宽高。例外有两个：换行布局（`Flow` / `wrap`）的面板在顶部、底部放不下时按内容撑高；窗口放不下全部停靠区时收窄实际尺寸（中央区至少留 120 × 80），`dockLayout` 里的值不变，窗口放大后恢复。
 - **菜单的全部形态**：
   1. **子菜单**：菜单项写 `items` 数组即可递归嵌套多层子菜单。
   2. **分隔线**：写 `"separator": true` 或 `"kind": "separator"`。
@@ -745,10 +764,11 @@ export default function paint(el, { props, emit, mode }) {
   6. **停靠面板开关**：菜单项如果写了 `"dock": "<停靠面板ID>"`，点击该菜单项会自动切换对应停靠面板的显示和隐藏，并同步菜单项的勾选状态；面板隐藏后，中央区自动扩大填满空出的位置。
   7. **右键菜单（`contextMenu`）**：任何控件节点上可以写 `"contextMenu": [ ...菜单项... ]`，在预览模式右键点击该控件（或导出成 Qt 后触发 `customContextMenuRequested`）时弹出。
   8. **控件弹出菜单（`popupMenu`）**：按钮或控件节点上可以写 `"popupMenu": [ ...菜单项... ]`，点击该按钮时弹出菜单（导出成 Qt 时挂载到 `QPushButton::setMenu`）。
+  9. **触发全局事件**：菜单项如果写了 `"emit": "<全局事件名>"`（也可以在 YAML `objects.<菜单项ID>.events.click` 中写步骤），点击时触发对应事件。
 
-### 11.3 16 种工具自带标准控件
+### 11.3 17 种工具自带标准控件（含浮动嵌入框 `FloatBox`）
 
-工具在 `app/standard/` 中内置了 16 种常用控件，不需要在设计项目的 `components/` 下创建文件夹即可直接在 `scene.json` 中使用（如果 `components/` 下有同名控件，以项目自己的为准）：
+工具在 `app/standard/` 中内置了 17 种常用控件与容器，不需要在设计项目的 `components/` 下创建文件夹即可直接在 `scene.json` 中使用（如果 `components/` 下有同名控件，以项目自己的为准）：
 
 | 类型名 | 中文名 | 对应 Qt 类 | 主要属性（标 `*` 的支持在 YAML `props` 中由表达式控制） | 双向绑定 `bind` 与事件 |
 | --- | --- | --- | --- | --- |
@@ -768,6 +788,7 @@ export default function paint(el, { props, emit, mode }) {
 | `DialogButtonBox` | 对话框按钮栏 | `QDialogButtonBox` | `buttons`（如 `"ok,cancel"`）、`okText*`、`cancelText*`、`enabled*` | 事件 `accept`、`reject` |
 | `Spacer` | 弹簧空白 | `QWidget` | `orientation`（`horizontal` / `vertical`） | — |
 | `Separator` | 分隔线 | `QFrame` | `orientation`（`horizontal` / `vertical`） | — |
+| `FloatBox` | 浮动嵌入框 | `QFrame`（含标题栏与切换按钮） | `title*`、`floating*`（默认 `false` 嵌入父容器排版，为 `true` 时脱离原排版成为窗口内浮动框）、`floatX*`、`floatY*`、`floatWidth*`、`floatHeight*`、`headerHeight`（默认 24）、`enabled*`；支持包含子节点（`children: true`）与 `layout` | `bind: boolean`，事件 `toggle` / `change` / `move` |
 
 ### 11.4 数组状态与增删移动
 

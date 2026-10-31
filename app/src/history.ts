@@ -3,12 +3,18 @@
 import { isMap, parseDocument } from "yaml";
 import type { Value } from "./expr.ts";
 import {
+  isDockArea,
+  syncSceneNodesFromDockLayout,
+  type DockArea,
+} from "./dock.ts";
+import {
   childrenOfNode,
   isLayoutPositionedNode,
   isPartitionedWindow,
   layoutOf,
   removeNodeReferences,
   syncResizedNodeDimensions,
+  type DockLayoutSpec,
   type Scene,
   type SceneNode,
 } from "./model.ts";
@@ -533,12 +539,12 @@ export function applyResizeToScene(
     if (isLayoutPositionedNode(next, id)) {
       delete n.x;
       delete n.y;
-      syncResizedNodeDimensions(n, box.width, box.height, MIN_NODE_SIZE);
+      syncResizedNodeDimensions(n, box.width, box.height, MIN_NODE_SIZE, next, id);
     } else {
       const local = worldRectToNodeLocalInScene(next, id, box);
       n.x = local.x;
       n.y = local.y;
-      syncResizedNodeDimensions(n, local.width, local.height, MIN_NODE_SIZE);
+      syncResizedNodeDimensions(n, local.width, local.height, MIN_NODE_SIZE, next, id);
     }
   } else {
     n.width = Math.round(box.width);
@@ -586,6 +592,12 @@ export function applyAddNodeToScene(
   if (created.type === "Dock" && targetParentId === next.root && isPartitionedWindow(parent)) {
     parent.docks ??= [];
     if (!parent.docks.includes(id)) parent.docks.push(id);
+    if (parent.dockLayout) {
+      const area: DockArea = isDockArea(created.dockArea) ? created.dockArea : "left";
+      parent.dockLayout.areas[area] ??= { groups: [] };
+      parent.dockLayout.areas[area].groups.push({ tabs: [id], active: id });
+    }
+    return next;
   }
   parent.children ??= [];
   if (!parent.children.includes(id)) parent.children.push(id);
@@ -626,4 +638,13 @@ export function applyDeleteFromScene(
   for (const id of removed) delete next.nodes[id];
   const nextLogic = removeYaml && yamlCandidates.length > 0 ? removeYamlObjects(logicText, yamlCandidates) : logicText;
   return { scene: next, logicText: nextLogic, removed, yamlCandidates };
+}
+
+/** 将窗口停靠排列写入 scene.nodes[winId].dockLayout，供画布持久化与撤销重做使用。 */
+export function applyDockLayoutToScene(scene: Scene, dockLayout: DockLayoutSpec, winId = scene.root): Scene {
+  const next = cloneScene(scene);
+  const winNode = next.nodes[winId];
+  if (!winNode) return next;
+  syncSceneNodesFromDockLayout(next, winNode, dockLayout);
+  return next;
 }

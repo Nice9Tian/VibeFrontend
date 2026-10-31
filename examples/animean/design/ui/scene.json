@@ -99,6 +99,35 @@
       "statusBar": "statusBar",
       "central": "centralArea",
       "docks": ["toolsDock", "layersDock", "inspectorDock", "timelineDock"],
+      "dockLayout": {
+        "areas": {
+          "top": {
+            "size": 62,
+            "groups": [
+              { "tabs": ["toolsDock"], "active": "toolsDock" }
+            ]
+          },
+          "left": {
+            "size": 236,
+            "groups": [
+              { "tabs": ["layersDock"], "active": "layersDock" }
+            ]
+          },
+          "right": {
+            "size": 264,
+            "groups": [
+              { "tabs": ["inspectorDock"], "active": "inspectorDock" }
+            ]
+          },
+          "bottom": {
+            "size": 132,
+            "groups": [
+              { "tabs": ["timelineDock"], "active": "timelineDock" }
+            ]
+          }
+        },
+        "floating": []
+      },
       "children": ["toolsDock", "layersDock", "centralArea", "inspectorDock", "timelineDock", "statusBar"]
     },
 
@@ -491,19 +520,19 @@
       "height": 554,
       "headerHeight": 26,
       "title": "工具选项与检查器",
-      "layout": { "kind": "vbox", "padding": 4, "gap": 2 },
-      "children": ["toolOptHeader", "toolOptionsForm", "inspectorSep1", "inspectorTabs", "inspectorStack", "colorPanelToggleBtn", "colorPanel"]
+      "layout": { "kind": "vbox", "padding": 2, "gap": 1 },
+      "children": ["toolOptHeader", "toolOptionsForm", "inspectorSep1", "inspectorTabs", "inspectorStack", "colorPanelToggleBtn", "colorPanel", "onionSkinBox"]
     },
     "toolOptHeader": {
       "type": "Label",
       "width": 256,
-      "height": 16,
+      "height": 15,
       "props": { "text": "工具选项 (Tool Options)", "tone": "title" }
     },
     "toolOptionsForm": {
       "type": "DataForm",
       "width": 256,
-      "height": 82,
+      "height": 58,
       "props": { "schema": {}, "values": {}, "emptyText": "当前工具无附加选项" }
     },
     "inspectorSep1": {
@@ -515,7 +544,7 @@
     "inspectorTabs": {
       "type": "Grid",
       "width": 256,
-      "height": 22,
+      "height": 20,
       "layout": { "kind": "grid", "columns": 3, "gap": 4, "columnStretch": [1, 1, 1], "rowStretch": [0] },
       "children": ["tabPropsBtn", "tabHistoryBtn", "tabExportBtn"]
     },
@@ -524,7 +553,7 @@
       "row": 0,
       "column": 0,
       "width": 82,
-      "height": 22,
+      "height": 20,
       "props": { "text": "图层属性", "variant": "primary" }
     },
     "tabHistoryBtn": {
@@ -532,7 +561,7 @@
       "row": 0,
       "column": 1,
       "width": 82,
-      "height": 22,
+      "height": 20,
       "props": { "text": "历史记录", "variant": "secondary" }
     },
     "tabExportBtn": {
@@ -540,7 +569,7 @@
       "row": 0,
       "column": 2,
       "width": 82,
-      "height": 22,
+      "height": 20,
       "props": { "text": "渲染导出", "variant": "secondary" }
     },
     "inspectorStack": {
@@ -662,14 +691,14 @@
     "colorPanelToggleBtn": {
       "type": "StateButton",
       "width": 256,
-      "height": 22,
+      "height": 20,
       "props": { "text": "收起调色盘", "selected": true }
     },
     "colorPanel": {
       "type": "VBox",
       "width": 256,
       "height": 96,
-      "size": { "stretch": 1, "vertical": "expanding", "minHeight": 42, "maxHeight": 96 },
+      "size": { "stretch": 1, "vertical": "expanding", "minHeight": 38, "maxHeight": 96 },
       "layout": { "kind": "vbox", "padding": 2, "gap": 2 },
       "children": ["colorPickerCanvas", "colorHexLabel"]
     },
@@ -677,7 +706,7 @@
       "type": "ColorPicker",
       "width": 252,
       "height": 78,
-      "size": { "stretch": 1, "vertical": "expanding", "minHeight": 24 },
+      "size": { "stretch": 1, "vertical": "expanding", "minHeight": 20 },
       "props": { "hue": 210, "saturation": 78, "brightness": 92, "hexColor": "#3394eb" }
     },
     "colorHexLabel": {
@@ -685,6 +714,29 @@
       "width": 252,
       "height": 12,
       "props": { "text": "当前颜色：#3394eb", "tone": "muted" }
+    },
+    "onionSkinBox": {
+      "type": "FloatBox",
+      "width": 256,
+      "height": 42,
+      "headerHeight": 20,
+      "layout": { "kind": "vbox", "padding": 2, "gap": 2 },
+      "props": {
+        "title": "洋葱皮预览",
+        "floating": false,
+        "headerHeight": 20,
+        "floatX": 360,
+        "floatY": 160,
+        "floatWidth": 240,
+        "floatHeight": 96
+      },
+      "children": ["onionSkinLabel"]
+    },
+    "onionSkinLabel": {
+      "type": "Label",
+      "width": 252,
+      "height": 16,
+      "props": { "text": "前后各显示 2 帧残影", "tone": "muted" }
     },
 
     "timelineDock": {

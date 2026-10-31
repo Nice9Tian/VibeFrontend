@@ -33,5 +33,10 @@ export function dumpRuntime(runtime: Runtime, scene: Scene): string {
     views.push([id, entry]);
   }
   const stateEntries: Array<[string, Value]> = runtime.stateSnapshot().map(([k, v]) => [k, canonicalValue(v)]);
+  const rootNode = scene.nodes[scene.root];
+  if (rootNode && ((rootNode.docks?.length ?? 0) > 0 || rootNode.dockLayout)) {
+    const docks = canonicalValue(runtime.getDockLayout(scene.root) as unknown as Value);
+    return JSON.stringify({ docks, state: sorted(stateEntries), views: sorted(views) });
+  }
   return JSON.stringify({ state: sorted(stateEntries), views: sorted(views) });
 }

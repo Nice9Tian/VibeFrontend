@@ -34,10 +34,19 @@ public:
     QString widgetDump() const;
     // 每个可见控件此刻相对于所属窗口的位置和大小。一行 JSON，供排版比较脚本核对。
     QString layoutDump() const;
+    // 当前各停靠面板在窗口中的实际停靠排列（四个区域、并排、页签组、浮窗）。一行 JSON，和 stateDump 里的 docks 对照。
+    QString dockDump() const;
+    // 逻辑层认为当前窗口尺寸下应有的实际排列，和 dockDump 比较
+    QString wantedDockDump() const;
+    // 隐藏面板但不同步给逻辑层，只给驱动的负面测试用
+    void hideDockBehindLogic(const QString &dockId);
+    // 把 dockId 拖到 globalPos 松手会发生什么（"tabify"、"split:after:vertical"、"move:left"、"float"），驱动用它找落点
+    QString dockDropAt(const QString &dockId, const QPoint &globalPos) const;
 
-    // 供自动化测试驱动触发请求事件、切换动作模拟方式、拨动预览时钟与驱动复合控件事件
+    // 供自动化测试驱动触发请求事件、切换动作模拟方式、执行停靠操作、拨动预览时钟与驱动复合控件事件
     void triggerRequest(const QString &name, const QString &jsonArgs = QString());
     void setActionSimulation(const QString &name, const QString &mode, int delayMs = 0);
+    void runDockOp(const QString &op, const QString &jsonArgs = QString());
     void setClock(int ms);
     int clock() const;
     void reorderControl(const QString &id, int from, int to);

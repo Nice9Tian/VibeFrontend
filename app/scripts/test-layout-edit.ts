@@ -803,7 +803,11 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
 
     // 等待 CDP 端口就绪并连接页面
     let wsUrl = "";
-    const deadline = Date.now() + 10000;
+    let chromeExit: string | null = null;
+    chromeProc.once("exit", (code, signal) => {
+      chromeExit = `code=${code} signal=${signal}`;
+    });
+    const deadline = Date.now() + 30000;
     while (Date.now() < deadline) {
       try {
         const res = await fetch(`http://127.0.0.1:${cdpPort}/json/list`);
@@ -820,7 +824,7 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
       }
       await new Promise((r) => setTimeout(r, 80));
     }
-    assert.ok(wsUrl, "应当成功连接 Headless Chrome CDP");
+    assert.ok(wsUrl, `应当成功连接 Headless Chrome CDP（30 秒内未就绪，Chrome ${chromeExit ?? "仍在运行"}）`);
 
     cdp = await CdpSession.connect(wsUrl);
     await cdp.waitForSelector("#stage");
@@ -1158,6 +1162,113 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     const builtResults = runLayerPanelSuite(builtProject);
     const animeanResults = runLayerPanelSuite(animeanProject);
     assert.deepEqual(builtResults, animeanResults, "新建项目搭出的图层面板与 examples/animean/design 对跑结果应完全一致");
+    // 10) 保存与重载的时序：外部工具改文件要自动刷新，但不能丢掉界面上还没提交的东西和已经发出的修改
+    const logicFile = path.join(tmpDir, "logic", "app.logic.yaml");
+    const sceneFile = path.join(tmpDir, "ui", "scene.json");
+    const timingProblems: string[] = [];
+    const waitUntil = async (what: string, ok: () => Promise<boolean> | boolean, timeoutMs = 4000): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (await ok()) return true;
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      timingProblems.push(what);
+      return false;
+    };
+    const yamlEditorHas = (text: string) =>
+      cdp!.eval<boolean>(`document.querySelector("#yaml-text").value.includes(${JSON.stringify(text)})`);
+    const inputValue = (selector: string) =>
+      cdp!.eval<string>(`document.querySelector(${JSON.stringify(selector)})?.value ?? ""`);
+    const addCondition = async (cid: string) => {
+      await cdp!.setInputValue("[data-new-cond-id]", cid);
+      await cdp!.setInputValue("[data-new-cond-expr]", "layers.selectedIndex > 0");
+      await cdp!.clickSelector('[data-state-action="add-condition"]');
+    };
+    await cdp.clickSelector("#tab-state");
+
+    // 外部工具改逻辑和场景后自动刷新；表单里填了一半的内容不被重绘清掉
+    await cdp.setInputValue("[data-new-cond-id]", "draftCond");
+    fs.appendFileSync(logicFile, "# 外部工具改的逻辑\n");
+    await waitUntil("外部修改 logic 后界面应自动刷新", () => yamlEditorHas("外部工具改的逻辑"));
+    if ((await inputValue("[data-new-cond-id]")) !== "draftCond") timingProblems.push("重绘清掉了填了一半的表单");
+    await cdp.setInputValue("[data-new-cond-id]", "");
+    const externalScene = JSON.parse(fs.readFileSync(sceneFile, "utf8")) as Scene;
+    externalScene.nodes.externalLabel = { type: "Label", x: 8, y: 8, width: 80, height: 24, props: { text: "外部" } };
+    externalScene.nodes[externalScene.root].children = [...(externalScene.nodes[externalScene.root].children ?? []), "externalLabel"];
+    fs.writeFileSync(sceneFile, JSON.stringify(externalScene, null, 2) + "\n");
+    await waitUntil("外部修改 scene 后界面应自动刷新", () =>
+      cdp!.eval<boolean>(`Boolean(document.querySelector('#layers .layer[data-id="externalLabel"]'))`),
+    );
+
+    // 鼠标按住时来了外部修改：这次点击不能因为重绘而丢掉
+    const heldBox = await cdp.waitForSelector('#layers .layer[data-id="layerList"]');
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(heldBox.x), y: Math.round(heldBox.y), button: "left" });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: Math.round(heldBox.x), y: Math.round(heldBox.y), button: "left", buttons: 1, clickCount: 1 });
+    fs.appendFileSync(logicFile, "# 按住时外部改的\n");
+    await new Promise((r) => setTimeout(r, 450));
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: Math.round(heldBox.x), y: Math.round(heldBox.y), button: "left", buttons: 0, clickCount: 1 });
+    await waitUntil("鼠标按住时的外部修改不应吞掉这次点击", () =>
+      cdp!.eval<boolean>(`Boolean(document.querySelector('#layers .layer.selected[data-id="layerList"]'))`),
+    );
+    await waitUntil("松开鼠标后补上延后的刷新", () => yamlEditorHas("按住时外部改的"));
+    await cdp.clickSelector("#tab-state");
+
+    // 前一个写入被人为拖慢：后发的修改不能被它盖掉，两次修改都要在
+    await cdp.eval(`(() => {
+      const original = window.fetch;
+      let delayed = 0;
+      window.__vfRealFetch = original;
+      window.fetch = (url, init) => {
+        if (String(url).includes("/__fs/write") && String(url).includes("logic") && ++delayed === 1) {
+          return new Promise((r) => setTimeout(r, 400)).then(() => original(url, init));
+        }
+        return original(url, init);
+      };
+    })()`);
+    await addCondition("orderFirst");
+    await addCondition("orderSecond");
+    await waitUntil("前一个写入变慢时两次修改都应落盘", () => {
+      const text = fs.readFileSync(logicFile, "utf8");
+      return text.includes("orderFirst") && text.includes("orderSecond");
+    });
+    await cdp.eval(`window.fetch = window.__vfRealFetch`);
+
+    // reload 读文件时被拖慢，期间发生本地修改：旧内容不能回到内存
+    await cdp.eval(`(() => {
+      const original = window.fetch;
+      let delayed = 0;
+      window.fetch = (url, init) => {
+        if (String(url).includes("/__fs/read") && String(url).includes("logic") && ++delayed === 1) {
+          return original(url, init).then((res) => new Promise((r) => setTimeout(() => r(res), 450)));
+        }
+        return original(url, init);
+      };
+    })()`);
+    fs.appendFileSync(logicFile, "# 触发一次慢读取\n");
+    await new Promise((r) => setTimeout(r, 300));
+    await addCondition("duringSlowRead");
+    await waitUntil("慢读取结束后界面应是最新内容", () => yamlEditorHas("duringSlowRead"));
+    await new Promise((r) => setTimeout(r, 500));
+    if (!(await yamlEditorHas("duringSlowRead"))) timingProblems.push("慢读取把旧内容带回了内存");
+    await cdp.eval(`window.fetch = window.__vfRealFetch`);
+    await addCondition("afterSlowRead");
+    await waitUntil("慢读取之后的修改应基于最新内容", () => {
+      const text = fs.readFileSync(logicFile, "utf8");
+      return text.includes("duringSlowRead") && text.includes("afterSlowRead");
+    });
+
+    // 规则：YAML 编辑器里有还没保存的内容时，外部修改不覆盖编辑器，停止输入后以编辑器为准
+    await cdp.eval(`(() => {
+      const el = document.querySelector("#yaml-text");
+      el.value = el.value + "# 本地还没保存\\n";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+    fs.appendFileSync(logicFile, "# 编辑时外部改的\n");
+    await new Promise((r) => setTimeout(r, 350));
+    if (!(await yamlEditorHas("本地还没保存"))) timingProblems.push("外部修改覆盖了编辑器里没保存的内容");
+    await waitUntil("编辑器里的内容应在停止输入后落盘", () => fs.readFileSync(logicFile, "utf8").includes("本地还没保存"));
+
+    assert.deepEqual(timingProblems, [], "保存与重载时序");
   } finally {
     cdp?.close();
     if (chromeProc) {

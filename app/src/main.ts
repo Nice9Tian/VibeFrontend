@@ -1,6 +1,15 @@
 // 编辑器界面：素材栏、图层、设计窗口（编辑模式 / 预览模式）、文档与 YAML 页签、问题栏。
 import { isMap, parseDocument, type Document } from "yaml";
-import { listDir, readText, removeFile, watchProject, writeText } from "./fs";
+import {
+  computeDockWindowLayout,
+  dockFindLocation,
+  isDockArea,
+  syncDockHeaderDom,
+  syncDockSplittersDom,
+  syncSceneNodesFromDockLayout,
+  type DockPreviewCallbacks,
+} from "./dock";
+import { listDir, localWriteCount, readText, removeFile, watchProject, writeText, writesSettled } from "./fs";
 import { initDocView, syncDocView, syncPreviewSelectionToTextarea } from "./docview";
 import { initLibrary, renderLibraryPalette } from "./library";
 import { invoke } from "@tauri-apps/api/core";
@@ -231,6 +240,7 @@ function currentLayoutBoxes() {
   return computeSceneLayout(project.scene, {
     isVisible: (nid) => runtime.view(nid).visible,
     getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
+    getDockLayout: (wid) => runtime.getDockLayout(wid),
   });
 }
 
@@ -298,12 +308,26 @@ function currentSnapshot(): HistorySnapshot {
 }
 
 async function applyHistorySnapshot(target: HistorySnapshot): Promise<void> {
+  const sceneChanged = target.sceneText !== project.sceneText;
+  if (sceneChanged) {
+    try {
+      project.scene = JSON.parse(target.sceneText) as Project["scene"];
+      project.sceneText = target.sceneText;
+      designRuntime = new Runtime(project);
+      previewRuntime?.adopt(project);
+      if (selectedId && !node(selectedId)) selectedId = null;
+      renderAll();
+    } catch {
+      // 由后续 reload 兜底
+    }
+  }
   if (target.logicText !== project.logicText) {
     window.clearTimeout(yamlTimer);
     yamlDirty = false;
+    project.logicText = target.logicText;
     await writeText(LOGIC_PATH, target.logicText);
   }
-  if (target.sceneText !== project.sceneText) {
+  if (sceneChanged) {
     await writeText(SCENE_PATH, target.sceneText);
   }
   if (target.docs) {
@@ -323,13 +347,19 @@ async function applyHistorySnapshot(target: HistorySnapshot): Promise<void> {
 
 async function saveScene(options: { history?: boolean; nextLogicText?: string; label?: string } = {}): Promise<void> {
   normalizeLines();
+  const rootWin = project.scene.nodes[project.scene.root];
+  if (rootWin?.dockLayout) {
+    designRuntime?.setDockLayout(rootWin.dockLayout, project.scene.root);
+    previewRuntime?.setDockLayout(rootWin.dockLayout, project.scene.root);
+  }
   const text = JSON.stringify(project.scene, null, 2) + "\n";
   if (docDirty || yamlDirty) {
     await flushEditors();
   }
   const nextLogic = options.nextLogicText ?? project.logicText;
   const logicChanged = nextLogic !== project.logicText;
-  if (text === project.sceneText && !logicChanged) return;
+  const sceneChanged = text !== project.sceneText;
+  if (!sceneChanged && !logicChanged) return;
   if (options.history !== false) {
     const before = currentSnapshot();
     history = pushHistory(
@@ -339,13 +369,20 @@ async function saveScene(options: { history?: boolean; nextLogicText?: string; l
       options.label ?? "画布修改",
     );
   }
+  if (sceneChanged && !logicChanged) {
+    project.sceneText = text;
+    designRuntime = new Runtime(project);
+    previewRuntime?.adopt(project);
+    if (selectedId && !node(selectedId)) selectedId = null;
+    renderAll();
+  }
   if (logicChanged) {
     window.clearTimeout(yamlTimer);
     yamlDirty = false;
     project.logicText = nextLogic;
     await writeText(LOGIC_PATH, nextLogic);
   }
-  if (text !== project.sceneText) {
+  if (sceneChanged) {
     project.sceneText = text;
     await writeText(SCENE_PATH, text);
   }
@@ -398,6 +435,8 @@ async function editLogic(mutate: (doc: Document) => void, label = "修改逻辑"
   }
   window.clearTimeout(yamlTimer);
   yamlDirty = false;
+  // 先更新内存再写盘：紧接着的下一次修改要以这次的结果为基准，不能等 reload 读回来
+  project.logicText = nextText;
   await writeText(LOGIC_PATH, nextText);
   await reload();
   return true;
@@ -406,6 +445,28 @@ async function editLogic(mutate: (doc: Document) => void, label = "修改逻辑"
 function ensureObject(doc: Document, id: string): void {
   if (!isMap(doc.getIn(["objects", id]))) doc.setIn(["objects", id], doc.createNode({}));
 }
+
+// 重载可能在任何时候到来（外部工具改了文件）。鼠标按住时重绘会换掉按着的控件，这次点击或拖动就丢了，
+// 所以等松开再画；click 在松开之后才发，排到下一轮
+let pointerHeld = false;
+let renderPending = false;
+
+function renderAfterReload(): void {
+  if (pointerHeld) renderPending = true;
+  else renderAll();
+}
+
+function onPointerReleased(): void {
+  pointerHeld = false;
+  if (!renderPending) return;
+  renderPending = false;
+  window.setTimeout(renderAll, 0);
+}
+
+document.addEventListener("pointerdown", () => (pointerHeld = true), true);
+document.addEventListener("pointerup", onPointerReleased, true);
+document.addEventListener("pointercancel", onPointerReleased, true);
+window.addEventListener("blur", onPointerReleased);
 
 let loading = false;
 let reloadAgain = false;
@@ -422,13 +483,21 @@ async function reload(force = false): Promise<void> {
       reloadAgain = false;
       const mustRender = reloadForce;
       reloadForce = false;
+      // 磁盘要追上内存才能读：文件监听触发的重载如果读到自己还没写完的文件，会用旧内容盖掉内存
+      await writesSettled();
+      const writesBefore = localWriteCount();
       const next = await loadProject(project);
+      if (writesBefore !== localWriteCount()) {
+        reloadForce ||= mustRender;
+        reloadAgain = true;
+        continue;
+      }
       if (!mustRender && next.signature === project.signature) continue;
       project = next;
       designRuntime = new Runtime(project);
       previewRuntime?.adopt(project);
       if (selectedId && !node(selectedId)) selectedId = null;
-      renderAll();
+      renderAfterReload();
     } while (reloadAgain);
   } catch (e) {
     toast(`加载项目失败：${(e as Error).message}`);
@@ -600,12 +669,117 @@ function applyViews(): void {
   const boxes = computeSceneLayout(project.scene, {
     isVisible: (nid) => runtime.view(nid).visible,
     getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
+    getDockLayout: (wid) => runtime.getDockLayout(wid),
   });
-  const rootNode = node(project.scene.root);
+  const rootId = project.scene.root;
+  const rootNode = node(rootId);
+  const stageEl = ensureStageIframe();
+
+  let dockInfoMap:
+    | Map<string, { groupTabs: string[]; activeTab: string; isFloating: boolean; area?: "left" | "right" | "top" | "bottom" }>
+    | undefined;
+  const persistPreviewDockLayout = (label: string, commit = true) => {
+    if (!previewRuntime || !rootNode) return;
+    const nextLayout = syncSceneNodesFromDockLayout(project.scene, rootNode, previewRuntime.getDockLayout(rootId));
+    previewRuntime.setDockLayout(nextLayout, rootId);
+    designRuntime.setDockLayout(nextLayout, rootId);
+    if (commit) void saveScene({ label });
+  };
+  const dockCallbacks: DockPreviewCallbacks = {
+    getMode: () => mode,
+    getScene: () => project.scene,
+    getDockLayout: () => runtime.getDockLayout(rootId),
+    getWindowSize: () => ({ width: rootNode?.width ?? 1280, height: rootNode?.height ?? 800 }),
+    getDockTitle: (did) => String(runtime.view(did).props.title ?? node(did)?.title ?? did),
+    onActivateTab: (did) => {
+      previewRuntime?.dockActivateTab(did);
+      persistPreviewDockLayout("切换停靠页签", true);
+    },
+    onTabify: (targetId, did) => {
+      previewRuntime?.dockTabify(targetId, did);
+      persistPreviewDockLayout("叠入停靠页签", true);
+    },
+    onSplit: (targetId, did, pos, orient) => {
+      previewRuntime?.dockSplit(targetId, did, pos, orient);
+      persistPreviewDockLayout("分栏并排停靠", true);
+    },
+    onMoveToArea: (did, area) => {
+      previewRuntime?.dockMoveToArea(did, area);
+      persistPreviewDockLayout("移动停靠区", true);
+    },
+    onFloat: (did, rect, commit = true) => {
+      previewRuntime?.dockFloat(did, rect);
+      persistPreviewDockLayout("浮出停靠面板", commit);
+    },
+    onRestore: (did) => {
+      previewRuntime?.dockRestore(did);
+      persistPreviewDockLayout("恢复停靠面板", true);
+    },
+    onClose: (did) => {
+      previewRuntime?.dockSetVisible(did, false);
+      persistPreviewDockLayout("关闭停靠面板", false);
+    },
+    onResizeArea: (area, size, commit = true) => {
+      previewRuntime?.dockResizeArea(area, size);
+      persistPreviewDockLayout("调整停靠区大小", commit);
+    },
+    onResizeSplit: (area, idx, size, commit = true) => {
+      previewRuntime?.dockResizeSplit(area, idx, size);
+      persistPreviewDockLayout("调整并排分栏大小", commit);
+    },
+  };
+
+  if (rootNode && isPartitionedWindow(rootNode)) {
+    const menuH = rootNode.menuBar ? Math.max(0, Math.round(rootNode.menuBar.height ?? 28)) : 0;
+    const statusNode = rootNode.statusBar ? project.scene.nodes[rootNode.statusBar] : undefined;
+    const statusVis = statusNode && rootNode.statusBar ? runtime.view(rootNode.statusBar).visible : false;
+    const statusH = statusNode && statusVis ? Math.round(statusNode.height ?? 28) : 0;
+    const midY = menuH;
+    const midH = Math.max(0, (rootNode.height ?? 800) - menuH - statusH);
+    const dockRes = computeDockWindowLayout(
+      project.scene,
+      rootId,
+      rootNode,
+      rootNode.width ?? 1280,
+      midY,
+      midH,
+      true,
+      (nid) => runtime.view(nid).visible,
+      runtime.getDockLayout(rootId),
+    );
+    dockInfoMap = dockRes.activeTabByDock;
+    syncDockSplittersDom(stageEl, dockRes.splitters, dockCallbacks);
+  }
+
+  if (rootNode?.menuBar) {
+    for (const menu of rootNode.menuBar.menus ?? []) {
+      for (const item of menu.items ?? []) {
+        const btn = stageEl.querySelector<HTMLButtonElement>(`[data-vf-menu-item="${item.id}"]`);
+        if (btn) {
+          const mView = runtime.view(item.id);
+          const prefix = item.checkable || item.dock ? (mView.props.checked ? "✓ " : "  ") : "";
+          btn.textContent = prefix + String(mView.props.text ?? item.text);
+        }
+      }
+    }
+  }
+
   for (const [id, entry] of mounted) {
     const view = runtime.view(id);
     const n = node(id);
     const box = boxes.get(id);
+    if (n?.type === "FloatBox") {
+      const wantFloat = Boolean(view.props.floating);
+      if (wantFloat && entry.wrapper.parentElement !== stageEl) {
+        stageEl.append(entry.wrapper);
+      } else if (!wantFloat) {
+        const origPid = parentOf(id);
+        const origParentEl = origPid && origPid !== rootId ? mounted.get(origPid)?.wrapper : stageEl;
+        if (origParentEl && entry.wrapper.parentElement !== origParentEl) {
+          origParentEl.append(entry.wrapper);
+        }
+      }
+    }
     if (box && n?.type !== "Line") {
       if (n?.type === "Dialog" && id !== project.scene.root && rootNode) {
         const dx = Math.round((rootNode.width - box.width) / 2);
@@ -619,9 +793,10 @@ function applyViews(): void {
           transformOrigin: "center center",
         });
       } else {
+        const useAbs = n?.type === "FloatBox" && Boolean(view.props.floating) && entry.wrapper.parentElement === stageEl;
         Object.assign(entry.wrapper.style, {
-          left: `${box.x}px`,
-          top: `${box.y}px`,
+          left: `${useAbs ? box.absX : box.x}px`,
+          top: `${useAbs ? box.absY : box.y}px`,
           width: `${box.width}px`,
           height: `${box.height}px`,
           transform: n?.rotation ? `rotate(${n.rotation}deg)` : "",
@@ -640,8 +815,14 @@ function applyViews(): void {
     entry.wrapper.toggleAttribute("data-vf-disabled", !view.enabled);
     const type = n?.type;
     if (type === "Dock") {
-      const header = entry.wrapper.querySelector(".vf-dock-header");
-      if (header) header.textContent = String(view.props.title ?? n?.title ?? id);
+      const header = entry.wrapper.querySelector<HTMLElement>(".vf-dock-header");
+      const info = dockInfoMap?.get(id);
+      if (header) {
+        syncDockHeaderDom(entry.wrapper, header, id, n?.headerHeight ?? 26, info, stageEl, dockCallbacks);
+      }
+      entry.wrapper.style.zIndex = info?.isFloating ? "30" : "";
+    } else if (type === "FloatBox") {
+      entry.wrapper.style.zIndex = view.props.floating ? "35" : "";
     }
     if (type === "Shape" || type === "Line") {
       paintGraphic(id, entry, view.props);
@@ -876,6 +1057,134 @@ body.preview .vf-node[data-vf-type="Container"] > .vf-body {
   background: #fff;
   line-height: 1.3;
   white-space: pre;
+}
+.vf-dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 26px;
+  padding: 0 4px 0 8px;
+  background: #232834;
+  border-bottom: 1px solid #2e3440;
+  color: #cdd5e0;
+  font-size: 11px;
+  font-weight: 600;
+  user-select: none;
+  cursor: grab;
+  box-sizing: border-box;
+}
+.vf-dock-header:active {
+  cursor: grabbing;
+}
+.vf-dock-header .dock-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+.vf-dock-header .dock-tab {
+  appearance: none;
+  border: 0;
+  border-radius: 3px 3px 0 0;
+  background: transparent;
+  color: #8b95a5;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vf-dock-header .dock-tab:hover {
+  color: #dbe3ef;
+  background: rgba(255, 255, 255, 0.05);
+}
+.vf-dock-header .dock-tab.active {
+  color: #e5e9f0;
+  background: #2e3545;
+  border-bottom: 2px solid #5e81ac;
+}
+.vf-dock-header .dock-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.vf-dock-header .dock-action-btn {
+  appearance: none;
+  border: 0;
+  border-radius: 3px;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  color: #9aa5b4;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+}
+.vf-dock-header .dock-action-btn:hover {
+  background: #353d4f;
+  color: #ffffff;
+}
+.vf-node.dock-floating {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  border: 1px solid #4c566a !important;
+  border-radius: 4px;
+}
+.dock-float-resizer {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nwse-resize;
+  z-index: 5;
+  background: linear-gradient(135deg, transparent 50%, rgba(160, 174, 192, 0.55) 50%);
+}
+.dock-splitter {
+  position: absolute;
+  z-index: 40;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.dock-splitter.vertical,
+.dock-splitter-vertical {
+  cursor: col-resize;
+}
+.dock-splitter.horizontal,
+.dock-splitter-horizontal {
+  cursor: row-resize;
+}
+.dock-splitter:hover {
+  background: rgba(94, 129, 172, 0.55);
+}
+.dock-drop-overlay {
+  position: absolute;
+  pointer-events: none;
+  z-index: 120;
+  border: 2px dashed #5e81ac;
+  background: rgba(94, 129, 172, 0.22);
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+.dock-drag-ghost {
+  position: absolute;
+  pointer-events: none;
+  z-index: 125;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(35, 40, 52, 0.92);
+  border: 1px solid #5e81ac;
+  color: #e5e9f0;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 `;
 
@@ -2116,7 +2425,11 @@ overlay.addEventListener("pointermove", (e) => {
     }
     const nextW = Math.max(MIN_SIZE, Math.round(box.width));
     const nextH = Math.max(MIN_SIZE, Math.round(box.height));
-    syncResizedNodeDimensions(n, nextW, nextH, MIN_SIZE);
+    syncResizedNodeDimensions(n, nextW, nextH, MIN_SIZE, project.scene, gesture.id);
+    if (n.type === "Dock") {
+      const rootNode = node(project.scene.root);
+      if (rootNode?.dockLayout) designRuntime.setDockLayout(rootNode.dockLayout, project.scene.root);
+    }
     if (!isRoot && !isLayoutPositionedNode(project.scene, gesture.id)) {
       const local = worldRectToNodeLocalInScene(project.scene, gesture.id, {
         x: box.x,
@@ -2163,7 +2476,11 @@ overlay.addEventListener("pointermove", (e) => {
       if (eachNode.type === "Line" && scaled.props) {
         eachNode.props = scaled.props;
       } else {
-        syncResizedNodeDimensions(eachNode, scaled.width, scaled.height, MIN_SIZE);
+        syncResizedNodeDimensions(eachNode, scaled.width, scaled.height, MIN_SIZE, project.scene, id);
+        if (eachNode.type === "Dock") {
+          const rootNode = node(project.scene.root);
+          if (rootNode?.dockLayout) designRuntime.setDockLayout(rootNode.dockLayout, project.scene.root);
+        }
         if (isLayoutPositionedNode(project.scene, id)) {
           delete eachNode.x;
           delete eachNode.y;
@@ -2862,8 +3179,27 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
     }
     if (isDockInPartition) {
       parent.docks ??= [];
-      if (index === undefined || index < 0) parent.docks.push(fresh);
-      else parent.docks.splice(index, 0, fresh);
+      const sourceDockIdx = parent.docks.indexOf(root);
+      const dockInsertIdx = sourceDockIdx >= 0 ? sourceDockIdx + 1 : index;
+      if (dockInsertIdx === undefined || dockInsertIdx < 0 || dockInsertIdx > parent.docks.length) {
+        parent.docks.push(fresh);
+      } else {
+        parent.docks.splice(dockInsertIdx, 0, fresh);
+      }
+      if (parent.dockLayout) {
+        const loc = dockFindLocation(parent.dockLayout, root);
+        if (loc?.kind === "area") {
+          parent.dockLayout.areas[loc.area].groups.splice(loc.groupIndex + 1, 0, { tabs: [fresh], active: fresh });
+        } else {
+          const area = isDockArea(copy.dockArea) ? copy.dockArea : "left";
+          parent.dockLayout.areas[area].groups.push({ tabs: [fresh], active: fresh });
+        }
+      }
+      if (parent.children) {
+        const childIdx = parent.children.indexOf(root);
+        if (childIdx >= 0) parent.children.splice(childIdx + 1, 0, fresh);
+        else if (!parent.children.includes(fresh)) parent.children.push(fresh);
+      }
     } else {
       parent.children ??= [];
       if (index === undefined || index < 0) parent.children.push(fresh);
@@ -3140,7 +3476,27 @@ async function reorder(id: string, toFront: boolean): Promise<void> {
   if (parent.docks?.includes(id)) {
     const rest = parent.docks.filter((child) => child !== id);
     parent.docks = toFront ? [...rest, id] : [id, ...rest];
-  } else if (parent.children?.includes(id)) {
+  }
+  if (parent.dockLayout) {
+    const loc = dockFindLocation(parent.dockLayout, id);
+    if (loc?.kind === "area") {
+      const areaSpec = parent.dockLayout.areas[loc.area];
+      const grp = areaSpec.groups[loc.groupIndex];
+      if (grp && grp.tabs.length > 1) {
+        const restTabs = grp.tabs.filter((t) => t !== id);
+        grp.tabs = toFront ? [...restTabs, id] : [id, ...restTabs];
+      } else if (areaSpec.groups.length > 1) {
+        const [movedGrp] = areaSpec.groups.splice(loc.groupIndex, 1);
+        if (toFront) areaSpec.groups.push(movedGrp);
+        else areaSpec.groups.unshift(movedGrp);
+      }
+    } else if (loc?.kind === "floating" && parent.dockLayout.floating && parent.dockLayout.floating.length > 1) {
+      const [movedFloat] = parent.dockLayout.floating.splice(loc.index, 1);
+      if (toFront) parent.dockLayout.floating.push(movedFloat);
+      else parent.dockLayout.floating.unshift(movedFloat);
+    }
+  }
+  if (parent.children?.includes(id)) {
     const rest = parent.children.filter((child) => child !== id);
     parent.children = toFront ? [...rest, id] : [id, ...rest];
   }
@@ -4636,7 +4992,27 @@ $("restart").addEventListener("click", () => {
 
 // ---------- 启动 ----------
 
+/** 右侧“新增”表单（data-new-*）里填了但还没提交的内容。这些输入框每次重绘都重建。 */
+function readFormDrafts(): Array<[string, string]> {
+  const drafts: Array<[string, string]> = [];
+  for (const el of document.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")) {
+    for (const key of Object.keys(el.dataset)) {
+      if (/^new[A-Z]/.test(key)) drafts.push([key, el.value]);
+    }
+  }
+  return drafts;
+}
+
+function restoreFormDrafts(drafts: Array<[string, string]>): void {
+  for (const [key, value] of drafts) {
+    const attr = key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+    const el = document.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-${attr}]`);
+    if (el) el.value = value;
+  }
+}
+
 function renderAll(): void {
+  const formDrafts = readFormDrafts();
   syncSelection();
   $("project-name").textContent = project.name;
   $("project-root").textContent = project.root;
@@ -4649,6 +5025,7 @@ function renderAll(): void {
   renderProblems();
   renderConditions();
   syncStandalonePreviewTitle(project);
+  restoreFormDrafts(formDrafts);
 }
 
 // ---------- 导出成 Qt ----------

@@ -20,14 +20,14 @@ npm run tauri dev
 
 ## 已实现
 
-- 素材栏：容器、外部容器、六种排版容器（竖排 `VBox`、横排 `HBox`、换行 `Flow`、网格 `Grid`、表单 `Form`、层叠 `Stack`）、停靠面板 `Dock`、对话框 `Dialog`、16 种自带标准控件（`Label`、`Button`、`TextInput`、`TextArea`、`SpinBox`、`Slider`、`ScrollBar`、`ComboBox`、`CheckBox`、`TabBar`、`List`、`Tree`、`DataForm`、`DialogButtonBox`、`Spacer`、`Separator`）、“收藏的素材”（跨项目复用，按结构哈希与 `.designer/origins.json` 来源记录识别“已修改 / 有新版本 / 两边都改过”，拖进还没有它的项目时自动复制到 `components/`）、`project/components/` 中的自定义控件（自动列出，可拖入或右键收藏），以及基础图形、流程图图形、线条和“我的预设”
+- 素材栏：容器、外部容器、六种排版容器（竖排 `VBox`、横排 `HBox`、换行 `Flow`、网格 `Grid`、表单 `Form`、层叠 `Stack`）、停靠面板 `Dock`、对话框 `Dialog`、17 种自带标准控件（`Label`、`Button`、`TextInput`、`TextArea`、`SpinBox`、`Slider`、`ScrollBar`、`ComboBox`、`CheckBox`、`TabBar`、`List`、`Tree`、`DataForm`、`DialogButtonBox`、`Spacer`、`Separator`、`FloatBox` 浮动嵌入框）、“收藏的素材”（跨项目复用，按结构哈希与 `.designer/origins.json` 来源记录识别“已修改 / 有新版本 / 两边都改过”，拖进还没有它的项目时自动复制到 `components/`）、`project/components/` 中的自定义控件（自动列出，可拖入或右键收藏），以及基础图形、流程图图形、线条和“我的预设”
 - 画图（参照 Figma / FigJam）：在左侧素材栏点一下图形或线条，选为当前工具（素材栏里会标出来），再在设计窗口里拖出大小，或者点一下放默认大小；也可以直接从素材栏拖进来。快捷键：V 选择、R 矩形、O 椭圆、L 直线、Shift+L 箭头、X 连接线、T 文字、Esc 退出当前工具。Shift 画正方形和正圆、线的角度按 45 度取整，Alt 从中心画
 - 素材栏里的容器、外部容器和控件也一样：点一下选为工具，再在设计窗口里拖出大小（只点一下就按默认大小放一个）；或者直接拖进来
 - 六种排版与控件尺寸规则：竖排、横排、换行（`Flow` / `wrap: true`）、网格、表单、层叠六种排版以及建议、最小、最大、固定、伸缩尺寸规则，工具预览与 Qt 导出（含 `VfFlowLayout`）采用相同的排版计算规则
-- 主窗口分区、停靠面板与菜单全部形态：菜单栏（支持多级子菜单、分隔线、快捷键、可勾选项、互斥单选组 `QActionGroup`）、右键菜单（`contextMenu`）、按钮弹出菜单（`popupMenu`）、状态栏、中央区和四个方向停靠区（左、右、上、下）固定排列，支持从菜单切换停靠面板的显示和隐藏，导出成 Qt 时生成 `QMainWindow` + `QMenuBar` + `QStatusBar` + `QDockWidget`
+- 主窗口分区、Qt 停靠、浮动嵌入框与菜单全部形态：菜单栏（支持多级子菜单、分隔线、快捷键、可勾选项、互斥单选组 `QActionGroup`）、右键菜单（`contextMenu`）、按钮弹出菜单（`popupMenu`）、状态栏、中央区和四个方向停靠区（左、右、上、下）共用同一份停靠排列描述（`dockLayout`），支持在预览中拖动停靠面板标题栏停靠到四个方向、分栏并排、叠成页签、拆成浮动面板与恢复原位、点击 `×` 关闭并从菜单重新打开、拖动分界线改变宽度和高度；内置标准容器“浮动嵌入框”（`FloatBox`）支持在容器内嵌与窗口浮出之间切换并拖动位置；导出成 Qt 时生成 `QMainWindow` + `QMenuBar` + `QStatusBar` + `QDockWidget` 与 `FloatBox` 浮动卡片
 - 由数据生成的表单（`DataForm`）与列表/树拖拽重排：根据工具描述数据动态生成滑条、下拉、复选框、按钮、颜色/色板与子窗口按钮，并支持 `visible_when` 条件显隐；`List` 与 `Tree` 支持拖拽调整行顺序并发出 `reorder` 事件（`{ from, to }`）
 - 预览时钟（`clock`）：内置只读状态 `clock`（`clock.ms` / `clock.sec`），可在预览栏查看、输入毫秒数、单步推进或自动走表，并在定义 `clock.tick` 全局事件时按帧驱动逻辑
-- 编辑模式支持布局、停靠、菜单和状态归属：可直接往布局容器里拖入控件、在画布上拖动或通过右侧“布局”页签调整子控件顺序与伸缩（`stretch`）、设置尺寸规则（`SizePolicy` 与网格单元格）、摆放四侧停靠面板（`Dock` 的 `dockArea` 与窗口 `central` / `statusBar` / `docks` 分区）、在右侧“菜单”页签编辑顶部菜单与菜单项（含停靠面板显隐绑定）、在右侧“状态”页签标注状态归属（`owner: ui | business`）并增删状态；全部操作遵守锁定状态并记入撤销/重做历史
+- 编辑模式支持布局、停靠、菜单和状态归属：可直接往布局容器里拖入控件、在画布上拖动或通过右侧“布局”页签调整子控件顺序与伸缩（`stretch`）、设置尺寸规则（`SizePolicy` 与网格单元格）、摆放四侧停靠面板（`Dock` 的 `dockArea` 与窗口 `central` / `statusBar` / `docks` / `dockLayout` 分区）、在右侧“菜单”页签编辑顶部菜单与菜单项（含停靠面板显隐绑定）、在右侧“状态”页签标注状态归属（`owner: ui | business`）并增删状态；全部操作遵守锁定状态并记入撤销/重做历史
 - 吸附开关、网格、撤销和重做、历史版本恢复、锁定、对齐与等距分布按钮放在设计窗口上方右边，和缩放控件在同一行
 - 线条：直线、折线、曲线，六种端头，线中间可以写字。两头可以挂在形状或控件上，被挂的东西移动时线跟着走；选中线后拖两端的圆点改挂。挂的规则：靠近某一边的中点（12 像素以内）挂在中点；靠近外轮廓（10 像素以内）挂在轮廓上的那一点；按在形状或控件里面，朝着另一头自动选边；其他地方不挂。形状按真实轮廓算（星形、三角形、云都是），不按方框；容器和外部容器只能挂在边上；两头不会挂在同一个东西上；按住 Ctrl 不挂
 - 自动吸附：移动、缩放、画图时吸附到其他东西的边和中线（红色参考线），吸附到等间距的位置（粉色间距标记），可选吸附网格（4、8、10、16）；按住 Ctrl 临时关闭
@@ -58,7 +58,7 @@ npm run tauri dev
 - 右侧“文档”和“YAML”页签：文档支持“源码 | 预览”切换和所见即所得编辑（未改动的段落保留原文，小节和锁定标记受保护），停止输入后自动保存
 - 问题栏：YAML 语法、未知的状态路径或条件代号、控件不支持的属性和事件、逻辑函数中的网页元素检查、找不到的说明小节等
 - 事件记录
-- 监听项目文件夹，外部修改后自动刷新；YAML 写坏时沿用上一份有效逻辑
+- 监听项目文件夹，外部修改后自动刷新；YAML 写坏时沿用上一份有效逻辑。和界面上的操作同时发生时的规则：同一文件的写入按发起顺序落盘；重载等本窗口的写入做完再读，读的过程中又有本地修改就重读；文档和 YAML 编辑器里没保存的内容不被外部修改覆盖，停止输入后以编辑器为准；“新增”表单里填了一半的内容不被重绘清掉；鼠标按住时不重绘，松开后补上
 
 ## 导出成 Qt
 
@@ -105,6 +105,7 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 | `src/stateedit.ts` | 状态归属（`owner: ui \| business`）标注、状态与业务事件管理及右侧“状态”页签 |
 | `src/previewwindow.ts` | 独立预览窗口（`▶ 独立预览`）与跨窗口 Alt+点击联动 |
 | `src/model.ts` | 设计项目的数据结构、查找函数与六种排版几何计算，不碰网页和文件 |
+| `src/dock.ts` | Qt 停靠排列描述（`DockLayoutSpec`）、停靠纯函数运算、几何计算与预览拖动/页签/分界线交互控制器 |
 | `src/history.ts` | 版本的恢复与重做（撤销栈、重做栈、版本跳转、删除控件时的 YAML 条目检测与清理） |
 | `src/transform.ts` | 几何变换与编排操作：锁定、旋转、单选与多选整体缩放、对齐与等距分布、线条拐点操作 |
 | `src/runtime.ts` | 逻辑运行层，不依赖网页和 Tauri；导出时原样打包进 Qt 程序 |
@@ -112,7 +113,7 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 | `src/loader.ts` | 把项目文件读成数据。文件怎么读由调用方提供，工具界面和命令行共用 |
 | `src/check.ts` | 检查设计项目，结果显示在问题栏 |
 | `src/project.ts` | 工具界面里读取项目：在 `loader.ts` 之上加载控件和效果的实现、注入样式 |
-| `standard/` | 工具内置的 16 种标准控件（声明、网页实现、样式与 Qt 映射） |
+| `standard/` | 工具内置的 17 种标准控件（声明、网页实现、样式与 Qt 映射，含 `FloatBox` 浮动嵌入框） |
 | `src/md5.ts` | MD5，用来算效果的哈希 |
 | `src/shapes.ts` | 基础图形和线条：形状的轮廓、线的走法和端头、自带的预设和配色 |
 | `src/snap.ts` | 自动吸附：对齐、等间距、网格 |
@@ -128,6 +129,7 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 | `scripts/compare-layout.ts` | 在三个窗口尺寸下对比工具与 Qt 控件位置和大小的命令行入口 |
 | `scripts/test-editor.ts` | 编辑器纯函数（`history.ts`、`transform.ts` 等）的单元测试入口（`npm run test:editor`） |
 | `scripts/test-step2.ts` | 步骤 2 核心能力与复审项的回归测试入口（含无头浏览器实测） |
+| `scripts/test-dock.ts` | 步骤 3 Qt 停靠与浮动嵌入框回归测试入口（含模型单测、无头浏览器真实 DOM 交互、停靠变形后与 Qt 几何比对）；用环境变量 `VF_ANIMEAN_EXE` 指定 Qt 程序，找不到时第 3 项不算通过 |
 | `scripts/test-library.ts` | 结构哈希、素材库复制、来源对账与安全路径校验的单元测试（`npm run test:library`） |
 | `scripts/test-docview.ts` | 文档所见即所得预览分块往返、XSS 防护与小节锁定的单元测试（`npm run test:docview`） |
 | `scripts/test-layout-edit.ts` | 布局、尺寸规则、停靠、菜单和状态归属编辑的纯函数测试与无头浏览器端到端验收（`npm run test:layout-edit`） |
