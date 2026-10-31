@@ -347,6 +347,20 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string; noEffects
     steps:
       "dock:float:layersDock:640,200,300,420;check;state;dock:restore:layersDock;check;state;dock:float:inspectorDock;check;state;dock:close:inspectorDock;check;state",
   },
+  {
+    name: "66. 松开分隔条后窗口内的浮动嵌入框仍在分隔条上面",
+    steps:
+      "toggle:onionSkinBox;floatbox:move:onionSkinBox:116,300;dock:resize:right:300;check;state;floatbox:move:onionSkinBox:420,180;check;state",
+  },
+  {
+    name: "67. 松开分栏分隔条后停靠区分隔条仍在分栏分隔条上面",
+    steps: "dock:split:layersDock:inspectorDock:after;dock:resizeSplit:left:0:275;check;state;dock:resize:left:280;check;state",
+  },
+  {
+    name: "68. 带坐标浮出后台页签：拖页签把手出来，再调位置和大小，组里激活页签不变",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;dock:tabify:layersDock:timelineDock;check;state;dock:float:inspectorDock:320,140,280,460;check;state;dock:restore:inspectorDock;check;state",
+  },
 ];
 
 interface FlatTreeRow {

@@ -1517,6 +1517,12 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
       "Qt 悬停时弹出模态框不残留",
     );
 
+    // 鼠标步骤没做成时状态没变，紧接着的 check 不能报 ok
+    const afterFailedPointer = execFileSync(ANIMEAN_QT_EXE, ["--steps", "floatbox:move:noSuchBox:1,1;check"], { encoding: "utf8", env: qtEnv })
+      .split(/\r?\n/)
+      .filter((l) => l.startsWith("check "));
+    assert.ok(afterFailedPointer.length === 2 && afterFailedPointer.every((l) => l.startsWith("check MISMATCH")), afterFailedPointer.join("\n"));
+
     // [审核五] check 读真实控件：面板被背着逻辑层隐藏时必须报错；最小化时面板逻辑上还开着，check ok 是对的
     const rawChecks = (steps: string) =>
       execFileSync(ANIMEAN_QT_EXE, ["--steps", steps], { encoding: "utf8", env: qtEnv })

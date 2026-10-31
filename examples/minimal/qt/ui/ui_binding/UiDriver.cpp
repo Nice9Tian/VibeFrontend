@@ -341,7 +341,9 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
     // 停靠和 FloatBox 的鼠标步骤都走窗口坐标命中。没命中目标控件就是用户也点不到，算失败
     QString currentStep;
     bool coveredByFloating = false;  // 目标被看得见的浮窗盖住，这个手势用户也做不到，不算缺陷
+    bool pointerFailedSinceCheck = false;  // 上一步没做成，状态没变，紧接着的 check 不能报 ok
     const auto pointerFail = [&](const QString &why) {
+        pointerFailedSinceCheck = true;
         output.append(QStringLiteral("check MISMATCH pointer step=%1 %2").arg(currentStep, why));
     };
     const auto pointerDrag = [&](QWidget *target, const QPoint &local, const QPoint &endGlobal,
@@ -405,6 +407,11 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             continue;
         }
         if (verb == QLatin1String("check") && id.isEmpty()) {
+            if (pointerFailedSinceCheck) {
+                pointerFailedSinceCheck = false;
+                output.append(QStringLiteral("check MISMATCH pointer 前面的鼠标步骤没有做成"));
+                continue;
+            }
             output += compare(ui);
             continue;
         }
@@ -665,10 +672,23 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                 } else {
                     const QStringList parts = arg2.split(QLatin1Char(','));
                     auto *dw = ui.window()->findChild<QDockWidget *>(arg1);
-                    const bool hasHeader = findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg1) != nullptr;
+                    bool hasHeader = findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg1) != nullptr;
                     if (!hasHeader && dw && !dw->isHidden() && (dw->isFloating() || mainWindow->tabifiedDockWidgets(dw).isEmpty())) {
                         pointerFail(QStringLiteral("找不到标题栏 vf_dock_hdr_") + arg1);
                         continue;
+                    }
+                    // 后台页签没有标题栏，但页签把手看得见：按住 Shift 把它拖出来，浮出后再按下面的路径调整
+                    if (!hasHeader && dw && !dw->isHidden() && parts.size() >= 2) {
+                        QPushButton *handle = dockDragHandle(ui, arg1);
+                        if (!handle) {
+                            pointerFail(QStringLiteral("找不到把手 vf_dock_tab_") + arg1);
+                            continue;
+                        }
+                        QDockWidget *shown = shownDockOfGroup(ui, dw);
+                        const QPoint shownRel = ui.window()->mapFromGlobal(shown->mapToGlobal(QPoint(0, 0)));
+                        const QPoint toTarget(parts.at(0).toInt() - shownRel.x(), parts.at(1).toInt() - shownRel.y());
+                        pointerDrag(handle, handle->rect().center(), handle->mapToGlobal(handle->rect().center()) + toTarget, Qt::ShiftModifier);
+                        hasHeader = findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg1) != nullptr;
                     }
                     if (hasHeader && parts.size() >= 2) {
                         if (!dw->isFloating()) {

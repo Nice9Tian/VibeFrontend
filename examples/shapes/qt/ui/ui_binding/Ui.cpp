@@ -3724,6 +3724,7 @@ void Ui::Private::rebuildDockSplitters()
             }
         }
     }
+    raiseDockSplitters();
 }
 
 void Ui::Private::applyFloatBoxes(const QJSValue &views, const QJSValue *knownBoxes)
