@@ -89,7 +89,11 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 
 ## 还没有实现
 
-- 普通控件（非基础图形的 `QWidget`）在导出成 Qt 时的旋转绘制（基础图形 `Shape` 已按 `QPainter` 旋转导出；普通控件设置了旋转时在问题栏保留提示）
+- 普通控件（非基础图形 `Shape` 的 `QWidget`）在导出成 Qt 时的旋转绘制（基础图形 `Shape` 已按 `QPainter` 旋转导出；普通控件设置了旋转时在问题栏保留提示）
+- `animean/mainwindow.cpp` 与 `animean/pythonbind/python_bindings.cpp` 中尚未剥离的 9 类直接操作画布/弹窗/光标/菜单的 Python UI 回调（`animean/business/README.md` 归纳的 `registerAnimeanUiOverlayCallback`、`registerAnimeanUiEditHandlesCallback` / `registerAnimeanUiEditHandleCallback`、`registerAnimeanUiCursorCallback`、`registerAnimeanUiMenuCallbacks`、`registerAnimeanUiLayerContextCallbacks`、`registerAnimeanUiDialogCallbacks`、`registerAnimeanUiFreezeCallbacks` / `registerAnimeanUiFreezeCallback`、`registerAnimeanUiPythonDebugCallback`、`registerAnimeanUiStatusCallback` 以及 `registerAnimeanUiWindowsCallback`、`registerAnimeanUiFillPaintModeCallback`、`registerAnimeanUiPadValueCallback`）、动态脚本菜单、Python 调试 REPL 面板、交互式导入弹窗等界面耦合；`examples/animean/qt/app/Connect.cpp` 目前只连接了示范桩代码（`LayerModel` + `CanvasWidget`，仅接线 `layerToggleVisibleRequested` 与 `setCanvasHostWidget`），尚未接入 `AnimeanBusiness`；`animean/CMakeLists.txt` 默认 `ANIMEAN_WITH_PYTHON=ON` 且 `animean/tests/business_tests.cpp` 含有 `pybind11`（`py::scoped_interpreter`）测试，但最后一次集成验收是在 `ANIMEAN_WITH_PYTHON=OFF` 下执行的，`ANIMEAN_WITH_PYTHON=ON` 未在最终版本上重跑
+- Tauri 桌面端运行路径（`inTauri` / `isInTauri()` 分支，如素材库桌面读写、独立预览 `WebviewWindow`、导出目录选择与写盘）仅通过 `cargo check` 和浏览器/Node 端开发接口模拟验证，未实际启动 Tauri 桌面端验证
+- 批量跑用例时曾出现单轮 300 到 610 秒的卡顿，后来多轮没有再出现，根因未查明
+- `可视化界面与语义逻辑设计工具.md` 第 11 节“以后再做”中的内容：跨重启持久化的 `.designer/history/` 及按单小节/单条目独立版本列表与恢复、YAML 条目/整文件锁定（`# 🔒`）与 `component.json` 锁定及 `.designer/locks.json` 快照比对恢复、iOS 版、控件实现直接引入 npm 依赖包并由工具打包、运行时自动测量文字溢出提示、导出为独立 Web 项目
 
 
 ## 代码结构

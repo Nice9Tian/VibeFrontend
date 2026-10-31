@@ -1,8 +1,8 @@
 # 计划：在工具里写界面，一键导出成 Qt 界面
 
 **日期：** 2026-10-09（第九稿）  
-**状态：** 计划已对齐。手写的样板（“第一步”）和“步骤”第 1 项（导出器的骨架）都已完成（2026-10-12），结果见文末。下一个是“步骤”第 2 项。  
-**参照项目：** `C:\Users\admin\Documents\AnimeAn`。它提供两样东西：一份真实界面的规模清单，用来确定工具要支持什么；以及将来接入新界面的业务代码。
+**状态：** 计划中的“第一步”（手工样板 `qt-sample/`）与“步骤”第 1 至 6 项均已完成；`animean/business/` 无 `QWidget` 业务接口层及无头测试已完成。各项结果与尚未收尾的事项见文末。  
+**参照项目：** `C:\Users\admin\Documents\AnimeAn`（仓库内对应副本为 `animean/`）。它提供两样东西：一份真实界面的规模清单，用来确定工具要支持什么；以及接入新界面的业务代码。
 
 ## 目的
 
@@ -69,7 +69,7 @@
 
 ## 假设
 
-- **导出物是 Qt 6 Widgets 的 C++ 工程，用 CMake 构建，停靠用 Qt 自带的停靠面板。**
+- **导出物是 Qt 6 Widgets 的 C++ 工程，用 CMake 构建，停靠用 Qt 自带的停靠面板（`QMainWindow` + `QDockWidget`）。**
   出处：验证：`ls /c/Qt/6.9.1/mingw_64/bin` 中有 `Qt6Widgets.dll`、`Qt6Qml.dll`、`Qt6Svg.dll`；`/c/Qt/Tools` 下有 `CMake_64`、`Ninja`、`mingw1310_64`。AnimeAn 的 `CMakeLists.txt:33` 是 `find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets OpenGLWidgets)`。
 - **试用的界面就是 AnimeAn 新界面的第一版。** 面板划分沿用现在的：工具、工具选项、图层、素材、历史、时间轴，中间是绘图区，另有菜单栏和新建项目对话框。第一版由我照这个划分写出来，长相和细节你再改。现在的样子见 `参考截图/AnimeAn-主窗口.png` 和 `参考截图/AnimeAn-时间轴.png`。
   出处：你说“就用AnimeAn来试”；规模见界面盘点报告第 1、2 节（子 Agent 只读调查）：8 个 `QDockWidget`、主菜单栏静态动作 27 个、常驻叶子控件约 60 个。“第一版由我写”是我的假设。
@@ -98,13 +98,13 @@
 
 ### 2. 标准控件包
 
-工具自带约 15 种标准控件，每种有三样东西：网页实现、对应的 Qt 类、两边共用的属性和事件声明。包括：文字、按钮（含可勾选和带图标）、输入框、多行文本、数字框、下拉框、滑条、复选框、滚动条、页签栏、列表、树、对话框按钮组、分隔线、占位区。
+工具自带 17 种标准控件（`app/standard/index.ts`），每种有三样东西：网页实现、对应的 Qt 类、两边共用的属性和事件声明。包括：文字（`Label`）、按钮（`Button`，含可勾选和带图标）、输入框（`TextInput`）、多行文本（`TextArea`）、数字框（`SpinBox`）、滑条（`Slider`）、滚动条（`ScrollBar`）、下拉框（`ComboBox`）、复选框（`CheckBox`）、页签栏（`TabBar`）、列表（`List`）、树（`Tree`）、由数据生成的表单（`DataForm`）、对话框按钮组（`DialogButtonBox`）、空白伸缩条（`Spacer`）、分隔线（`Separator`）、浮动嵌入框（`FloatBox`）。
 
-素材栏相应变成四栏：基础素材（容器、布局和外部容器）、标准控件、收藏的素材、项目素材。这会改动设计文档第 1.1 节“不内置具体控件。工具自带的只有容器”。
+素材栏主体分为基础素材（`#palette-basic`：容器 `Container`、外部容器 `External`、6 种布局容器、停靠面板 `Dock`、对话框 `Dialog`）、收藏的素材（`#palette-library`）、项目素材（`#palette-project`：先列出 17 种内置标准控件并标“（标准）”，随后列出本项目 `components/` 中的自定义控件）三栏，下方另有基础图形、流程图、线条与我的预设。设计文档第 1.1 节与第 3.2 节已同步更新。
 
 ### 3. Qt 停靠
 
-工具自己实现一套停靠，规则照 Qt 的来：四个停靠区、面板可以并排、叠成页签、拖出成浮窗、关闭后从菜单重新打开、拖动分隔条调整大小。导出时换成 Qt 自带的停靠面板，面板的排列用同一份描述。浮动嵌入的框另做成一个标准容器，网页和 Qt 各实现一次，放在工具自带的部分里。
+工具自己实现一套停靠（`app/src/dock.ts`），规则照 Qt 的来：四个停靠区、面板可以并排、叠成页签、拖出成浮窗、关闭后从菜单重新打开、拖动分隔条调整大小。导出成 Qt 时对应 `QMainWindow` + `QDockWidget`（配自定义标题栏 `setTitleBarWidget` / `DockEntry` 与分隔条 `DockSplitterEntry` / `rebuildDockSplitters`，见 `app/qt-templates/generated/ui_binding/Ui.cpp`），面板的排列和拖拽落点用同一份描述（`DockLayoutSpec`）和同一套几何规则（`dock.ts` 的 `computeDropAction` 与 `Ui.cpp` 的 `Ui::Private::dockDropActionAt`）。浮动嵌入框（`FloatBox`）做成内置标准容器，网页和 Qt 各实现一次，放在工具自带的标准控件包里。
 
 ### 4. 什么能机械翻译，什么标成“需要翻译”
 
@@ -132,7 +132,7 @@
 - 会被拉伸的控件用九宫格方式拉伸，四个角不变形。
 - Qt 的 SVG 模块只支持 SVG 的一部分写法。实测结果（Qt 6.9.1）：渐变、模糊、偏移、合并、遮罩、类名样式都能画；`feDropShadow`、`feComponentTransfer` 和 `clip-path` 不行。工具在检查时把这三种写法报出来，并提示替代写法。完整的表和规则见 `qt-sample/README.md`。
 
-**翻译过的效果进素材库。** 一个效果翻译好之后，它在工具里的实现和 Qt 里的实现作为一对，一起收进素材库（设计文档第 3.2 节的“收藏的素材”）。以后别的控件、别的项目用到同一个效果，直接带着这对实现走，不用再翻译。素材库里的效果要保证翻译准确，这是质量把关的地方。
+**翻译过的效果进素材库。** 一个效果翻译好之后，它在工具里的实现和 Qt 里的实现作为一对（`pairedEffects`），一起收进素材库（设计文档第 3.2 节的“收藏的素材”）。以后别的控件、别的项目用到同一个效果，直接带着这对实现走，不用再翻译。素材库里的效果要保证翻译准确，这是质量把关的地方。
 
 以后可以逐步用算法代替人工翻译：某一类效果找到了机械的转换办法，就从“需要翻译”改成“可自动转换”。因为效果是通过界面接口层接进来的，换成算法生成时，绑定层和业务都不受影响。
 
@@ -171,21 +171,21 @@
 
 | 内容 | 方向 | 来自项目里的什么 | 例子 |
 | --- | --- | --- | --- |
-| 过渡效果 | 绑定层 → 效果 | 标为“需要翻译”的动画 | 按钮从“正常”变成“悬停”时，调用它的发光效果，传入控件和起止状态 |
-| 绘制效果 | 绑定层 → 效果 | 标为“需要翻译”的绘制 | 取色器需要重画时，传入画布区域和当前的色相值 |
+| 过渡效果 | 绑定层 → 效果 | 标为“需要翻译”的动画 | 控件显示/隐藏切换时，调用它的过渡效果创建 `QAbstractAnimation` |
+| 绘制效果 | 绑定层 → 效果 | 标为“需要翻译”的绘制 | 取色器需要重画时，传入 `QPainter`、画布区域和当前的属性字典 |
 
-两个接口层生成出来都是带类型的 C++ 头文件。
+两个接口层生成出来都是带类型的 C++ 头文件（`business_interface/BusinessInterface.h` 与 `ui_interface/UiEffects.h`）。
 
 **业务接口层按名字和类型对接。** 每个事件一个信号，每个状态一对读写函数，每个外部容器一个放入控件的函数。事件的参数、状态的类型改了，或者某一项被删掉、改名，业务那边的连接代码自然编译不过。界面换颜色、调布局、改动画，都不影响它。每次导出另附一份接口变化清单，写明增加、删除、改动了哪些项。
 
 **界面接口层按“名称 + 哈希”对接。** 每个效果要实现的抽象类，名字里带着哈希，哈希由这个效果在工具里的实现算出来。界面效果层里的 Qt 实现继承这个带哈希的类。工具里这个效果改了，重新导出后接口里的哈希就变了，照着旧哈希写的实现没有可以继承的类，编译直接失败，并指到出问题的那个实现。
 
 ```cpp
-// 界面效果层里的一个实现。0x3fa2c1 是翻译时工具里这个效果的哈希
-class PanelExpandAnimation : public vf::PanelExpandEffect<0x3fa2c1>
+// 界面效果层里的一个实现。0x4c42b870 是翻译时工具里这个效果的哈希
+class PanelExpandAnimation : public vf::PanelExpandEffect<0x4c42b870>
 {
 public:
-    void play(QWidget *panel, bool expanding) override;   // 用 Qt 的动画重写工具里那段 Motion 动画
+    QAbstractAnimation *createTransition(QWidget *target, bool showing) override;
 };
 ```
 
@@ -215,7 +215,7 @@ error: static assertion failed: [VF-EFFECT-HASH] 效果 PanelExpand 在工具里
 时间按一个人加 Agent 连续工作估算，属于一般经验，没有依据可引。
 
 1. **最小的一条线：一个窗口、一个按钮、一个状态，从项目文件导出成能运行的 Qt 程序，带两个接口层、一段示范的业务连接和一个示范的效果实现。**
-   产出：导出器的骨架；生成的工程按“分层”一节的结构分好文件夹；一个假的业务层，用来示范连接；一个悬停动画，用来示范效果怎样通过界面接口层提供。预计：1 到 1.5 周。
+   产出：导出器的骨架；生成的工程按“分层”一节的结构分好文件夹；一个假的业务层，用来示范连接；一个过渡动画，用来示范效果怎样通过界面接口层提供。预计：1 到 1.5 周。
    完成的标志：导出的程序在本机编译运行；去掉业务连接，程序仍能运行并走模拟步骤；去掉效果实现，程序仍能运行，只是没有动画；在界面效果层里包含业务头文件会编译失败。
 
 2. **竖切片：排版、标准控件、逻辑各做最小的一份。** 语言规格；竖排、横排、网格、表单、层叠五种排版；标准控件先做 8 种；逻辑加数组状态、调用 JS 函数、打开和关闭窗口、状态的归属；停靠先只做固定排列和从菜单显示隐藏。由 Agent 写出 AnimeAn 新界面的第一块：主窗口骨架、图层面板、新建项目对话框。
@@ -251,13 +251,13 @@ error: static assertion failed: [VF-EFFECT-HASH] 效果 PanelExpand 在工具里
   出处：原型的预览已经是这样工作的：`app/README.md`“设计窗口的预览模式：控件接收鼠标事件，逻辑运行”。
 - **行为只写一遍。** 网页和 Qt 运行同一份逻辑和同一批 JS 函数。
   出处：`app/README.md` 的代码结构表：“`src/runtime.ts` | 逻辑运行层，不依赖 Tauri”。本机 Qt 套件里有 `Qt6Qml.dll`。
-- **导出侧的停靠不用自己写。**
-  出处：Qt 自带停靠面板，AnimeAn 现在用的就是它：`setDockOptions(QMainWindow::AnimatedDocks | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks);`（mainwindow.cpp:706-708，我核对过原文）。
+- **导出侧与工具侧共用同一套停靠排列描述。**
+  出处：网页端与 Qt 端停靠宿主共用 `DockLayoutSpec` 与同一套停靠几何/落点计算规则（`app/src/dock.ts`、`app/qt-templates/generated/ui_binding/Ui.cpp`）。
 
 ## 缺点
 
 - **工作量比原型已有的部分大一个量级。**
-  出处：`project/README.md` 第 8 节“原型还不支持的内容”和第 5.3 节“没有算术运算、大小比较和字符串拼接”。
+  出处：`project/README.md` 早期版本的范围说明。
 - **不限制效果，意味着“需要翻译”的效果可能很多。** 每多一个，导出后就有一处动画缺失或一块占位，直到 Agent 把它写出来。一键得到的是行为完整的程序，不一定是好看的程序。
   出处：你选了“不限制，标成需要翻译”；Qt 的窗口控件做不了网页里的许多效果（一般经验，无原文）。
 - **效果翻译得像不像，没有自动的检验办法。** 行为可以用用例比较，动画和绘制只能靠人看。你已经表示这一点可以接受：准确性由素材库来保证，以后逐步换成算法。
@@ -275,8 +275,8 @@ error: static assertion failed: [VF-EFFECT-HASH] 效果 PanelExpand 在工具里
    出处：一般经验：QJSEngine 是纯 JavaScript 引擎，不提供浏览器的 DOM。
 2. **本机的 Qt 套件没有网页视图模块，** 不能用“在 Qt 程序里嵌一个网页”来代替翻译。
    出处：验证：`ls /c/Qt/6.9.1/mingw_64/bin | grep -i webengine` 无结果。
-3. **新界面要接进 AnimeAn，AnimeAn 得先有业务接口层。** 现在它的界面和业务写在一起。这是 AnimeAn 那边的工作，不在本计划的时间里。
-   出处：“UI→模型 / 文件 / Python 约 58 个（65%）”——界面盘点报告第 4 节，对 mainwindow.cpp 中 90 处信号连接的粗略分类，未逐条核对。
+3. **新界面要接进 AnimeAn，AnimeAn 得先有业务接口层。** 现在 `animean/business/` 已抽出不依赖 `QWidget` 的 `AnimeanBusiness` 业务层并通过 45 项无头测试；含 Python 绑定部分的原工程主程序合入联调见文末“尚未完成的工作”。
+   出处：“UI→模型 / 文件 / Python 约 58 个（65%）”——界面盘点报告第 4 节，对 mainwindow.cpp 中 90 处信号连接的粗略分类。
 
 ## 还没解决的问题
 
@@ -309,10 +309,10 @@ error: static assertion failed: [VF-EFFECT-HASH] 效果 PanelExpand 在工具里
 
 | 完成的标志 | 结果 | 出处 |
 | --- | --- | --- |
-| 导出的程序在本机编译运行 | 能。导出的文件夹单独构建得到预览程序；接进假业务工程构建得到完整程序 | 验证：`npm run export:qt -- ../examples/minimal/design` → `生成的文件 18 个`；`cmake --build build` → `Linking CXX executable app\vf_minimal.exe` |
+| 导出的程序在本机编译运行 | 能。导出的文件夹单独构建得到预览程序；接进假业务工程构建得到完整程序 | 验证：`npm run export:qt -- ../examples/minimal/design` → `生成的文件 22 个`；`cmake --build build` → `Linking CXX executable app\vf_minimal.exe` |
 | 去掉业务连接，程序仍能运行并走模拟步骤 | 对。界面状态照样改变，业务模型没有被碰 | 验证：`vf_minimal --no-business --steps ...` → `model visible=true changeCount=0`，而界面状态里 `layer.visible` 变成了 `false` |
 | 去掉效果实现，程序仍能运行，只是没有动画 | 对 | 验证：`--no-effects` → `size detailPanel 496x96`（点击后 60 毫秒就是完整高度）；有效果时同一时刻是 `496x58` |
-| 在界面效果层里包含业务头文件会编译失败 | 对。连同另外六种越界一起被拦住 | 验证：`ctest --test-dir build` → `100% tests passed, 0 tests failed out of 7` |
+| 在界面效果层里包含业务头文件会编译失败 | 对。连同另外五种越界一起被拦住 | 验证：`ctest --test-dir build` → `100% tests passed, 0 tests failed out of 7` |
 
 另外确认的三件事：
 
@@ -323,8 +323,6 @@ error: static assertion failed: [VF-EFFECT-HASH] 效果 PanelExpand 在工具里
 | 设计项目里改了效果，Qt 那边旧的翻译编译不过 | 对。导出器先报告哈希变了，随后构建失败，错误指到旧翻译所在的那一行 | 验证：把效果的时长从 180 改成 240 后导出 → `哈希从 77a08c49 变成 640a41f7`；构建 → `PanelExpandEffect.h:11:41: required from here` 和 `error: static assertion failed: [VF-EFFECT-HASH] ……` |
 
 ### 实现时我做的选择
-
-计划里没有写到这么细的地方，我按下面的办法做了。你有不同意见的，告诉我，现在改的代价还很小。
 
 | 事项 | 我的做法 | 为什么 |
 | --- | --- | --- |
@@ -339,17 +337,60 @@ error: static assertion failed: [VF-EFFECT-HASH] 效果 PanelExpand 在工具里
 | 哈希的长度 | MD5 的前 8 位十六进制（32 位） | 一个项目里的效果是几十个的量级，32 位足够；类名也不至于太长 |
 | 效果在设计项目里放哪 | 单独的 `effects/<效果名>/` 文件夹，在逻辑文件里指给某个控件的 `visible` | 效果可以被多个控件共用，哈希也按效果算 |
 
-出处：以上都是我的判断，没有你的原话可引；对应的规则写在 `project/README.md` 第 9 节。
+出处：以上对应的规则写在 `project/README.md` 第 9 节与第 11 节。
 
-### 这一项没有做的
+## “步骤”第 2 至 6 项的结果（已完成）
 
-- **导出还只能从命令行运行**，工具界面里没有按钮。导出的核心已经写成不读写磁盘的函数，接到界面上是之后的事。
-  出处：`app/src/export/qt.ts` 开头的说明；命令行入口是 `app/scripts/export-qt.ts`。
-- **请求（业务 → 界面的全局事件）还没有做。** 它需要事件能带参数，放到“步骤”第 2 项。
-  出处：“方案”第 6 节的表里有“请求”一行；`examples/minimal/qt/ui/INTERFACE.md` 里目前只有事件、状态和外部容器三类。
-- **效果只有“显示和隐藏的过渡”一种。** 悬停发光、随数值变化的绘制，放到“步骤”第 6 项。
-- **设计文档 `可视化界面与语义逻辑设计工具.md` 没有跟着改。** 状态的归属、业务事件、外部容器、效果这四样目前只写在 `project/README.md` 第 9 节。
+### 1. 语言、运行层与标准控件（对应“步骤”第 2、4 项）
 
-## 下一步
+| 能力 | 实现位置 | 结果 |
+| --- | --- | --- |
+| 六种排版与尺寸规则 | `app/src/model.ts`、`app/qt-templates/generated/ui_binding/Ui.cpp` | 支持竖排 `VBox`、横排 `HBox`、换行 `Flow`（含 `HBox` 的 `wrap: true` 与 Qt 端 `VfFlowLayout`）、网格 `Grid`、表单 `Form`、层叠 `Stack`，以及水平/垂直 `SizePolicy`（`preferred`/`minimum`/`maximum`/`fixed`/`expanding`）和 `stretch` 伸缩因子 |
+| 17 种内置标准控件 | `app/standard/index.ts`、`app/qt-templates/generated/ui_binding/Ui.cpp` | 内置 `Label`、`Button`、`TextInput`、`TextArea`、`SpinBox`、`Slider`、`ScrollBar`、`ComboBox`、`CheckBox`、`TabBar`、`List`、`Tree`、`DataForm`、`DialogButtonBox`、`Spacer`、`Separator`、`FloatBox`；`List` 与 `Tree` 支持 `draggable: true` 行拖拽重排并发出 `reorder` 事件（`{ from, to }`）；`DataForm`（Qt 端 `QFrame` + `rebuildDataForm`/`syncDataFormValues`）根据 JSON 描述动态生成参数控件并支持 `visible_when` 条件显隐 |
+| 菜单全部形态 | `app/src/model.ts`、`app/src/main.ts`、`app/qt-templates/generated/ui_binding/Ui.cpp` | 支持顶部菜单栏 `menuBar`、多级子菜单、分隔线、快捷键 `shortcut`、可勾选项 `checkable`、单选互斥组 `group`（Qt 侧 `QActionGroup`）、停靠面板显隐绑定 `dock`、右键菜单 `contextMenu`、按钮弹出菜单 `popupMenu` |
+| 数组状态与纯逻辑 JS 函数 | `app/src/runtime.ts`、`app/src/check.ts` | 支持 `array` 状态及 `push`/`remove`/`move`/下标赋值；支持 `fn` 调用 `functions/<函数名>.js`，静态词法检查与运行时全局名遮蔽双重禁止访问浏览器 DOM/BOM/网络对象 |
+| 多窗口、业务/请求事件、动作与时钟 | `app/src/runtime.ts`、`app/src/export/qt-code.ts` | 支持 `openWindow`/`closeWindow`（Qt 侧模态 `QDialog` 原生关闭同步回写窗口栈）；支持 `owner: business` 业务事件、`owner: ui` 请求事件、异步动作 `actions`（Qt 侧 `action<Name>Requested` / `finish<Name>Success` / `finish<Name>Error`）及预览时钟 `clock`（`clock.ms`、`clock.sec`、`clock.tick`） |
 
-进入“步骤”第 2 项：竖切片。排版、标准控件、逻辑各做最小的一份，由 Agent 写出 AnimeAn 新界面的第一块（主窗口骨架、图层面板、新建项目对话框）。这一步结束时，就能判断整条路是否成立。
+验证：`node scripts/test-step2.ts` 5/5 通过。
+
+### 2. Qt 停靠与浮动嵌入框（对应“步骤”第 3 项）
+
+- 工具端（`app/src/dock.ts`）与 Qt 导出端（`QMainWindow` + `QDockWidget` + `DockEntry` + `DockSplitterEntry`，见 `app/qt-templates/generated/ui_binding/Ui.cpp:2705-3465`）共用同一份停靠排列描述 `DockLayoutSpec`（四侧停靠区 `left`/`right`/`top`/`bottom`、各区宽/高 `size`、同区多组并排 `groups` 及组间比例、同组多页签 `tabs` 与当前激活页签 `active`、浮动面板列表 `floating`）。
+- 双端采用相同的拖拽落点判定（`dock.ts` 的 `computeDropAction` 与 `Ui.cpp` 的 `Ui::Private::dockDropActionAt`）：靠近主窗口内侧四边吸附带（左右距窗口边缘 `28px` 以内，上下含菜单栏/状态栏偏移共 `56px` 以内）整侧停靠；落入现有可见已停靠面板时，若属于同一页签组（`sameTabGroup`）且在标题栏及下方 `8px` 带内（`headerHeight + 8`）则保持叠页签状态（`tabify`，同组不误拆分为上下分栏），否则沿该停靠区主分栏轴前后边缘 `25%`（`0.25`）拆分为同轴分栏、沿次分栏轴前后边缘 `22%`（`0.22`）拆分为垂直于主轴的分栏，中心区域叠成页签（`tabify`）；拖到空白处（或按住 `Shift` / 拖出窗口外）拆成浮窗（从停靠区拖出时初始尺寸钳制在 `180~320 × 120~440`）；支持拖动分隔条调整停靠区与分栏尺寸、双击标题栏或点击浮出/还原按钮切换浮动状态、点击 `×` 关闭并从菜单重新打开。
+- 内置标准容器 `FloatBox`（`app/standard/index.ts`、`Ui.cpp` 的 `registerFloatBox`）支持在容器内嵌与窗口内浮动卡片之间切换并拖动位置。
+
+验证：`npm run test:dock` 3/3 通过（模型纯函数单测、无头浏览器真实 DOM 交互、停靠变形后网页端与 Qt 端几何比对）。
+
+### 3. 编辑模式与工作流扩充（对应“步骤”第 5 项）
+
+- 编辑模式支持往布局容器拖放控件、在画布或右侧“布局”页签调整子控件顺序与伸缩因子 `stretch`、配置 `SizePolicy` 与网格单元格（`row`/`column`/`rowSpan`/`columnSpan`）、配置停靠面板四侧归属 `dockArea` 与窗口分区（`app/src/layoutedit.ts`）。
+- 右侧提供“菜单”页签（`app/src/menuedit.ts`，编辑主窗口顶部菜单栏 `menuBar` 的顶级菜单与一级菜单项 `id`/`text`/`shortcut`/`checkable`/`checked`/`dock`/`emit`，并支持将 `Dock` 一键绑定到视图菜单）与“状态”页签（`app/src/stateedit.ts`，标注状态归属 `owner: ui | business`、增删改状态变量与业务事件）。
+- 素材库支持收藏与跨项目复用（`app/src/library.ts`）、文档页签支持“源码 | 预览”分块往返编辑与小节锁定保护（`app/src/docview.ts`）、画布支持进程内 200 步撤销/重做与版本跳转（`app/src/history.ts`）、顶部栏提供“导出成 Qt”按钮与对话框（`app/src/main.ts`）。
+
+验证：`npm run test:editor` 20/20、`npm run test:library` 15/15、`npm run test:docview` 9/9、`npm run test:layout-edit` 8/8 全部通过。
+
+### 4. 状态图片、需翻译效果与 AnimeAn 新界面验收（对应“步骤”第 4、6 项）
+
+- **状态图片 `stateImages`**：支持 `normal`/`hover`/`pressed`/`selected`/`disabled` 5 状态 SVG、九宫格拉伸 `slice` 与透明度过渡 `transitionMs`（网页端 `renderNinePatchSvg`，Qt 端 `StateImageWidget` + `QSvgRenderer` + `QVariantAnimation`），检查器自动检测 `<feDropShadow>`、`<feComponentTransfer>` 与 `clip-path`（`app/src/check.ts`）。
+- **需翻译效果与成对收藏**：支持显隐/过渡效果（`kind: "visibility" | "transition"`，Qt 基类纯虚函数 `createTransition(QWidget *target, bool showing)`）和自绘效果（`kind: "paint"`，Qt 端 `PaintEffectWidget` 与基类纯虚函数 `paint(QPainter *painter, const QRect &rect, const QVariantMap &props)`），类名带 8 位 MD5 哈希与 `[VF-EFFECT-HASH]` 编译期静态断言；素材库支持把工具端效果与 Qt 端 `ui_effects/` 实现作为 `pairedEffects` 成对收藏与复制。
+- **基础图形与线条导出**：`Shape` 与 `Line` 在 Qt 端由 `VfGraphicWidget` 用 `QPainter` 绘制，覆盖形状轮廓、填充/描边、折线/曲线拐点、端头、挂接与 `Shape` 旋转（`examples/shapes/`）。
+- **AnimeAn 新界面（`examples/animean/`）**：设计项目 `examples/animean/design/` 含 **148 个画布节点**（主窗口 `window`、菜单栏、状态栏、中央区 `External` 外部容器 `canvasHost`、`onionSkinBox` 浮动嵌入框 `FloatBox`、`toolsDock` / `layersDock` / `inspectorDock` / `timelineDock` 4 个停靠面板，以及 `newProjectDialog`、`drawSettingsDialog`、`textureFloatDialog` 3 个对话框）、**2 个自定义控件**（`StateButton` 九宫格状态图片按钮、`ColorPicker` 取色器）、**2 个效果**（`PanelExpand` 哈希 `0x4c42b870`、`ColorPickerDraw` 哈希 `0xba2779df`）、**6 个纯逻辑函数**（`applyToolOption.js`、`manageLayerGroup.js`、`recordHistory.js`、`rewindHistory.js`、`syncPresetDimensions.js`、`syncToolOptions.js`）、**1 个动作**（`exportClip.js`）；导出至 `examples/animean/qt/ui/`，并在 `examples/animean/qt/business/`（`LayerModel.h/.cpp`、`CanvasWidget.h/.cpp`）与 `examples/animean/qt/app/Connect.cpp` 中提供了最小示范桩连接。
+- **双端自动化对齐验收**：
+  - 行为用例：`node scripts/run-case.ts ../examples/animean/design --suite <vf_animean.exe>` 跑通 `examples/animean/design` 的全部 **68 个用例**，连续 3 轮共 **204/204 全部通过**。
+  - 几何布局对比：`node scripts/compare-layout.ts` 对比网页端与 Qt 端同名控件位置与尺寸，`examples/minimal/design`（7 个场景，4 个可见控件）最大偏差 `0px <= 3px`；`examples/shapes/design`（7 个场景，17 个可见控件）最大偏差 `0px <= 3px`；`examples/animean/design`（8 个场景，最多 119 个可见控件）最大偏差 `2px <= 3px`。
+  - 视觉像素对比：`examples/shapes` 独立渲染逐像素对比（`840×520` 画面，网页端 `?preview=1` 与 Qt 端 `vf_preview.exe --steps "shot:..."`），单通道容差 16 下差异像素 `4007 / 436800`（`0.917% < 2%`），容差 32 下 `2846 / 436800`（`0.652%`）。
+
+### 5. AnimeAn 业务层解耦结果（`animean/business/`）
+
+- 在 `animean/business/animeanbusiness.h` 与 `animean/business/animeanbusiness.cpp` 中抽出了不依赖 `QWidget` 的 `AnimeanBusiness` 类（继承 `QObject`），通过属性、信号与槽封装了绘图区适配器 `AnimePaintViewAdapter`、项目新建/打开/保存、图层增删移动显隐与树重排、工具切换与工具选项 JSON 生成、素材管理、历史撤销/重做、时间轴播放与洋葱皮、嵌入式 Python 脚本入口。
+- `animean/business/LayerRules.cmake` 强制检查业务层源码不包含 `QWidget` 等界面头文件。
+- `animean/CMakeLists.txt` 默认设置 `ANIMEAN_WITH_PYTHON=ON`，`animean/tests/business_tests.cpp` 中包含 `py::scoped_interpreter`（`pybind11`）驱动 `pyfile/*.py` 的测试用例；最后一次集成验收在 `ANIMEAN_WITH_PYTHON=OFF` 下编译 `animean/` 并运行 `ctest`，6/6 项测试（`projectio_roundtrip`、`animemodel_asset_gc`、`strokefit_zoom_invariance`、含 45 项无界面用例的 `business_headless`，以及 2 项分层违规负向编译测试 `violation_business_include_qwidget`、`violation_business_layer_rule`）全部通过。
+
+## 尚未完成的工作
+
+1. **`animean/mainwindow.cpp` 中剩余的界面与 Python UI 回调剥离**：`animean/mainwindow.cpp` 与 `animean/pythonbind/python_bindings.cpp` 中尚未剥离的 9 类直接操作画布/弹窗/光标/菜单的 Python UI 回调（`animean/business/README.md` 归纳的 `registerAnimeanUiOverlayCallback`、`registerAnimeanUiEditHandlesCallback` / `registerAnimeanUiEditHandleCallback`、`registerAnimeanUiCursorCallback`、`registerAnimeanUiMenuCallbacks`、`registerAnimeanUiLayerContextCallbacks`、`registerAnimeanUiDialogCallbacks`、`registerAnimeanUiFreezeCallbacks` / `registerAnimeanUiFreezeCallback`、`registerAnimeanUiPythonDebugCallback`、`registerAnimeanUiStatusCallback` 以及 `registerAnimeanUiWindowsCallback`、`registerAnimeanUiFillPaintModeCallback`、`registerAnimeanUiPadValueCallback`）、动态脚本菜单、Python 调试 REPL 面板、交互式导入弹窗等耦合尚未迁入 `AnimeanBusiness`。
+2. **`examples/animean/qt/app/` 接入真实 `AnimeanBusiness` 及 `ANIMEAN_WITH_PYTHON=ON` 最终重跑**：`examples/animean/qt/app/Connect.cpp` 目前只连接了示范桩代码（`LayerModel` + `CanvasWidget`，仅接线 `layerToggleVisibleRequested` 与 `setCanvasHostWidget`），尚未接入 `AnimeanBusiness`，也未将 `examples/animean/qt/ui/` 导出的新界面直接合入 `animean/` 主程序；`ANIMEAN_WITH_PYTHON=ON` 未在最终版本上重跑。
+3. **Tauri 桌面运行路径实机验证**：Tauri 桌面运行路径（`inTauri` / `isInTauri()` 分支，如素材库桌面读写、独立预览 `WebviewWindow`、导出目录选择与写盘）仅通过 `cargo check` 和浏览器/Node 端模拟验证，未实际启动 Tauri 桌面端验证。
+4. **批量跑用例偶发长卡顿根因排查**：批量跑用例时曾出现单轮 300 到 610 秒的卡顿，后来多轮没有再出现，根因未查明。
+5. **普通控件（非基础图形 `Shape` 的 `QWidget`）在导出成 Qt 时的旋转绘制**：基础图形 `Shape` 的旋转已在 Qt 端按 `QPainter` 旋转绘制；普通控件设置了旋转角度时，问题栏会给出提示，导出成 Qt 时暂不旋转 `QWidget`。
+6. **文档草稿的两个边界**：切走的未保存草稿所在小节被外部删掉后，这份草稿留在待保存队列里，保存画布、撤销和重做都会被拦住，要外部恢复小节或刷新页面才能继续；在 600ms 防抖期内直接关闭窗口没有 `beforeunload` 兜底，这段输入会丢失。

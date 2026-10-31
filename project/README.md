@@ -11,6 +11,7 @@ project/
   README.md                 # 本文件
   project.json              # 项目名、窗口及其页面文档
   ui/scene.json             # 画布：控件树、类型、位置、尺寸、外观设置
+  ui/presets.json           # 用户存下来的图形预设（第 10.4 节），没有可以不建
   logic/app.logic.yaml      # 逻辑：状态、条件、全局事件、每个控件的行为
   docs/panel.md             # 页面文档：每个控件的说明小节
   components/<类型名>/       # 控件的声明和实现
@@ -18,9 +19,10 @@ project/
     index.js
     style.css
   effects/<效果名>/          # 需要翻译的效果（第 9.4 节），没有可以不建
-  ui/presets.json           # 用户存下来的图形预设（第 10.4 节），没有可以不建
     effect.json
     index.js
+  functions/<函数名>.js      # 逻辑纯 JS 函数（第 11.5 节），没有可以不建
+  actions/<动作名>.js        # 动作实现脚本（第 11.8 节），没有可以不建
 ```
 
 同一个控件在三处用同一个 **ID** 对应：`scene.json` 的 `nodes.<ID>`、`app.logic.yaml` 的 `objects.<ID>`，以及它在页面文档中的说明小节。
@@ -124,8 +126,8 @@ User referenced "control=hintBox; type=Container (unconverted); path=panelWindow
 | `type` | 类型名，与文件夹名相同，用大写字母开头的英文 |
 | `label`、`description` | 在工具的素材栏中显示的名字和说明 |
 | `defaultSize` | 从素材栏拖入时的默认尺寸 |
-| `props` | 属性及其类型（`string`、`number`、`boolean`）和默认值。标了 `"logic": true` 的属性可以在 YAML 的 `props` 中由表达式控制；没标的只能在 `scene.json` 中写固定值 |
-| `bind` | 可以双向绑定的值的类型，目前只支持 `"string"`；不能绑定的控件不写这一项 |
+| `props` | 属性及其类型（`string`、`number`、`boolean`、`array`、`object`）和默认值。标了 `"logic": true` 的属性可以在 YAML 的 `props` 中由表达式控制；没标的只能在 `scene.json` 中写固定值 |
+| `bind` | 可以双向绑定的值的类型（`"string"`、`"number"` 或 `"boolean"`）；不能绑定的控件不写这一项 |
 | `events` | 控件自己会发出的事件名，例如输入框的 `["change"]`。**鼠标事件不用写**，运行层会自动提供 |
 | `children` | 是否可以包含子节点 |
 | `qt` | 这个控件导出成 Qt 时对应什么，见第 9.5 节。不导出可以不写 |
@@ -220,6 +222,7 @@ objects:              # 每个控件的行为，键是控件 ID
 | `number` | 数字 |
 | `boolean` | 真或假 |
 | `enum` | 几个固定值之一，另外用 `values: [a, b, c]` 列出 |
+| `array` | 数组，见第 11.4 节 |
 
 引用时用点号连接，例如 `lamps.a`、`panel.message`。
 
@@ -233,9 +236,7 @@ objects:              # 每个控件的行为，键是控件 ID
 - 条件代号直接写：`run`、`allOffButton.canTurnOff`
 - 字符串用单引号：`'none'`
 - 数字、`true`、`false`
-- 运算：`==`、`!=`、`and`、`or`、`not`，可以用括号
-
-没有算术运算、大小比较和字符串拼接。
+- 运算：`==`、`!=`、`and`、`or`、`not`，以及第 11.5 节的大小比较（`<`、`<=`、`>`、`>=`）、加减与拼接（`+`、`-`）、三目条件（`? :`），可以用括号
 
 固定的文字必须加引号。写在 YAML 里时，如果表达式以引号开头，或包含 `: `、` #`，整个表达式要再用双引号括起来，例如 `text: "'请先输入标题'"`。
 
@@ -279,13 +280,14 @@ conditions:
 | --- | --- |
 | `app.start` | 预览开始时，以及点“重新开始”时 |
 | `window.click` | 设计窗口里发生任何点击之后（先处理被点控件的 `click`，再处理它） |
+| `clock.tick` | 预览时钟推进时（见第 11.9 节） |
 | 自定义名字，如 `allOff` | 被某个步骤用 `emit` 触发时 |
 
-全局事件里还有一种交给业务处理的“业务事件”，写法不同，见第 9.2 节。
+全局事件里还有交给业务处理的“业务事件”（`owner: business`，见第 9.2 节）和由业务触发的“请求事件”（`owner: ui`，见第 11.7 节）。
 
 ### 5.6 步骤
 
-事件的内容是一个步骤列表，按顺序执行。有三种步骤：
+事件的内容是一个步骤列表，按顺序执行。基础步骤如下（更多步骤如 `push`、`remove`、`move`、`fn`、`openWindow`、`closeWindow`、`call` 见第 11 节）：
 
 ```yaml
 - set: panel.message = '已全部关闭'      # 给状态赋值，等号左边必须是状态路径
@@ -330,7 +332,7 @@ conditions:
 
 ## 7. 改完后的检查清单
 
-- [ ] `scene.json` 是合法的 JSON；节点的 `type` 在 `components/` 中有对应的文件夹。
+- [ ] `scene.json` 是合法的 JSON；节点的 `type` 在 `components/` 中有对应的文件夹，或是内置类型 / 17 种标准控件之一。
 - [ ] `scene.json` 中节点的 `props` 只用了控件声明里有的属性。
 - [ ] YAML `props` 中除 `visible` 外，只用了声明里标了 `"logic": true` 的属性。
 - [ ] YAML `events` 中除鼠标事件外，只用了控件声明过的事件。
@@ -348,7 +350,10 @@ conditions:
 
 以下内容在设计文档中有，但当前原型没有实现，请不要使用：
 
-- 普通控件（非基础图形的 `QWidget`）在导出成 Qt 时的旋转绘制（基础图形 `Shape` 的旋转已按 `QPainter` 导出，详见第 10.5 节）
+- 普通控件（非基础图形 `Shape` 的 `QWidget`）在导出成 Qt 时的旋转绘制（基础图形 `Shape` 的旋转已按 `QPainter` 导出，详见第 10.5 节）
+- 跨重启持久化的 `.designer/history/` 版本目录及按单小节/单条目独立恢复版本列表（当前 `app/src/history.ts` 提供进程内 200 步撤销/重做栈与顶部“历史”菜单跳转）
+- YAML 条目/整文件锁定标记（`# 🔒`）、`component.json` 锁定以及 `.designer/locks.json` 快照比对与“恢复 / 查看差异 / 保留修改”按钮（当前已实现画布节点锁定 `ui/scene.json` 的 `locked: true` 与说明文档小节锁定 `<!-- 🔒 ... -->`）
+- 在 `components/<类型名>/index.js` 中直接 `import` 外部 npm 包并由工具打包、运行时自动测量文字溢出提示、导出为独立 Web 项目与 iOS 版
 
 ## 9. 导出成 Qt 用到的写法
 
@@ -426,7 +431,7 @@ objects:
 1. **过渡效果（`kind: "visibility"` 或 `"transition"`）**：控制控件显示和隐藏时的过渡动画。
 2. **绘制效果（`kind: "paint"`）**：自定义绘制控件内容（如调色盘、曲线图）。
 
-#### 过渡效果（`kind: "visibility"`）
+#### 过渡效果（`kind: "visibility"` 或 `"transition"`）
 
 ```json
 {
@@ -463,7 +468,7 @@ export default function play(el, { showing }) {
       effects:
         visible: PanelExpand
   ```
-- 导出成 Qt 后，在 `ui_interface/UiEffects.h` 生成 `vf::<Name>Effect<0xHash>`（虚函数 `QAbstractAnimation *create(QWidget *target, bool showing)`）；没有翻译（或加 `--no-effects`）时直接切到结束状态。
+- 导出成 Qt 后，在 `ui_interface/UiEffects.h` 生成 `vf::<Name>Effect<0xHash>`（纯虚函数 `virtual QAbstractAnimation *createTransition(QWidget *target, bool showing) = 0;`）；没有翻译（或加 `--no-effects`）时直接切到结束状态。
 
 #### 绘制效果（`kind: "paint"`）
 
@@ -477,16 +482,16 @@ export default function play(el, { showing }) {
 }
 ```
 
-`index.js` 默认导出一个挂载绘制函数，签名与控件类似：
+`index.js` 默认导出一个绘制函数，每次节点的属性或尺寸更新时由运行层调用：
 
 ```js
-export default function paint(el, { props, emit, mode }) {
-  // 在 el 内用 Canvas / SVG 绘制；返回 { update(props), destroy() }
+export default function paint(el, { props, width, height }) {
+  // el 是节点的 .vf-body 容器；根据当前 props 与宽高 width/height 在 el 内用 Canvas 2D 或 SVG 绘制
 }
 ```
 
 - 可以在控件 `component.json` 中写 `"effects": { "paint": "ColorPickerDraw" }`，也可以在 YAML 的 `objects.<ID>.effects.paint` 中为某个节点指定。
-- 导出成 Qt 后，在 `ui_interface/UiEffects.h` 生成 `vf::<Name>Effect<0xHash>`（虚函数 `void paint(QPainter *painter, const QRect &rect, const QVariantMap &props)`）；没有翻译（或加 `--no-effects`）时显示虚线占位框。
+- 导出成 Qt 后，在 `ui_interface/UiEffects.h` 生成 `vf::<Name>Effect<0xHash>`（纯虚函数 `virtual void paint(QPainter *painter, const QRect &rect, const QVariantMap &props) = 0;`）；没有翻译（或加 `--no-effects`）时显示虚线占位框。
 
 #### 名 + 哈希与成对收藏
 
@@ -611,7 +616,7 @@ export default function paint(el, { props, emit, mode }) {
 | `startNode`、`endNode` | string | 空 | 这一头挂在哪个节点上。挂着时位置由那个节点决定，节点移动时线跟着走；`x1` 等只在节点被删掉后使用 |
 | `startSide`、`endSide` | string | `auto` | 挂在节点的哪里：`top`、`right`、`bottom`、`left` 是那一边的中点；`auto` 是朝着另一头自动选边；`outline` 是外轮廓上的某一点，见下一行。形状的“边中点”和外轮廓都按形状真实的轮廓算（三角形的左边中点在斜边上），不按方框 |
 | `startAt`、`endAt` | string | 空 | `side` 为 `outline` 时，这一点在节点方框里的相对位置，`x,y` 形式，0 到 1，例如 `0.959,0.356`。节点缩放后按这个比例找回位置，再贴到轮廓上 |
-| `bends` | string | 空 | 折线手动调整过的拐点，`x,y;x,y` 的形式，相对于线的父节点，不含两头。空表示由工具自动走线。只对 `route: elbow` 有效 |
+| `bends` | string | 空 | 线条手动添加或调整过的拐点，`x,y;x,y` 的形式，相对于线的父节点，不含两头。空表示由工具自动走线（`straight`、`elbow`、`curved` 均支持） |
 | `route` | string | `straight` | `straight` 直线、`elbow` 折线（只走水平和竖直）、`curved` 曲线 |
 | `startCap`、`endCap` | string | `none` | 端头：`none`、`arrow` 线形箭头、`triangle` 实心箭头、`circle` 圆点、`diamond` 菱形、`bar` 短横 |
 | `stroke`、`strokeWidth`、`strokeStyle`、`opacity` | | 同形状 | 线的颜色、粗细、线型、不透明度 |
@@ -650,7 +655,7 @@ export default function paint(el, { props, emit, mode }) {
 
 ## 11. 排版、标准控件、窗口分区与扩展逻辑
 
-本节列出在基础规则之上新增的语言规格：六种排版与尺寸规则（含换行 `Flow` / `wrap`）、主窗口分区、停靠面板与菜单全部形态、16 种自带标准控件（含由数据生成的表单 `DataForm` 与列表/树拖拽重排）、数组状态、逻辑 JS 函数、多窗口与模态对话框、带参事件与请求事件、动作调用与模拟、以及预览时钟（`clock`）。这些写法在工具预览和导出成 Qt 时具有一致的行为。
+本节列出在基础规则之上新增的语言规格：六种排版与尺寸规则（含换行 `Flow` / `wrap`）、主窗口分区、停靠面板与菜单全部形态、17 种自带标准控件（含由数据生成的表单 `DataForm`、浮动嵌入框 `FloatBox` 与列表/树拖拽重排）、数组状态、逻辑 JS 函数、多窗口与模态对话框、带参事件与请求事件、动作调用与模拟、以及预览时钟（`clock`）。这些写法在工具预览和导出成 Qt 时具有一致的行为。
 
 ### 11.1 六种排版与控件尺寸规则
 
@@ -700,7 +705,7 @@ export default function paint(el, { props, emit, mode }) {
 
 ### 11.2 主窗口分区、停靠面板与菜单全部形态
 
-根窗口 `Window` 可以配置菜单栏（`menuBar`）、状态栏（`statusBar`）、中央区（`central`）和四个方向的停靠面板（`docks`，对应 `left`、`right`、`top`、`bottom` 四个停靠区），并可用 `dockLayout` 描述停靠区的厚度、并排分栏（`groups`）、叠页签（`tabs` + `active`）和独立浮窗（`floating`）。导出成 Qt 时对应 `QMainWindow` 的 `QMenuBar`、`QStatusBar`、`centralWidget` 和 `QDockWidget`：
+根窗口 `Window` 可以配置菜单栏（`menuBar`）、状态栏（`statusBar`）、中央区（`central`）和四个方向的停靠面板（`docks`，对应 `left`、`right`、`top`、`bottom` 四个停靠区），并可用 `dockLayout` 描述停靠区的厚度、并排分栏（`groups`）、叠页签（`tabs` + `active`）和独立浮窗（`floating`）。导出成 Qt 时对应 `QMainWindow` 的 `QMenuBar`、`QStatusBar`、`centralWidget` 和 `QDockWidget`（配自定义标题栏 `setTitleBarWidget` / `DockEntry` 与分隔条 `DockSplitterEntry` / `rebuildDockSplitters`，由 `Ui.cpp` 中的停靠逻辑按 `dockLayout` 统一驱动）：
 
 ```json
 "window": {
@@ -745,11 +750,11 @@ export default function paint(el, { props, emit, mode }) {
 ```
 
 - 停靠面板节点的 `type` 为 `"Dock"`，用 `dockArea` 指定默认停在 `"left"`、`"right"`、`"top"` 或 `"bottom"`，用 `title` 指定标题栏文字，`headerHeight` 指定标题栏高度（默认 26）。
-- 在预览模式和导出的 Qt 界面中，停靠面板支持完整的 `QMainWindow + QDockWidget` 停靠规则：
-  1. **四边吸附（`move`）**：按住面板标题栏拖向主窗口左、右、上、下四边，吸附到对应停靠区。
-  2. **区内并排分栏（`split`）**：拖向另一个已停靠面板的上/下半区（左/右停靠区）或左/右半区（上/下停靠区），在同一停靠区内并排分栏显示。
-  3. **叠成页签（`tabify` / `tab`）**：拖向另一个已停靠面板的中央，两个面板叠成一组页签，点击标题栏上的页签按钮切换当前显示的面板。
-  4. **拖出成浮窗与恢复（`float` / `restore`）**：点击标题栏上的 `⧉` 按钮（或双击标题栏、或拖到空白处）将面板浮出为独立浮窗，浮窗右下角可拖拽缩放大小；点击 `↙` 按钮（或再次双击标题栏）恢复回原停靠区。
+- 在预览模式和导出的 Qt 界面中，停靠面板支持完整的停靠操作与同一套落点判定规则（`app/src/dock.ts` 的 `computeDropAction` 与 `Ui.cpp` 的 `Ui::Private::dockDropActionAt`；编辑模式下往主窗口拖放 `Dock` 时由 `app/src/model.ts` 的 `computeDockDropTarget` 判定四侧停靠区）：
+  1. **四边吸附（`move`）**：按住面板标题栏拖到主窗口内侧边缘带（左右距窗口边缘 `28px` 以内，上下含菜单栏/状态栏偏移共 `56px` 以内），吸附到对应停靠区。
+  2. **区内并排分栏（`split`）**：拖向另一个可见已停靠面板的四边边缘带（沿该停靠区主分栏轴方向——左右停靠区默认垂直 `vertical`、上下停靠区默认水平 `horizontal`，或按当前 `splitOrientation`——前后边缘比例为 `25%` 即 `0.25`；沿次分栏轴方向前后边缘比例为 `22%` 即 `0.22`），在同一停靠区内按 `before` / `after`（`horizontal` / `vertical`）拆分为并排或上下分栏。
+  3. **叠成页签（`tabify` / `tab`）**：拖向另一个可见已停靠面板的中央区域，叠成一组页签，点击标题栏上的页签按钮切换当前显示的面板（若拖在同一个页签组 `sameTabGroup` 的标题栏及下方 `8px` 带内即 `headerHeight + 8` 释放，同样归入 `tabify` 且同组保持不变，避免点击或微拖页签时误触发上边缘分栏）。
+  4. **拖出成浮窗与恢复（`float` / `restore`）**：点击标题栏上的浮出按钮（网页端显示 `⧉`，Qt 端显示 `浮出`）、双击标题栏、按住 `Shift` 拖拽释放、拖出主窗口外或拖到中央区空白处释放，均将面板浮出为独立浮窗（从停靠区拖出时浮窗初始宽高限制在 `180~320 × 120~440` 之间，浮窗右下角可拖拽缩放大小）；点击还原按钮（网页端显示 `↙`，Qt 端显示 `还原`）或再次双击标题栏恢复回原停靠区。
   5. **拖动分隔条改大小（`resize` / `resizeSplit`）**：拖动停靠区与中央区之间的分隔条调整停靠区宽度/高度，或拖动并排面板之间的分隔条调整各分栏尺寸。
   6. **关闭与从菜单重新打开（`close` / `open`）**：点击标题栏上的 `×` 按钮关闭面板；菜单项如果写了 `"dock": "<停靠面板ID>"`，点击该菜单项会自动切换对应停靠面板的显示和隐藏，并同步菜单项的勾选状态。
 - 控件所在面板切到后台页签、关闭、浮出或被重排时，控件的悬停和按下状态随之清除，切回来显示的是正常状态。
@@ -759,7 +764,7 @@ export default function paint(el, { props, emit, mode }) {
   1. **子菜单**：菜单项写 `items` 数组即可递归嵌套多层子菜单。
   2. **分隔线**：写 `"separator": true` 或 `"kind": "separator"`。
   3. **快捷键**：写 `"shortcut": "Ctrl+N"` 等，在菜单项右侧显示快捷键提示，在预览模式与导出后的 `QAction` 中均可按键触发。
-  4. **可勾选菜单项**：写 `"checkable": true`（或 `"kind": "check"`）与初始 `"checked"`，也可在 YAML `objects.<菜单项ID>.props.checked` 中由表达式驱动，或在 `events.toggle` / `events.click` 中响应。
+  4. **可勾选菜单项**：写 `"checkable": true`（或 `"kind": "check"`）与初始 `"checked"`，也可在 YAML `objects.<菜单项ID>.props.checked` 中由表达式驱动，或在 `events.click` 中响应（通过 `value` 读取切换后的勾选布尔值）。
   5. **互斥单选组**：写 `"kind": "radio"` 与 `"group": "<组名>"`，同组菜单项互斥单选（导出成 Qt 时生成 `QActionGroup`）。
   6. **停靠面板开关**：菜单项如果写了 `"dock": "<停靠面板ID>"`，点击该菜单项会自动切换对应停靠面板的显示和隐藏，并同步菜单项的勾选状态；面板隐藏后，中央区自动扩大填满空出的位置。
   7. **右键菜单（`contextMenu`）**：任何控件节点上可以写 `"contextMenu": [ ...菜单项... ]`，在预览模式右键点击该控件（或导出成 Qt 后触发 `customContextMenuRequested`）时弹出。
@@ -888,7 +893,7 @@ export default function syncPresetDimensions(state, param) {
 
 ### 11.7 带参数的事件与请求事件（业务 → 界面）
 
-- **业务事件带参数（界面 → 业务）**：业务事件可以用 `params` 声明参数类型（`string`、`number`、`boolean`），触发时用 `emit: { event: 事件名, args: { 参数名: 表达式 } }` 传入；导出后在 `BusinessInterface` 的信号上生成对应参数，在 `simulate` 步骤中可通过 `param.<参数名>` 读取。
+- **业务事件带参数（界面 → 业务）**：业务事件可以用 `params` 声明参数类型（`string`、`number`、`boolean`），触发时用 `emit: { name: 事件名, args: { 参数名: 表达式 } }`（或 `{ emit: 事件名, args: { 参数名: 表达式 } }`）传入；导出后在 `BusinessInterface` 的信号上生成对应参数，在 `simulate` 步骤中可通过 `param.<参数名>`（或直接用 `<参数名>`）读取。
 - **请求事件（业务 → 界面）**：当业务主动通知界面做一件事（如在状态栏显示提示、跳到指定页）时，在顶层 `events` 下定义 `owner: ui` 的请求事件：
   ```yaml
   events:
@@ -929,13 +934,13 @@ actions:
   1. **真跑（`real`）**：执行 `actions/<动作名>.js` 默认导出的函数（支持同步返回或异步返回 `Promise`），把返回值作为 `result` 传给 `onSuccess`（抛出异常或 `Promise` reject 则把错误消息传给 `onError`）。
   2. **模拟成功（`success`）**：不执行实现文件，把 `mockResult` 作为 `result` 执行 `onSuccess`。
   3. **模拟失败（`error`）**：不执行实现文件，把 `mockError` 作为 `error.message` 执行 `onError`。
-- 导出成 Qt 后，每个动作都会在 `vf::BusinessInterface` 上暴露信号 `action<Name>Requested(const QVariantMap &input)` 以及完成回调 `finish<Name>Success(const QVariant &result)` 和 `finish<Name>Error(const QString &message)`：业务连接该信号即可接管动作并在完成后回调成功或失败；若业务未连接该信号，则自动回退到内置的 `actions/<动作名>.js` 或模拟模式。
+- 导出成 Qt 后，每个动作都会在 `vf::BusinessInterface` 上暴露信号 `action<Name>Requested(const QVariantMap &input)` 以及完成回调 `finish<Name>Success(const QVariantMap &result)` 和 `finish<Name>Error(const QString &message)`：业务连接该信号即可接管动作并在完成后回调成功或失败；若业务未连接该信号，则自动回退到内置的 `actions/<动作名>.js` 或模拟模式。
 
 ### 11.9 预览时钟（`clock`）与列表/树拖拽重排
 
 - **内置只读时钟状态 `clock`**：
   - 在任何表达式中都可以直接读取 `clock`（或 `clock.ms`，当前毫秒数，预览开始时为 `0`）以及 `clock.sec`（当前秒数，`Math.floor(clock / 1000)`），无需在 `state` 中声明。
-  - 如果在顶层 `events` 下定义了全局事件 `clock.tick`，每次预览时钟推进时会自动触发该事件（参数 `param` 含 `{ ms, sec }`），适合用来驱动动画时间轴播放等随时间推进的界面逻辑。
+  - 如果在顶层 `events` 下定义了全局事件 `clock.tick`，每次预览时钟推进时会自动触发该事件（参数 `param` 含 `{ ms, prevMs, deltaMs }`，`value` 为当前毫秒数 `ms`），适合用来驱动动画时间轴播放等随时间推进的界面逻辑。
   - 在工具预览栏中可以直接查看、输入毫秒数、单步推进（`+100ms`）或开启/暂停自动走表；在命令行测试步骤中可用 `clock:<毫秒数>` 直接拨到指定时刻。
 - **列表与树的拖拽调整行顺序（`reorder`）**：
   - 在 `List` 或 `Tree` 的 `props` 中设置 `"draggable": true`，用户在预览模式（或导出后的 Qt `QListWidget` / `QTreeWidget`）中即可上下拖拽行项调整顺序。
@@ -957,6 +962,6 @@ actions:
 
 - **往布局容器里拖与重排**：从左侧素材栏把控件拖到 `VBox`、`HBox`、`Flow`、`Grid`、`Form`、`Stack` 或开启了 `layout` 的 `Container` / `Dock` / `Dialog` 上时，画布会高亮显示插入线或网格目标格，松开鼠标即按对应位置插入；在画布上拖动已排版的子控件可调整它在父容器里的顺序。
 - **右侧“布局”页签**：选中容器可切换排版方式（自由定位 / 竖排 / 横排 / 换行 / 网格 / 表单 / 层叠）、调整内边距 `padding` 与间距 `gap`、重排子控件并修改每个子控件的主轴伸缩 `stretch`；选中任意子控件可设置尺寸规则 `SizePolicy`（`horizontal`、`vertical`、`stretch`、`preferredWidth/Height`、`minWidth/Height`、`maxWidth/Height`、`fixedWidth/Height`）与网格单元格（`row`、`column`、`rowSpan`、`columnSpan`）；选中 `Dock` 停靠面板可切换停靠方向（`dockArea`: `left` / `right` / `top` / `bottom`）并调整在 `window.docks` 中的顺序；选中 `Window` 可指定中央区 `central` 与状态栏 `statusBar`。
-- **右侧“菜单”页签**：可直接增删改排主窗口顶部菜单栏（`window.menuBar`）与各菜单项（设置 `id`、`text`、`shortcut`、`checkable`、`checked`、关联停靠面板 `dock` 或触发全局事件 `emit`），也可一键把窗口中的 `Dock` 绑定到“视图”菜单。
+- **右侧“菜单”页签**：可直接增删改排主窗口顶部菜单栏（`window.menuBar`）的顶级菜单与一级菜单项（设置 `id`、`text`、`shortcut`、`checkable`、`checked`、关联停靠面板 `dock` 或触发全局事件 `emit`），也可一键把窗口中的 `Dock` 绑定到“视图”菜单（分隔线、多级子菜单、互斥单选组及 `contextMenu` / `popupMenu` 直接在 `ui/scene.json` 中编写）。
 - **右侧“状态”页签**：可新增或删除状态变量，一键把任一状态标注为“界面自管（`owner: ui`）”或“业务管（`owner: business`）”，并可添加业务事件与全局条件。
 - **锁定与撤销/重做**：被锁定的节点（含继承了锁定父容器的子节点）禁止一切布局、尺寸、停靠、属性或菜单修改；所有通过面板和画布拖拽执行的修改均自动记入撤销/重做历史（`Ctrl+Z` / `Ctrl+Y`）。
