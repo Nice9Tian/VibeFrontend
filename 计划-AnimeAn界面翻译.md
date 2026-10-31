@@ -69,7 +69,7 @@
 
 ## 假设
 
-- **导出物是 Qt 6 Widgets 的 C++ 工程，用 CMake 构建，停靠用与工具端共用布局模型的停靠宿主。**
+- **导出物是 Qt 6 Widgets 的 C++ 工程，用 CMake 构建，停靠用 Qt 自带的停靠面板（`QMainWindow` + `QDockWidget`）。**
   出处：验证：`ls /c/Qt/6.9.1/mingw_64/bin` 中有 `Qt6Widgets.dll`、`Qt6Qml.dll`、`Qt6Svg.dll`；`/c/Qt/Tools` 下有 `CMake_64`、`Ninja`、`mingw1310_64`。AnimeAn 的 `CMakeLists.txt:33` 是 `find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets OpenGLWidgets)`。
 - **试用的界面就是 AnimeAn 新界面的第一版。** 面板划分沿用现在的：工具、工具选项、图层、素材、历史、时间轴，中间是绘图区，另有菜单栏和新建项目对话框。第一版由我照这个划分写出来，长相和细节你再改。现在的样子见 `参考截图/AnimeAn-主窗口.png` 和 `参考截图/AnimeAn-时间轴.png`。
   出处：你说“就用AnimeAn来试”；规模见界面盘点报告第 1、2 节（子 Agent 只读调查）：8 个 `QDockWidget`、主菜单栏静态动作 27 个、常驻叶子控件约 60 个。“第一版由我写”是我的假设。
@@ -100,11 +100,11 @@
 
 工具自带 17 种标准控件（`app/standard/index.ts`），每种有三样东西：网页实现、对应的 Qt 类、两边共用的属性和事件声明。包括：文字（`Label`）、按钮（`Button`，含可勾选和带图标）、输入框（`TextInput`）、多行文本（`TextArea`）、数字框（`SpinBox`）、滑条（`Slider`）、滚动条（`ScrollBar`）、下拉框（`ComboBox`）、复选框（`CheckBox`）、页签栏（`TabBar`）、列表（`List`）、树（`Tree`）、由数据生成的表单（`DataForm`）、对话框按钮组（`DialogButtonBox`）、空白伸缩条（`Spacer`）、分隔线（`Separator`）、浮动嵌入框（`FloatBox`）。
 
-素材栏相应分为基础素材（容器、外部容器、6 种布局容器、停靠面板 `Dock`、对话框 `Dialog`）、标准控件、收藏的素材、项目素材四栏（下方另有基础图形、流程图、线条与我的预设）。设计文档第 1.1 节与第 3.2 节已同步更新。
+素材栏主体分为基础素材（`#palette-basic`：容器 `Container`、外部容器 `External`、6 种布局容器、停靠面板 `Dock`、对话框 `Dialog`）、收藏的素材（`#palette-library`）、项目素材（`#palette-project`：先列出 17 种内置标准控件并标“（标准）”，随后列出本项目 `components/` 中的自定义控件）三栏，下方另有基础图形、流程图、线条与我的预设。设计文档第 1.1 节与第 3.2 节已同步更新。
 
 ### 3. Qt 停靠
 
-工具自己实现一套停靠（`app/src/dock.ts`），规则照 Qt 的来：四个停靠区、面板可以并排、叠成页签、拖出成浮窗、关闭后从菜单重新打开、拖动分隔条调整大小。导出成 Qt 时由界面绑定层的停靠宿主 `VfDockHostWidget`（`app/qt-templates/generated/ui_binding/Ui.cpp`）驱动，面板的排列和拖拽落点用同一份描述（`DockLayoutSpec`）和同一套几何规则。浮动嵌入框（`FloatBox`）做成内置标准容器，网页和 Qt 各实现一次，放在工具自带的标准控件包里。
+工具自己实现一套停靠（`app/src/dock.ts`），规则照 Qt 的来：四个停靠区、面板可以并排、叠成页签、拖出成浮窗、关闭后从菜单重新打开、拖动分隔条调整大小。导出成 Qt 时对应 `QMainWindow` + `QDockWidget`（配自定义标题栏 `setTitleBarWidget` / `DockEntry` 与分隔条 `DockSplitterEntry` / `rebuildDockSplitters`，见 `app/qt-templates/generated/ui_binding/Ui.cpp`），面板的排列和拖拽落点用同一份描述（`DockLayoutSpec`）和同一套几何规则（`dock.ts` 的 `computeDropAction` 与 `Ui.cpp` 的 `Ui::Private::dockDropActionAt`）。浮动嵌入框（`FloatBox`）做成内置标准容器，网页和 Qt 各实现一次，放在工具自带的标准控件包里。
 
 ### 4. 什么能机械翻译，什么标成“需要翻译”
 
@@ -174,15 +174,15 @@
 | 过渡效果 | 绑定层 → 效果 | 标为“需要翻译”的动画 | 控件显示/隐藏切换时，调用它的过渡效果创建 `QAbstractAnimation` |
 | 绘制效果 | 绑定层 → 效果 | 标为“需要翻译”的绘制 | 取色器需要重画时，传入 `QPainter`、画布区域和当前的属性字典 |
 
-两个接口层生成出来都是带类型的 C++ 头文件（`business_interface/UiBusiness.h` 与 `ui_interface/UiEffects.h`）。
+两个接口层生成出来都是带类型的 C++ 头文件（`business_interface/BusinessInterface.h` 与 `ui_interface/UiEffects.h`）。
 
 **业务接口层按名字和类型对接。** 每个事件一个信号，每个状态一对读写函数，每个外部容器一个放入控件的函数。事件的参数、状态的类型改了，或者某一项被删掉、改名，业务那边的连接代码自然编译不过。界面换颜色、调布局、改动画，都不影响它。每次导出另附一份接口变化清单，写明增加、删除、改动了哪些项。
 
 **界面接口层按“名称 + 哈希”对接。** 每个效果要实现的抽象类，名字里带着哈希，哈希由这个效果在工具里的实现算出来。界面效果层里的 Qt 实现继承这个带哈希的类。工具里这个效果改了，重新导出后接口里的哈希就变了，照着旧哈希写的实现没有可以继承的类，编译直接失败，并指到出问题的那个实现。
 
 ```cpp
-// 界面效果层里的一个实现。0x90a88836 是翻译时工具里这个效果的哈希
-class PanelExpandEffect : public vf::PanelExpandEffect<0x90a88836>
+// 界面效果层里的一个实现。0x4c42b870 是翻译时工具里这个效果的哈希
+class PanelExpandAnimation : public vf::PanelExpandEffect<0x4c42b870>
 {
 public:
     QAbstractAnimation *createTransition(QWidget *target, bool showing) override;
@@ -345,48 +345,51 @@ error: static assertion failed: [VF-EFFECT-HASH] 效果 PanelExpand 在工具里
 
 | 能力 | 实现位置 | 结果 |
 | --- | --- | --- |
-| 六种排版与尺寸规则 | `app/src/model.ts:952-1350`、`app/qt-templates/generated/ui_binding/Ui.cpp:995-1155` | 支持竖排 `VBox`、横排 `HBox`、换行 `Flow`（含 `HBox` 的 `wrap: true` 与 Qt 端 `VfFlowLayout`）、网格 `Grid`、表单 `Form`、层叠 `Stack`，以及水平/垂直 `SizePolicy`（`preferred`/`minimum`/`maximum`/`fixed`/`expanding`）和 `stretch` 伸缩因子 |
-| 17 种内置标准控件 | `app/standard/index.ts`、`app/qt-templates/generated/ui_binding/Ui.cpp` | 内置 `Label`、`Button`、`TextInput`、`TextArea`、`SpinBox`、`Slider`、`ScrollBar`、`ComboBox`、`CheckBox`、`TabBar`、`List`、`Tree`、`DataForm`、`DialogButtonBox`、`Spacer`、`Separator`、`FloatBox`；`List` 与 `Tree` 支持 `draggable: true` 行拖拽重排并发出 `reorder` 事件（`{ from, to }`）；`DataForm` 根据 JSON 描述动态生成参数控件并支持 `visible_when` 条件显隐 |
-| 菜单全部形态 | `app/src/model.ts:258-286`、`app/src/main.ts`、`Ui.cpp:2002-2185` | 支持顶部菜单栏 `menuBar`、无限层级子菜单、分隔线、快捷键 `shortcut`、可勾选项 `checkable`、单选互斥组 `group`（Qt 侧 `QActionGroup`）、停靠面板显隐绑定 `dock`、右键菜单 `contextMenu`、按钮弹出菜单 `popupMenu` |
-| 数组状态与纯逻辑 JS 函数 | `app/src/runtime.ts:1373-1519`、`app/src/check.ts:624-716` | 支持 `array` 状态及 `push`/`remove`/`move`/下标赋值；支持 `fn` 调用 `functions/<函数名>.js`，静态词法检查与运行时全局名遮蔽双重禁止访问浏览器 DOM/BOM/网络对象 |
-| 多窗口、业务/请求事件、动作与时钟 | `app/src/runtime.ts:690-750, 1520-1695`、`app/src/export/qt-code.ts` | 支持 `openWindow`/`closeWindow`（Qt 侧模态 `QDialog` 原生关闭同步回写窗口栈）；支持 `owner: business` 业务事件、`owner: ui` 请求事件、异步动作 `actions`（Qt 侧 `action<Name>Requested` / `finish<Name>Success` / `finish<Name>Error`）及预览时钟 `clock`（`clock.ms`、`clock.sec`、`clock.tick`） |
+| 六种排版与尺寸规则 | `app/src/model.ts`、`app/qt-templates/generated/ui_binding/Ui.cpp` | 支持竖排 `VBox`、横排 `HBox`、换行 `Flow`（含 `HBox` 的 `wrap: true` 与 Qt 端 `VfFlowLayout`）、网格 `Grid`、表单 `Form`、层叠 `Stack`，以及水平/垂直 `SizePolicy`（`preferred`/`minimum`/`maximum`/`fixed`/`expanding`）和 `stretch` 伸缩因子 |
+| 17 种内置标准控件 | `app/standard/index.ts`、`app/qt-templates/generated/ui_binding/Ui.cpp` | 内置 `Label`、`Button`、`TextInput`、`TextArea`、`SpinBox`、`Slider`、`ScrollBar`、`ComboBox`、`CheckBox`、`TabBar`、`List`、`Tree`、`DataForm`、`DialogButtonBox`、`Spacer`、`Separator`、`FloatBox`；`List` 与 `Tree` 支持 `draggable: true` 行拖拽重排并发出 `reorder` 事件（`{ from, to }`）；`DataForm`（Qt 端 `QFrame` + `rebuildDataForm`/`syncDataFormValues`）根据 JSON 描述动态生成参数控件并支持 `visible_when` 条件显隐 |
+| 菜单全部形态 | `app/src/model.ts`、`app/src/main.ts`、`app/qt-templates/generated/ui_binding/Ui.cpp` | 支持顶部菜单栏 `menuBar`、多级子菜单、分隔线、快捷键 `shortcut`、可勾选项 `checkable`、单选互斥组 `group`（Qt 侧 `QActionGroup`）、停靠面板显隐绑定 `dock`、右键菜单 `contextMenu`、按钮弹出菜单 `popupMenu` |
+| 数组状态与纯逻辑 JS 函数 | `app/src/runtime.ts`、`app/src/check.ts` | 支持 `array` 状态及 `push`/`remove`/`move`/下标赋值；支持 `fn` 调用 `functions/<函数名>.js`，静态词法检查与运行时全局名遮蔽双重禁止访问浏览器 DOM/BOM/网络对象 |
+| 多窗口、业务/请求事件、动作与时钟 | `app/src/runtime.ts`、`app/src/export/qt-code.ts` | 支持 `openWindow`/`closeWindow`（Qt 侧模态 `QDialog` 原生关闭同步回写窗口栈）；支持 `owner: business` 业务事件、`owner: ui` 请求事件、异步动作 `actions`（Qt 侧 `action<Name>Requested` / `finish<Name>Success` / `finish<Name>Error`）及预览时钟 `clock`（`clock.ms`、`clock.sec`、`clock.tick`） |
 
-验证：`npm run test-step2` 5/5 通过。
+验证：`node scripts/test-step2.ts` 5/5 通过。
 
 ### 2. Qt 停靠与浮动嵌入框（对应“步骤”第 3 项）
 
-- 工具端（`app/src/dock.ts`）与 Qt 导出端（`VfDockHostWidget`，`app/qt-templates/generated/ui_binding/Ui.cpp:2349-3078`）共用同一份停靠排列描述 `DockLayoutSpec`（四侧停靠区 `left`/`right`/`top`/`bottom`、各区宽/高 `size`、同区多组并排 `groups` 及组间比例、同组多页签 `tabs` 与当前激活页签 `active`、浮动面板列表 `floating`）。
-- 双端采用相同的拖拽落点判定：靠近主窗口四边内侧 `28px` 整侧停靠；落入现有停靠组四边 `25%`（只有 1 个组时为 `22%`）拆分为并排/上下分栏；落入标题栏及下方 `8px` 带内且同组时调整页签顺序；落入组中心叠成页签；拖到空白处拆成浮窗（初始尺寸钳制在 `180~320 × 120~440`）；支持拖动分隔条调整停靠区与分栏尺寸、双击标题栏或点击浮出/还原按钮切换浮动状态、点击 `×` 关闭并从菜单重新打开。
-- 内置标准容器 `FloatBox`（`app/standard/index.ts:819-948`、`Ui.cpp:645-777`）支持在容器内嵌与窗口内浮动卡片之间切换并拖动位置。
+- 工具端（`app/src/dock.ts`）与 Qt 导出端（`QMainWindow` + `QDockWidget` + `DockEntry` + `DockSplitterEntry`，见 `app/qt-templates/generated/ui_binding/Ui.cpp:2705-3465`）共用同一份停靠排列描述 `DockLayoutSpec`（四侧停靠区 `left`/`right`/`top`/`bottom`、各区宽/高 `size`、同区多组并排 `groups` 及组间比例、同组多页签 `tabs` 与当前激活页签 `active`、浮动面板列表 `floating`）。
+- 双端采用相同的拖拽落点判定（`dock.ts` 的 `computeDropAction` 与 `Ui.cpp` 的 `Ui::Private::dockDropActionAt`）：靠近主窗口内侧四边吸附带（左右距窗口边缘 `28px` 以内，上下含菜单栏/状态栏偏移共 `56px` 以内）整侧停靠；落入现有可见已停靠面板时，若属于同一页签组（`sameTabGroup`）且在标题栏及下方 `8px` 带内（`headerHeight + 8`）则保持叠页签状态（`tabify`，同组不误拆分为上下分栏），否则沿该停靠区主分栏轴前后边缘 `25%`（`0.25`）拆分为同轴分栏、沿次分栏轴前后边缘 `22%`（`0.22`）拆分为垂直于主轴的分栏，中心区域叠成页签（`tabify`）；拖到空白处（或按住 `Shift` / 拖出窗口外）拆成浮窗（从停靠区拖出时初始尺寸钳制在 `180~320 × 120~440`）；支持拖动分隔条调整停靠区与分栏尺寸、双击标题栏或点击浮出/还原按钮切换浮动状态、点击 `×` 关闭并从菜单重新打开。
+- 内置标准容器 `FloatBox`（`app/standard/index.ts`、`Ui.cpp` 的 `registerFloatBox`）支持在容器内嵌与窗口内浮动卡片之间切换并拖动位置。
 
 验证：`npm run test:dock` 3/3 通过（模型纯函数单测、无头浏览器真实 DOM 交互、停靠变形后网页端与 Qt 端几何比对）。
 
 ### 3. 编辑模式与工作流扩充（对应“步骤”第 5 项）
 
-- 编辑模式支持往布局容器拖放控件、在画布或右侧“布局”页签调整子控件顺序与伸缩因子、配置 `SizePolicy` 与网格单元格、配置停靠面板四侧归属与窗口分区（`app/src/layoutedit.ts`）。
-- 右侧提供“菜单”页签（`app/src/menuedit.ts`）与“状态”页签（`app/src/stateedit.ts`），可视化编辑菜单树、停靠绑定、状态归属（`owner: ui | business`）与业务事件。
-- 素材库支持收藏与跨项目复用（`app/src/library.ts`）、文档页签支持“源码 | 预览”分块往返编辑与锁定保护（`app/src/docview.ts`）、画布支持 200 步撤销/重做与版本跳转（`app/src/history.ts`）、顶部栏提供“导出成 Qt”按钮与对话框（`app/src/main.ts:4965-5038`）。
+- 编辑模式支持往布局容器拖放控件、在画布或右侧“布局”页签调整子控件顺序与伸缩因子 `stretch`、配置 `SizePolicy` 与网格单元格（`row`/`column`/`rowSpan`/`columnSpan`）、配置停靠面板四侧归属 `dockArea` 与窗口分区（`app/src/layoutedit.ts`）。
+- 右侧提供“菜单”页签（`app/src/menuedit.ts`，编辑主窗口顶部菜单栏 `menuBar` 的顶级菜单与一级菜单项 `id`/`text`/`shortcut`/`checkable`/`checked`/`dock`/`emit`，并支持将 `Dock` 一键绑定到视图菜单）与“状态”页签（`app/src/stateedit.ts`，标注状态归属 `owner: ui | business`、增删改状态变量与业务事件）。
+- 素材库支持收藏与跨项目复用（`app/src/library.ts`）、文档页签支持“源码 | 预览”分块往返编辑与小节锁定保护（`app/src/docview.ts`）、画布支持进程内 200 步撤销/重做与版本跳转（`app/src/history.ts`）、顶部栏提供“导出成 Qt”按钮与对话框（`app/src/main.ts`）。
 
 验证：`npm run test:editor` 20/20、`npm run test:library` 15/15、`npm run test:docview` 9/9、`npm run test:layout-edit` 8/8 全部通过。
 
 ### 4. 状态图片、需翻译效果与 AnimeAn 新界面验收（对应“步骤”第 4、6 项）
 
-- **状态图片 `stateImages`**：支持 `normal`/`hover`/`pressed`/`selected`/`disabled` 5 状态 SVG、九宫格拉伸 `slice` 与透明度过渡 `transitionMs`（网页端 `renderNinePatchSvg`，Qt 端 `VfStateImageWidget` `QSvgRenderer` + `QVariantAnimation`），检查器自动检测 `<feDropShadow>`、`<feComponentTransfer>` 与 `clip-path`（`app/src/check.ts:741-795`）。
-- **需翻译效果与成对收藏**：支持显隐/过渡效果（`kind: "visibility" | "transition"`，Qt 基类虚函数 `createTransition(QWidget *target, bool showing)`）和自绘效果（`kind: "paint"`，Qt 基类虚函数 `paint(QPainter *painter, const QRect &rect, const QVariantMap &props)`），类名带 8 位 MD5 哈希与 `[VF-EFFECT-HASH]` 编译期静态断言；素材库支持把工具端效果与 Qt 端 `ui_effects/` 实现作为 `pairedEffects` 成对收藏与复制。
+- **状态图片 `stateImages`**：支持 `normal`/`hover`/`pressed`/`selected`/`disabled` 5 状态 SVG、九宫格拉伸 `slice` 与透明度过渡 `transitionMs`（网页端 `renderNinePatchSvg`，Qt 端 `StateImageWidget` + `QSvgRenderer` + `QVariantAnimation`），检查器自动检测 `<feDropShadow>`、`<feComponentTransfer>` 与 `clip-path`（`app/src/check.ts`）。
+- **需翻译效果与成对收藏**：支持显隐/过渡效果（`kind: "visibility" | "transition"`，Qt 基类纯虚函数 `createTransition(QWidget *target, bool showing)`）和自绘效果（`kind: "paint"`，Qt 端 `PaintEffectWidget` 与基类纯虚函数 `paint(QPainter *painter, const QRect &rect, const QVariantMap &props)`），类名带 8 位 MD5 哈希与 `[VF-EFFECT-HASH]` 编译期静态断言；素材库支持把工具端效果与 Qt 端 `ui_effects/` 实现作为 `pairedEffects` 成对收藏与复制。
 - **基础图形与线条导出**：`Shape` 与 `Line` 在 Qt 端由 `VfGraphicWidget` 用 `QPainter` 绘制，覆盖形状轮廓、填充/描边、折线/曲线拐点、端头、挂接与 `Shape` 旋转（`examples/shapes/`）。
-- **AnimeAn 新界面（`examples/animean/`）**：设计项目 `examples/animean/design/` 含 63 个画布节点（主窗口菜单栏、状态栏、双外部容器绘图区、`forcePadFloatBox` 浮动嵌入框、工具/图层与历史/属性检查器/时间轴 4 个停靠面板、新建项目模态对话框）、2 个自定义控件（`StateButton` 九宫格状态图片按钮、`ColorPicker` 取色器）、2 个效果（`PanelExpand` `0x90a88836`、`ColorPickerDraw` `0x947908f6`）、2 个纯函数、1 个动作；导出至 `examples/animean/qt/ui/` 并接入 `examples/animean/qt/business/MockBusiness.h/.cpp` 假业务工程。
+- **AnimeAn 新界面（`examples/animean/`）**：设计项目 `examples/animean/design/` 含 **149 个画布节点**（主窗口 `window`、菜单栏、状态栏、中央区 `External` 外部容器 `canvasHost`、`onionSkinBox` 浮动嵌入框 `FloatBox`、`toolsDock` / `layersDock` / `inspectorDock` / `timelineDock` 4 个停靠面板，以及 `newProjectDialog`、`drawSettingsDialog`、`textureFloatDialog` 3 个对话框）、**2 个自定义控件**（`StateButton` 九宫格状态图片按钮、`ColorPicker` 取色器）、**2 个效果**（`PanelExpand` 哈希 `0x4c42b870`、`ColorPickerDraw` 哈希 `0xba2779df`）、**6 个纯逻辑函数**（`applyToolOption.js`、`manageLayerGroup.js`、`recordHistory.js`、`rewindHistory.js`、`syncPresetDimensions.js`、`syncToolOptions.js`）、**1 个动作**（`exportClip.js`）；导出至 `examples/animean/qt/ui/`，并在 `examples/animean/qt/business/`（`LayerModel.h/.cpp`、`CanvasWidget.h/.cpp`）与 `examples/animean/qt/app/Connect.cpp` 中提供了最小示范桩连接。
 - **双端自动化对齐验收**：
-  - 行为用例：`npx tsx scripts/run-case.ts --suite` 跑通全部 **68 个用例**（`examples/minimal` 13 个、`examples/shapes` 15 个、`examples/animean` 40 个），连续 3 轮共 **204/204 全部通过**。
-  - 几何布局对比：`npx tsx scripts/compare-layout.ts` 对比网页端与 Qt 端同名控件位置与尺寸，`examples/minimal`（4 个场景）最大偏差 `0px <= 2px`；`examples/shapes`（2 个场景）最大偏差 `0px <= 2px`；`examples/animean`（8 个场景，最多 119 个可见控件）最大偏差 `2px <= 3px`。
-  - 视觉像素对比：`npx tsx scripts/compare-shapes-visual.ts` 对比 `examples/shapes` 1020×700 画面，容差 16 下差异像素比例 `0.917%`（`< 5%`）。
+  - 行为用例：`node scripts/run-case.ts ../examples/animean/design --suite <vf_animean.exe>` 跑通 `examples/animean/design` 的全部 **68 个用例**，连续 3 轮共 **204/204 全部通过**。
+  - 几何布局对比：`node scripts/compare-layout.ts` 对比网页端与 Qt 端同名控件位置与尺寸，`examples/minimal/design`（7 个场景，4 个可见控件）最大偏差 `0px <= 3px`；`examples/shapes/design`（7 个场景，17 个可见控件）最大偏差 `0px <= 3px`；`examples/animean/design`（8 个场景，最多 119 个可见控件）最大偏差 `2px <= 3px`。
+  - 视觉像素对比：`examples/shapes` 独立渲染逐像素对比（`840×520` 画面，网页端 `?preview=1` 与 Qt 端 `vf_preview.exe --steps "shot:..."`），单通道容差 16 下差异像素 `4007 / 436800`（`0.917% < 2%`），容差 32 下 `2846 / 436800`（`0.652%`）。
 
 ### 5. AnimeAn 业务层解耦结果（`animean/business/`）
 
 - 在 `animean/business/animeanbusiness.h` 与 `animean/business/animeanbusiness.cpp` 中抽出了不依赖 `QWidget` 的 `AnimeanBusiness` 类（继承 `QObject`），通过属性、信号与槽封装了绘图区适配器 `AnimePaintViewAdapter`、项目新建/打开/保存、图层增删移动显隐与树重排、工具切换与工具选项 JSON 生成、素材管理、历史撤销/重做、时间轴播放与洋葱皮、嵌入式 Python 脚本入口。
 - `animean/business/LayerRules.cmake` 强制检查业务层源码不包含 `QWidget` 等界面头文件。
-- 在 `ANIMEAN_WITH_PYTHON=OFF` 下编译 `animean/` 并运行 `ctest`，6/6 项测试（`projectio_roundtrip`、`animemodel_asset_gc`、`strokefit_zoom_invariance`、含 45 项无界面用例的 `business_headless`，以及 2 项分层违规负向编译测试 `violation_business_include_qwidget`、`violation_business_layer_rule`）全部通过。
+- `animean/CMakeLists.txt` 默认设置 `ANIMEAN_WITH_PYTHON=ON`，`animean/tests/business_tests.cpp` 中包含 `py::scoped_interpreter`（`pybind11`）驱动 `pyfile/*.py` 的测试用例；最后一次集成验收在 `ANIMEAN_WITH_PYTHON=OFF` 下编译 `animean/` 并运行 `ctest`，6/6 项测试（`projectio_roundtrip`、`animemodel_asset_gc`、`strokefit_zoom_invariance`、含 45 项无界面用例的 `business_headless`，以及 2 项分层违规负向编译测试 `violation_business_include_qwidget`、`violation_business_layer_rule`）全部通过。
 
 ## 尚未完成的工作
 
-1. **AnimeAn 原工程（`animean/`）的 Python 绑定与新界面直接合入联调**：`animean/` 在启用嵌入式 Python（`ANIMEAN_WITH_PYTHON=ON`，依赖未提交到版本库的 `animean/external/pybind11` 与 `animean/tools/python312`）下的联调，以及将 `examples/animean/qt/ui/` 导出的新界面直接替换进 `animean/` 主程序的工作尚未完成（目前新界面在 `examples/animean/qt/` 中通过 `MockBusiness` 完成了全部接口验证）。
-2. **普通控件（非 `Shape` 的 `QWidget`）在 Qt 导出端的旋转绘制**：基础图形 `Shape` 的旋转已在 Qt 端按 `QPainter` 旋转绘制；普通控件设置了旋转角度时，问题栏会给出提示，导出成 Qt 时暂不旋转 `QWidget`。
+1. **`animean/mainwindow.cpp` 中剩余的界面与 Python UI 回调剥离**：`animean/mainwindow.cpp` 与 `animean/pythonbind/python_bindings.cpp` 中尚未剥离的 9 类直接操作画布/弹窗/光标/菜单的 Python UI 回调（`animean/business/README.md` 归纳的 `registerAnimeanUiOverlayCallback`、`registerAnimeanUiEditHandlesCallback` / `registerAnimeanUiEditHandleCallback`、`registerAnimeanUiCursorCallback`、`registerAnimeanUiMenuCallbacks`、`registerAnimeanUiLayerContextCallbacks`、`registerAnimeanUiDialogCallbacks`、`registerAnimeanUiFreezeCallbacks` / `registerAnimeanUiFreezeCallback`、`registerAnimeanUiPythonDebugCallback`、`registerAnimeanUiStatusCallback` 以及 `registerAnimeanUiWindowsCallback`、`registerAnimeanUiFillPaintModeCallback`、`registerAnimeanUiPadValueCallback`）、动态脚本菜单、Python 调试 REPL 面板、交互式导入弹窗等耦合尚未迁入 `AnimeanBusiness`。
+2. **`examples/animean/qt/app/` 接入真实 `AnimeanBusiness` 及 `ANIMEAN_WITH_PYTHON=ON` 最终重跑**：`examples/animean/qt/app/Connect.cpp` 目前只连接了示范桩代码（`LayerModel` + `CanvasWidget`，仅接线 `layerToggleVisibleRequested` 与 `setCanvasHostWidget`），尚未接入 `AnimeanBusiness`，也未将 `examples/animean/qt/ui/` 导出的新界面直接合入 `animean/` 主程序；`ANIMEAN_WITH_PYTHON=ON` 未在最终版本上重跑。
+3. **Tauri 桌面运行路径实机验证**：Tauri 桌面运行路径（`inTauri` / `isInTauri()` 分支，如素材库桌面读写、独立预览 `WebviewWindow`、导出目录选择与写盘）仅通过 `cargo check` 和浏览器/Node 端模拟验证，未实际启动 Tauri 桌面端验证。
+4. **批量跑用例偶发长卡顿根因排查**：批量跑用例时曾出现单轮 300 到 610 秒的卡顿，后来多轮没有再出现，根因未查明。
+5. **普通控件（非基础图形 `Shape` 的 `QWidget`）在导出成 Qt 时的旋转绘制**：基础图形 `Shape` 的旋转已在 Qt 端按 `QPainter` 旋转绘制；普通控件设置了旋转角度时，问题栏会给出提示，导出成 Qt 时暂不旋转 `QWidget`。

@@ -350,7 +350,10 @@ conditions:
 
 以下内容在设计文档中有，但当前原型没有实现，请不要使用：
 
-- 普通控件（非基础图形的 `QWidget`）在导出成 Qt 时的旋转绘制（基础图形 `Shape` 的旋转已按 `QPainter` 导出，详见第 10.5 节）
+- 普通控件（非基础图形 `Shape` 的 `QWidget`）在导出成 Qt 时的旋转绘制（基础图形 `Shape` 的旋转已按 `QPainter` 导出，详见第 10.5 节）
+- 跨重启持久化的 `.designer/history/` 版本目录及按单小节/单条目独立恢复版本列表（当前 `app/src/history.ts` 提供进程内 200 步撤销/重做栈与顶部“历史”菜单跳转）
+- YAML 条目/整文件锁定标记（`# 🔒`）、`component.json` 锁定以及 `.designer/locks.json` 快照比对与“恢复 / 查看差异 / 保留修改”按钮（当前已实现画布节点锁定 `ui/scene.json` 的 `locked: true` 与说明文档小节锁定 `<!-- 🔒 ... -->`）
+- 在 `components/<类型名>/index.js` 中直接 `import` 外部 npm 包并由工具打包、运行时自动测量文字溢出提示、导出为独立 Web 项目与 iOS 版
 
 ## 9. 导出成 Qt 用到的写法
 
@@ -702,7 +705,7 @@ export default function paint(el, { props, width, height }) {
 
 ### 11.2 主窗口分区、停靠面板与菜单全部形态
 
-根窗口 `Window` 可以配置菜单栏（`menuBar`）、状态栏（`statusBar`）、中央区（`central`）和四个方向的停靠面板（`docks`，对应 `left`、`right`、`top`、`bottom` 四个停靠区），并可用 `dockLayout` 描述停靠区的厚度、并排分栏（`groups`）、叠页签（`tabs` + `active`）和独立浮窗（`floating`）。导出成 Qt 时对应 `QMainWindow` 的 `QMenuBar`、`QStatusBar`、`centralWidget` 和由运行层统一驱动的自定义停靠宿主（`VfDockHostWidget`）：
+根窗口 `Window` 可以配置菜单栏（`menuBar`）、状态栏（`statusBar`）、中央区（`central`）和四个方向的停靠面板（`docks`，对应 `left`、`right`、`top`、`bottom` 四个停靠区），并可用 `dockLayout` 描述停靠区的厚度、并排分栏（`groups`）、叠页签（`tabs` + `active`）和独立浮窗（`floating`）。导出成 Qt 时对应 `QMainWindow` 的 `QMenuBar`、`QStatusBar`、`centralWidget` 和 `QDockWidget`（配自定义标题栏 `setTitleBarWidget` / `DockEntry` 与分隔条 `DockSplitterEntry` / `rebuildDockSplitters`，由 `Ui.cpp` 中的停靠逻辑按 `dockLayout` 统一驱动）：
 
 ```json
 "window": {
@@ -747,10 +750,10 @@ export default function paint(el, { props, width, height }) {
 ```
 
 - 停靠面板节点的 `type` 为 `"Dock"`，用 `dockArea` 指定默认停在 `"left"`、`"right"`、`"top"` 或 `"bottom"`，用 `title` 指定标题栏文字，`headerHeight` 指定标题栏高度（默认 26）。
-- 在预览模式和导出的 Qt 界面中，停靠面板支持完整的停靠操作与同一套落点判定规则（`dock.ts` 的 `computeDockDropTarget` 与 `Ui.cpp` 的 `computeDropTargetAtGlobal`）：
-  1. **四边吸附（`move`）**：按住面板标题栏拖到距离主窗口左、右、上、下内侧边缘 `28px` 以内，吸附到对应停靠区。
-  2. **区内并排分栏（`split`）**：拖向另一个可见已停靠面板的四边边缘带（主分栏轴边缘比例 `0.25`、次分栏轴边缘比例 `0.22`），在同一停靠区内按 `before` / `after`（`horizontal` / `vertical`）并排分栏显示。
-  3. **叠成页签（`tabify` / `tab`）**：拖向另一个可见已停靠面板的中央区域（或同页签组面板顶部的 `headerHeight + 8` 标题栏区域），叠成一组页签，点击标题栏上的页签按钮切换当前显示的面板。
+- 在预览模式和导出的 Qt 界面中，停靠面板支持完整的停靠操作与同一套落点判定规则（`app/src/dock.ts` 的 `computeDropAction` 与 `Ui.cpp` 的 `Ui::Private::dockDropActionAt`；编辑模式下往主窗口拖放 `Dock` 时由 `app/src/model.ts` 的 `computeDockDropTarget` 判定四侧停靠区）：
+  1. **四边吸附（`move`）**：按住面板标题栏拖到主窗口内侧边缘带（左右距窗口边缘 `28px` 以内，上下含菜单栏/状态栏偏移共 `56px` 以内），吸附到对应停靠区。
+  2. **区内并排分栏（`split`）**：拖向另一个可见已停靠面板的四边边缘带（沿该停靠区主分栏轴方向——左右停靠区默认垂直 `vertical`、上下停靠区默认水平 `horizontal`，或按当前 `splitOrientation`——前后边缘比例为 `25%` 即 `0.25`；沿次分栏轴方向前后边缘比例为 `22%` 即 `0.22`），在同一停靠区内按 `before` / `after`（`horizontal` / `vertical`）拆分为并排或上下分栏。
+  3. **叠成页签（`tabify` / `tab`）**：拖向另一个可见已停靠面板的中央区域，叠成一组页签，点击标题栏上的页签按钮切换当前显示的面板（若拖在同一个页签组 `sameTabGroup` 的标题栏及下方 `8px` 带内即 `headerHeight + 8` 释放，同样归入 `tabify` 且同组保持不变，避免点击或微拖页签时误触发上边缘分栏）。
   4. **拖出成浮窗与恢复（`float` / `restore`）**：点击标题栏上的浮出按钮（网页端显示 `⧉`，Qt 端显示 `浮出`）、双击标题栏、按住 `Shift` 拖拽释放、拖出主窗口外或拖到中央区空白处释放，均将面板浮出为独立浮窗（从停靠区拖出时浮窗初始宽高限制在 `180~320 × 120~440` 之间，浮窗右下角可拖拽缩放大小）；点击还原按钮（网页端显示 `↙`，Qt 端显示 `还原`）或再次双击标题栏恢复回原停靠区。
   5. **拖动分隔条改大小（`resize` / `resizeSplit`）**：拖动停靠区与中央区之间的分隔条调整停靠区宽度/高度，或拖动并排面板之间的分隔条调整各分栏尺寸。
   6. **关闭与从菜单重新打开（`close` / `open`）**：点击标题栏上的 `×` 按钮关闭面板；菜单项如果写了 `"dock": "<停靠面板ID>"`，点击该菜单项会自动切换对应停靠面板的显示和隐藏，并同步菜单项的勾选状态。
@@ -959,6 +962,6 @@ actions:
 
 - **往布局容器里拖与重排**：从左侧素材栏把控件拖到 `VBox`、`HBox`、`Flow`、`Grid`、`Form`、`Stack` 或开启了 `layout` 的 `Container` / `Dock` / `Dialog` 上时，画布会高亮显示插入线或网格目标格，松开鼠标即按对应位置插入；在画布上拖动已排版的子控件可调整它在父容器里的顺序。
 - **右侧“布局”页签**：选中容器可切换排版方式（自由定位 / 竖排 / 横排 / 换行 / 网格 / 表单 / 层叠）、调整内边距 `padding` 与间距 `gap`、重排子控件并修改每个子控件的主轴伸缩 `stretch`；选中任意子控件可设置尺寸规则 `SizePolicy`（`horizontal`、`vertical`、`stretch`、`preferredWidth/Height`、`minWidth/Height`、`maxWidth/Height`、`fixedWidth/Height`）与网格单元格（`row`、`column`、`rowSpan`、`columnSpan`）；选中 `Dock` 停靠面板可切换停靠方向（`dockArea`: `left` / `right` / `top` / `bottom`）并调整在 `window.docks` 中的顺序；选中 `Window` 可指定中央区 `central` 与状态栏 `statusBar`。
-- **右侧“菜单”页签**：可直接增删改排主窗口顶部菜单栏（`window.menuBar`）与各菜单项（设置 `id`、`text`、`shortcut`、`checkable`、`checked`、关联停靠面板 `dock` 或触发全局事件 `emit`），也可一键把窗口中的 `Dock` 绑定到“视图”菜单。
+- **右侧“菜单”页签**：可直接增删改排主窗口顶部菜单栏（`window.menuBar`）的顶级菜单与一级菜单项（设置 `id`、`text`、`shortcut`、`checkable`、`checked`、关联停靠面板 `dock` 或触发全局事件 `emit`），也可一键把窗口中的 `Dock` 绑定到“视图”菜单（分隔线、多级子菜单、互斥单选组及 `contextMenu` / `popupMenu` 直接在 `ui/scene.json` 中编写）。
 - **右侧“状态”页签**：可新增或删除状态变量，一键把任一状态标注为“界面自管（`owner: ui`）”或“业务管（`owner: business`）”，并可添加业务事件与全局条件。
 - **锁定与撤销/重做**：被锁定的节点（含继承了锁定父容器的子节点）禁止一切布局、尺寸、停靠、属性或菜单修改；所有通过面板和画布拖拽执行的修改均自动记入撤销/重做历史（`Ctrl+Z` / `Ctrl+Y`）。
