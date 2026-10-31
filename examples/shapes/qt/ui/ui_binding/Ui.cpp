@@ -54,6 +54,7 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSet>
 #include <QSignalBlocker>
@@ -3820,15 +3821,58 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
 {
     if (!frame)
         return;
-    auto *grid = qobject_cast<QGridLayout *>(frame->layout());
-    if (!grid) {
-        grid = new QGridLayout(frame);
+    auto *scrollArea = frame->findChild<QScrollArea *>(QStringLiteral("vf_dataform_scroll"), Qt::FindDirectChildrenOnly);
+    QWidget *content = scrollArea ? scrollArea->widget() : nullptr;
+    auto *grid = content ? qobject_cast<QGridLayout *>(content->layout()) : nullptr;
+    if (!scrollArea || !content || !grid) {
+        if (QLayout *oldLay = frame->layout()) {
+            while (QLayoutItem *item = oldLay->takeAt(0)) {
+                if (QWidget *w = item->widget()) {
+                    w->hide();
+                    w->setParent(nullptr);
+                    w->deleteLater();
+                }
+                delete item;
+            }
+            delete oldLay;
+        }
+        auto *outerLay = new QVBoxLayout(frame);
+        outerLay->setContentsMargins(0, 0, 0, 0);
+        outerLay->setSpacing(0);
+        scrollArea = new QScrollArea(frame);
+        scrollArea->setObjectName(QStringLiteral("vf_dataform_scroll"));
+        scrollArea->setFrameShape(QFrame::NoFrame);
+        scrollArea->setWidgetResizable(true);
+        scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        scrollArea->setStyleSheet(QStringLiteral(
+            "#vf_dataform_scroll, #vf_dataform_viewport, #vf_dataform_content { background: transparent; border: none; }"
+            "QScrollBar:vertical { width: 6px; background: transparent; margin: 0px; }"
+            "QScrollBar::handle:vertical { background: rgba(148, 163, 184, 0.45); border-radius: 3px; min-height: 16px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical, QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; height: 0px; }"
+        ));
+        if (QWidget *vp = scrollArea->viewport()) {
+            vp->setObjectName(QStringLiteral("vf_dataform_viewport"));
+            vp->setAutoFillBackground(false);
+        }
+        content = new QWidget(scrollArea);
+        content->setObjectName(QStringLiteral("vf_dataform_content"));
+        content->setAutoFillBackground(false);
+        grid = new QGridLayout(content);
         grid->setContentsMargins(2, 2, 2, 2);
-        grid->setSizeConstraint(QLayout::SetNoConstraint);
+        scrollArea->setWidget(content);
+        outerLay->addWidget(scrollArea);
     }
+    for (int r = 0; r < grid->rowCount(); ++r)
+        grid->setRowStretch(r, 0);
+    for (int c = 0; c < grid->columnCount(); ++c)
+        grid->setColumnStretch(c, 0);
     while (QLayoutItem *item = grid->takeAt(0)) {
-        if (QWidget *w = item->widget())
+        if (QWidget *w = item->widget()) {
+            w->hide();
+            w->setParent(nullptr);
             w->deleteLater();
+        }
         delete item;
     }
 
@@ -3839,8 +3883,10 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
 
     if (ctrls.isEmpty()) {
         const QString emptyText = props.property(QStringLiteral("emptyText")).toString();
-        auto *lbl = new QLabel(emptyText.isEmpty() ? QStringLiteral("当前工具无可调节参数") : emptyText, frame);
+        auto *lbl = new QLabel(emptyText.isEmpty() ? QStringLiteral("当前工具无可调节参数") : emptyText, content);
         grid->addWidget(lbl, 0, 0);
+        if (QScrollBar *vsb = scrollArea->verticalScrollBar())
+            vsb->setValue(0);
         return;
     }
 
@@ -3857,7 +3903,8 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
         const int colSpan = qMax(1, endCol - startCol + 1);
         const QVariant defVal = cm.value(QStringLiteral("value"));
 
-        auto *cell = new QWidget(frame);
+        auto *cell = new QWidget(content);
+        cell->setMinimumHeight(14);
         cell->setProperty("vfCtrlSpec", cm);
         cell->setProperty("vfFieldName", name);
         auto *cellLay = new QHBoxLayout(cell);
@@ -3868,6 +3915,7 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
             auto *lbl = new QLabel(title, cell);
             auto *slider = new QSlider(Qt::Horizontal, cell);
             slider->setProperty("vfInputRole", QStringLiteral("slider"));
+            slider->setFixedHeight(14);
             slider->setRange(cm.value(QStringLiteral("min"), 0).toInt(), cm.value(QStringLiteral("max"), 100).toInt());
             slider->setValue(defVal.toInt());
             auto *valLbl = new QLabel(QString::number(slider->value()), cell);
@@ -3889,6 +3937,8 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
             auto *lbl = new QLabel(title, cell);
             auto *combo = new QComboBox(cell);
             combo->setProperty("vfInputRole", QStringLiteral("combo"));
+            combo->setMinimumHeight(20);
+            cell->setMinimumHeight(20);
             const QVariant rawOpts = cm.value(QStringLiteral("options"));
             if (rawOpts.typeId() == QMetaType::QVariantList) {
                 for (const QVariant &o : rawOpts.toList()) {
@@ -3925,6 +3975,7 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
         } else if (type == QLatin1String("check") || type == QLatin1String("checkbox")) {
             auto *cb = new QCheckBox(title, cell);
             cb->setProperty("vfInputRole", QStringLiteral("check"));
+            cell->setMinimumHeight(18);
             const bool usesOnOff = (defVal.typeId() == QMetaType::QString &&
                                     (defVal.toString().compare(QLatin1String("on"), Qt::CaseInsensitive) == 0 ||
                                      defVal.toString().compare(QLatin1String("off"), Qt::CaseInsensitive) == 0));
@@ -3971,6 +4022,8 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
         } else if (type == QLatin1String("subwindow")) {
             auto *btn = new QPushButton(title + QStringLiteral(" (SubControlFrame)"), cell);
             btn->setProperty("vfInputRole", QStringLiteral("subwindow"));
+            btn->setMinimumHeight(20);
+            cell->setMinimumHeight(20);
             btn->setStyleSheet(QStringLiteral(
                 "QPushButton { background-color: #172554; color: #93c5fd; border: 1px dashed #3b82f6; border-radius: 4px; padding: 3px 6px; }"
             ));
@@ -3987,6 +4040,8 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
         } else {
             auto *btn = new QPushButton(title, cell);
             btn->setProperty("vfInputRole", QStringLiteral("button"));
+            btn->setMinimumHeight(20);
+            cell->setMinimumHeight(20);
             const QString btnVal = (!defVal.isNull() && defVal.isValid()) ? defVal.toString() : QString();
             btn->setProperty("vfBtnValue", btnVal);
             if (cm.value(QStringLiteral("state")).typeId() == QMetaType::QVariantMap) {
@@ -4012,6 +4067,12 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
     }
     grid->setRowStretch(autoRow + 4, 1);
     syncDataFormValues(frame, props);
+    grid->invalidate();
+    grid->activate();
+    content->updateGeometry();
+    QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    if (QScrollBar *vsb = scrollArea->verticalScrollBar())
+        vsb->setValue(0);
 }
 
 void Ui::Private::syncDataFormValues(QFrame *frame, const QJSValue &props)
@@ -4037,7 +4098,7 @@ void Ui::Private::syncDataFormValues(QFrame *frame, const QJSValue &props)
             valMap.insert(it.key(), it.value());
     }
 
-    const QList<QWidget *> cells = frame->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+    const QList<QWidget *> cells = frame->findChildren<QWidget *>();
     for (QWidget *cell : cells) {
         const QVariant specVar = cell->property("vfCtrlSpec");
         if (!specVar.isValid() || specVar.typeId() != QMetaType::QVariantMap)
