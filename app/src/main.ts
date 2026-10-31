@@ -4731,19 +4731,23 @@ function isDocDraftFor(draft: DocDraft, target: { path: string; section: string 
   return target !== null && draft.path === target.path && draft.section === target.section;
 }
 
-/** 有切走后没存上的说明时，在文档页给一个重试的入口。 */
+/** 有切走后没存上的说明时，在文档页给一个重试的入口。说明行放不下，单独占一行。 */
 function syncDocRetryButton(): void {
-  const note = $("doc-note");
-  note.querySelector("[data-doc-retry]")?.remove();
+  document.querySelector("[data-doc-retry-row]")?.remove();
   const failed = detachedDocDrafts.filter((draft) => draft.failed).length;
   if (failed === 0) return;
+  const row = document.createElement("div");
+  row.className = "note";
+  row.dataset.docRetryRow = "true";
+  row.style.flex = "none";
+  row.textContent = `${failed} 处说明没存上`;
   const button = document.createElement("button");
   button.type = "button";
   button.dataset.docRetry = "true";
-  button.textContent = `重试保存（${failed}）`;
-  button.title = `${failed} 处说明没存上`;
+  button.textContent = "重试保存";
   button.addEventListener("click", () => void saveDoc());
-  note.append(button);
+  row.append(button);
+  $("doc-note").parentElement!.after(row);
 }
 
 function hasUnsavedEditors(): boolean {
