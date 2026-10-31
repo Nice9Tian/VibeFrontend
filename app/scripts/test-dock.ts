@@ -1469,6 +1469,14 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
       "Qt 关闭再打开不残留 hover",
     );
 
+    // 最小化不是关闭：恢复后面板都还在
+    const qtMinimized = qtRun("window:minimize;wait:200;state;window:restore;wait:200;check;state;docks");
+    for (const s of qtMinimized.states) {
+      for (const id of ["toolsDock", "layersDock", "inspectorDock", "timelineDock"]) {
+        assert.equal((s.views[id] as { visible?: boolean }).visible, true, `最小化后 ${id} 不应被当成关闭`);
+      }
+    }
+
     // 窗口放不下时 Qt 不被停靠面板撑大
     const qtHuge = qtRun("dock:resize:bottom:700;check;docks;layout");
     assert.ok(qtHuge.docks.areas.bottom.size! <= 800 - 56 - 62 - 80 + 3, `底部实测厚度 ${qtHuge.docks.areas.bottom.size}`);

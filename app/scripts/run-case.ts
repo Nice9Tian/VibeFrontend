@@ -291,6 +291,11 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string; noEffects
     steps:
       "enter:colorPanelToggleBtn;check;state;dock:close:inspectorDock;dock:open:inspectorDock;check;state;press:colorPanelToggleBtn;check;state;dock:close:inspectorDock;dock:open:inspectorDock;check;state;enter:colorPanelToggleBtn;dock:move:inspectorDock:left;check;state",
   },
+  {
+    name: "54. 最小化再恢复窗口：停靠面板不被当成关闭",
+    steps:
+      "dock:tabify:layersDock:inspectorDock;check;state;window:minimize;wait:200;state;window:restore;wait:200;check;state",
+  },
 ];
 
 interface FlatTreeRow {
@@ -371,6 +376,7 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
       verb === "size" ||
       verb === "shot" ||
       verb === "resize" ||
+      verb === "window" ||
       verb === "layout"
     ) {
       continue;

@@ -505,6 +505,14 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                 ui.window()->resize(w, h);
             continue;
         }
+        if (verb == QLatin1String("window")) {
+            if (id == QLatin1String("minimize"))
+                ui.window()->showMinimized();
+            else if (id == QLatin1String("restore"))
+                ui.window()->showNormal();
+            QApplication::processEvents();
+            continue;
+        }
         if (verb == QLatin1String("request")) {
             const QString jsonArgs = step.section(QLatin1Char(':'), 2);
             ui.triggerRequest(id, jsonArgs);

@@ -2793,7 +2793,8 @@ void Ui::Private::registerDock(
             if (visible && inactiveTabDocks.contains(id)) {
                 const QJsonObject args{ { QStringLiteral("dock"), id } };
                 q->runDockOp(QStringLiteral("activateTab"), QString::fromUtf8(QJsonDocument(args).toJson(QJsonDocument::Compact)));
-            } else if (!visible && !de.isClosed && de.isActiveInGroup) {
+            } else if (!visible && !de.isClosed && de.isActiveInGroup && de.dock->isHidden()) {
+                // 看不见不等于关闭：主窗口最小化时信号也是 false，但 isHidden() 只有面板真被隐藏时才成立
                 const QList<QDockWidget *> peers = window.tabifiedDockWidgets(de.dock);
                 bool peerVisible = false;
                 for (QDockWidget *p : peers) {
