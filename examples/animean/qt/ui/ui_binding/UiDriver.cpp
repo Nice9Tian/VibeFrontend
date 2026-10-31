@@ -34,6 +34,7 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <QWidget>
+#include <QWindow>
 
 #include <algorithm>
 
@@ -95,26 +96,35 @@ void sendMouse(QWidget *widget, QEvent::Type type, Qt::MouseButtons buttons)
     QApplication::sendEvent(widget, &event);
 }
 
-// 和真实鼠标一样：按下落在哪个最里层的控件上，直到松开的所有事件都发给它
-// viaMidpoint 为 false 时一步拖到终点：分隔条每移动一次都按比例重算并取整，分两步会和一步到位差 1 像素
-void sendMouseDrag(QWidget *pressed, const QPoint &pressLocal, const QPoint &endGlobal, Qt::KeyboardModifiers mods = Qt::NoModifier, bool viaMidpoint = true)
+// 把鼠标事件发给窗口，由 Qt 自己按坐标找控件、处理按住时的抓取，和真实鼠标走同一条路
+void sendWindowMouse(QWindow *window, QEvent::Type type, const QPoint &global, Qt::MouseButton button, Qt::MouseButtons buttons, Qt::KeyboardModifiers mods)
 {
-    QWidget *child = pressed->childAt(pressLocal);
-    QWidget *widget = child ? child : pressed;
-    const QPoint startLocal = widget->mapFrom(pressed, pressLocal);
-    const QPoint startGlobal = widget->mapToGlobal(startLocal);
-    const QPoint midGlobal((startGlobal.x() + endGlobal.x()) / 2, (startGlobal.y() + endGlobal.y()) / 2);
-    QMouseEvent press(QEvent::MouseButtonPress, QPointF(startLocal), QPointF(startGlobal), Qt::LeftButton, Qt::LeftButton, mods);
-    QApplication::sendEvent(widget, &press);
-    if (viaMidpoint) {
-        QMouseEvent move1(QEvent::MouseMove, QPointF(widget->mapFromGlobal(midGlobal)), QPointF(midGlobal), Qt::NoButton, Qt::LeftButton, mods);
-        QApplication::sendEvent(widget, &move1);
+    const QPointF local = window->mapFromGlobal(QPointF(global));
+    QMouseEvent event(type, local, local, QPointF(global), button, buttons, mods);
+    QApplication::sendEvent(window, &event);
+}
+
+// 这一点最上层的顶层窗口：浮动面板盖在主窗口上
+QWidget *topLevelAt(Ui &ui, const QPoint &global)
+{
+    const QList<QDockWidget *> docks = ui.window()->findChildren<QDockWidget *>();
+    for (QDockWidget *dock : docks) {
+        if (dock->isFloating() && !dock->isHidden() && dock->frameGeometry().contains(global))
+            return dock;
     }
-    QMouseEvent move2(QEvent::MouseMove, QPointF(widget->mapFromGlobal(endGlobal)), QPointF(endGlobal), Qt::NoButton, Qt::LeftButton, mods);
-    QApplication::sendEvent(widget, &move2);
-    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(widget->mapFromGlobal(endGlobal)), QPointF(endGlobal), Qt::LeftButton, Qt::NoButton, mods);
-    QApplication::sendEvent(widget, &release);
-    QApplication::processEvents();
+    return ui.window();
+}
+
+// 鼠标按在 target 上时真正命中的控件；命中的不是 target（或它里面的控件）说明被挡住了
+QString pointerBlockedBy(Ui &ui, QWidget *target, const QPoint &global, QWindow **window)
+{
+    QWidget *top = topLevelAt(ui, global);
+    QWidget *hit = top->childAt(top->mapFromGlobal(global));
+    if (hit == target || (hit && target->isAncestorOf(hit))) {
+        *window = top->windowHandle();
+        return QString();
+    }
+    return hit ? hit->objectName() + QLatin1Char('(') + QString::fromLatin1(hit->metaObject()->className()) + QLatin1Char(')') : QStringLiteral("<无>");
 }
 
 void click(QWidget *widget)
@@ -327,6 +337,48 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
         }
     };
     const auto finalWindowCheck = qScopeGuard(checkWindowSize);
+
+    // 停靠和 FloatBox 的鼠标步骤都走窗口坐标命中。没命中目标控件就是用户也点不到，算失败
+    QString currentStep;
+    bool coveredByFloating = false;  // 目标被看得见的浮窗盖住，这个手势用户也做不到，不算缺陷
+    const auto pointerFail = [&](const QString &why) {
+        output.append(QStringLiteral("check MISMATCH pointer step=%1 %2").arg(currentStep, why));
+    };
+    const auto pointerDrag = [&](QWidget *target, const QPoint &local, const QPoint &endGlobal,
+                                 Qt::KeyboardModifiers mods = Qt::NoModifier, bool viaMidpoint = true) {
+        const QPoint startGlobal = target->mapToGlobal(local);
+        if (topLevelAt(ui, startGlobal) != target->window()) {
+            coveredByFloating = true;
+            return false;
+        }
+        QWindow *window = nullptr;
+        const QString blockedBy = pointerBlockedBy(ui, target, startGlobal, &window);
+        if (!blockedBy.isEmpty()) {
+            pointerFail(QStringLiteral("wanted=%1 hit=%2").arg(target->objectName(), blockedBy));
+            return false;
+        }
+        sendWindowMouse(window, QEvent::MouseButtonPress, startGlobal, Qt::LeftButton, Qt::LeftButton, mods);
+        if (viaMidpoint) {
+            const QPoint mid((startGlobal.x() + endGlobal.x()) / 2, (startGlobal.y() + endGlobal.y()) / 2);
+            sendWindowMouse(window, QEvent::MouseMove, mid, Qt::NoButton, Qt::LeftButton, mods);
+        }
+        sendWindowMouse(window, QEvent::MouseMove, endGlobal, Qt::NoButton, Qt::LeftButton, mods);
+        sendWindowMouse(window, QEvent::MouseButtonRelease, endGlobal, Qt::LeftButton, Qt::NoButton, mods);
+        QApplication::processEvents();
+        return true;
+    };
+    const auto pointerClick = [&](QWidget *target) {
+        const QPoint center = target->mapToGlobal(target->rect().center());
+        return pointerDrag(target, target->rect().center(), center);
+    };
+    const auto dockOpen = [&](const QString &dockId) {
+        auto *dock = ui.window()->findChild<QDockWidget *>(dockId);
+        return dock && !dock->isHidden();
+    };
+    const auto wantedArea = [&](const QString &area) {
+        return QJsonDocument::fromJson(ui.wantedDockDump().toUtf8()).object()
+            .value(QStringLiteral("areas")).toObject().value(area).toObject();
+    };
     QApplication::processEvents();
     for (const QString &raw : steps) {
         const QString step = raw.trimmed();
@@ -334,6 +386,8 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             continue;
         checkWindowSize();
         previousStep = step;
+        currentStep = step;
+        coveredByFloating = false;
         const QString verb = step.section(QLatin1Char(':'), 0, 0);
         const QString id = step.section(QLatin1Char(':'), 1, 1);
 
@@ -564,54 +618,62 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             const QString arg2 = step.section(QLatin1Char(':'), 3, 3);
             const QString arg3 = step.section(QLatin1Char(':'), 4, 4);
             const QString arg4 = step.section(QLatin1Char(':'), 5, 5);
+            // 下面每个动作都先走鼠标。只有状态上根本不存在这个手势时（目标已关闭或已浮动、后台页签没有标题栏按钮、
+            // 面板太薄找不到落点、序号指向隐藏的组、被看得见的浮窗盖住）才直接调逻辑操作，这些情况预览里同样做不到。
+            // 面板开着却找不到把手或分隔条是缺陷，算失败
             QJsonObject args;
             if (op == QLatin1String("tabify")) {
                 QPushButton *handle = dockDragHandle(ui, arg2);
                 auto *targetDock = ui.window()->findChild<QDockWidget *>(arg1);
+                if (!handle && dockOpen(arg2)) {
+                    pointerFail(QStringLiteral("找不到把手 vf_dock_tab_") + arg2);
+                    continue;
+                }
                 if (handle && arg1 != arg2 && targetDock && !targetDock->isHidden() && !targetDock->isFloating()) {
                     QDockWidget *visualTarget = shownDockOfGroup(ui, targetDock);
                     QPoint endGlobal;
                     if (findDropPoint(ui, arg2, visualTarget, QStringLiteral("tabify"), visualTarget->rect().center(), &endGlobal)) {
-                        sendMouseDrag(handle, handle->rect().center(), endGlobal);
-                        continue;
+                        if (pointerDrag(handle, handle->rect().center(), endGlobal) || !coveredByFloating)
+                            continue;
                     }
                 }
                 args.insert(QStringLiteral("target"), arg1);
                 args.insert(QStringLiteral("dock"), arg2);
             } else if (op == QLatin1String("tab") || op == QLatin1String("activateTab")) {
                 if (auto *tabBtn = findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_tab_") + arg1)) {
-                    click(tabBtn);
-                    QApplication::processEvents();
+                    if (pointerClick(tabBtn) || !coveredByFloating)
+                        continue;
+                }
+                if (!coveredByFloating && dockOpen(arg1)) {
+                    pointerFail(QStringLiteral("找不到页签 vf_dock_tab_") + arg1);
                     continue;
                 }
                 args.insert(QStringLiteral("dock"), arg1);
             } else if (op == QLatin1String("float")) {
+                auto *mainWindow = qobject_cast<QMainWindow *>(ui.window());
                 if (arg2.isEmpty()) {
-                    if (!findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_float_") + arg1)) {
-                        if (auto *tabBtn = findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_tab_") + arg1)) {
-                            click(tabBtn);
-                            QApplication::processEvents();
-                        }
-                    }
                     if (auto *floatBtn = findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_float_") + arg1)) {
-                        click(floatBtn);
-                        QApplication::processEvents();
+                        if (pointerClick(floatBtn) || !coveredByFloating)
+                            continue;
+                    }
+                    // 后台页签的标题栏不显示，没有浮出按钮
+                    auto *dw = ui.window()->findChild<QDockWidget *>(arg1);
+                    if (!coveredByFloating && dw && !dw->isHidden() && !dw->isFloating() && mainWindow->tabifiedDockWidgets(dw).isEmpty()) {
+                        pointerFail(QStringLiteral("找不到浮出按钮 vf_dock_float_") + arg1);
                         continue;
                     }
                 } else {
                     const QStringList parts = arg2.split(QLatin1Char(','));
                     auto *dw = ui.window()->findChild<QDockWidget *>(arg1);
-                    if (dw && !dw->isHidden() && parts.size() >= 2) {
-                        if (!findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg1)) {
-                            if (auto *tabBtn = findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_tab_") + arg1)) {
-                                click(tabBtn);
-                                QApplication::processEvents();
-                            }
-                        }
+                    const bool hasHeader = findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg1) != nullptr;
+                    if (!hasHeader && dw && !dw->isHidden() && (dw->isFloating() || mainWindow->tabifiedDockWidgets(dw).isEmpty())) {
+                        pointerFail(QStringLiteral("找不到标题栏 vf_dock_hdr_") + arg1);
+                        continue;
+                    }
+                    if (hasHeader && parts.size() >= 2) {
                         if (!dw->isFloating()) {
                             if (auto *floatBtn = findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_float_") + arg1)) {
-                                click(floatBtn);
-                                QApplication::processEvents();
+                                pointerClick(floatBtn);
                             }
                         }
                         auto *hdr = findVisibleWidget<QWidget>(ui.window(), QStringLiteral("vf_dock_hdr_") + arg1);
@@ -629,7 +691,9 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                                 }
                                 if (pressOn) {
                                     const QPoint startGlobal = pressOn->mapToGlobal(pressAt);
-                                    sendMouseDrag(pressOn, pressAt, startGlobal + delta, Qt::ShiftModifier);
+                                    pointerDrag(pressOn, pressAt, startGlobal + delta, Qt::ShiftModifier);
+                                } else {
+                                    pointerFail(QStringLiteral("标题栏上没有能按住的地方 ") + arg1);
                                 }
                             }
                         }
@@ -640,12 +704,19 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                                 const QPoint rDelta(tw - dw->width(), th - dw->height());
                                 if (rDelta != QPoint(0, 0)) {
                                     const QPoint rStartGlobal = resizer->mapToGlobal(resizer->rect().center());
-                                    sendMouseDrag(resizer, resizer->rect().center(), rStartGlobal + rDelta);
+                                    pointerDrag(resizer, resizer->rect().center(), rStartGlobal + rDelta);
                                 }
+                            } else {
+                                pointerFail(QStringLiteral("找不到缩放手柄 vf_dock_resizer_") + arg1);
                             }
                         }
-                        if (dw->isFloating())
+                        if (dw->isFloating() || coveredByFloating) {
+                            if (!coveredByFloating)
+                                continue;
+                        } else {
+                            pointerFail(QStringLiteral("拖动后面板没有浮出 ") + arg1);
                             continue;
+                        }
                     }
                 }
                 args.insert(QStringLiteral("dock"), arg1);
@@ -663,8 +734,12 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             } else if (op == QLatin1String("restore")) {
                 if (arg2.isEmpty()) {
                     if (auto *resBtn = findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_restore_") + arg1)) {
-                        click(resBtn);
-                        QApplication::processEvents();
+                        if (pointerClick(resBtn) || !coveredByFloating)
+                            continue;
+                    }
+                    auto *dw = ui.window()->findChild<QDockWidget *>(arg1);
+                    if (!coveredByFloating && dw && !dw->isHidden() && dw->isFloating()) {
+                        pointerFail(QStringLiteral("找不到还原按钮 vf_dock_restore_") + arg1);
                         continue;
                     }
                 }
@@ -685,7 +760,11 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                             edgeLocal = QPoint(w / 2, 40);
                         else if (arg2 == QLatin1String("bottom"))
                             edgeLocal = QPoint(w / 2, h - 36);
-                        sendMouseDrag(handle, handle->rect().center(), ui.window()->mapToGlobal(edgeLocal));
+                        if (pointerDrag(handle, handle->rect().center(), ui.window()->mapToGlobal(edgeLocal)) || !coveredByFloating)
+                            continue;
+                    }
+                    if (!coveredByFloating && dockOpen(arg1)) {
+                        pointerFail(QStringLiteral("找不到把手 vf_dock_tab_") + arg1);
                         continue;
                     }
                 }
@@ -696,6 +775,10 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
             } else if (op == QLatin1String("split")) {
                 QPushButton *handle = dockDragHandle(ui, arg2);
                 auto *targetDock = ui.window()->findChild<QDockWidget *>(arg1);
+                if (!handle && dockOpen(arg2)) {
+                    pointerFail(QStringLiteral("找不到把手 vf_dock_tab_") + arg2);
+                    continue;
+                }
                 if (handle && arg1 != arg2 && targetDock && !targetDock->isHidden() && !targetDock->isFloating()) {
                     QDockWidget *visualTarget = shownDockOfGroup(ui, targetDock);
                     const QString pos = arg3.isEmpty() ? QStringLiteral("after") : arg3;
@@ -719,8 +802,8 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                         preferred.setX(int(visualTarget->width() * (pos == QLatin1String("before") ? 0.10 : 0.90)));
                     QPoint endGlobal;
                     if (findDropPoint(ui, arg2, visualTarget, QStringLiteral("split:%1:%2").arg(pos, orient), preferred, &endGlobal)) {
-                        sendMouseDrag(handle, handle->rect().center(), endGlobal);
-                        continue;
+                        if (pointerDrag(handle, handle->rect().center(), endGlobal) || !coveredByFloating)
+                            continue;
                     }
                 }
                 args.insert(QStringLiteral("target"), arg1);
@@ -746,9 +829,13 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                         else if (arg1 == QLatin1String("bottom"))
                             delta.setY(-(targetSize - curSize));
                         const QPoint startGlobal = sp->mapToGlobal(sp->rect().center());
-                        sendMouseDrag(sp, sp->rect().center(), startGlobal + delta, Qt::NoModifier, false);
-                        continue;
+                        if (pointerDrag(sp, sp->rect().center(), startGlobal + delta, Qt::NoModifier, false) || !coveredByFloating)
+                            continue;
                     }
+                }
+                if (!coveredByFloating && targetSize > 0 && wantedArea(arg1).contains(QStringLiteral("size"))) {
+                    pointerFail(QStringLiteral("找不到分隔条 vf_qt_splitter_area_") + arg1);
+                    continue;
                 }
                 args.insert(QStringLiteral("area"), arg1);
                 args.insert(QStringLiteral("size"), targetSize);
@@ -765,17 +852,33 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                         const bool horiz = areaObj.value(QStringLiteral("splitOrientation")).toString() == QLatin1String("horizontal");
                         const QPoint delta = horiz ? QPoint(targetSize - curSize, 0) : QPoint(0, targetSize - curSize);
                         const QPoint startGlobal = sp->mapToGlobal(sp->rect().center());
-                        sendMouseDrag(sp, sp->rect().center(), startGlobal + delta, Qt::NoModifier, false);
-                        continue;
+                        if (pointerDrag(sp, sp->rect().center(), startGlobal + delta, Qt::NoModifier, false) || !coveredByFloating)
+                            continue;
                     }
+                }
+                // 这一组和它后面都有看得见的组时，两者之间应该有分隔条
+                const QJsonArray wantedGroups = wantedArea(arg1).value(QStringLiteral("groups")).toArray();
+                bool shownAfter = false;
+                for (int later = gi + 1; later < wantedGroups.size(); ++later)
+                    shownAfter = shownAfter || wantedGroups.at(later).toObject().contains(QStringLiteral("size"));
+                if (!coveredByFloating && targetSize > 0 && gi >= 0 && gi < wantedGroups.size()
+                    && wantedGroups.at(gi).toObject().contains(QStringLiteral("size")) && shownAfter) {
+                    pointerFail(QStringLiteral("找不到分隔条 vf_qt_splitter_split_%1_%2").arg(arg1).arg(gi));
+                    continue;
                 }
                 args.insert(QStringLiteral("area"), arg1);
                 args.insert(QStringLiteral("groupIndex"), gi);
                 args.insert(QStringLiteral("size"), targetSize);
             } else if (op == QLatin1String("close")) {
                 if (auto *closeBtn = findVisibleWidget<QPushButton>(ui.window(), QStringLiteral("vf_dock_close_") + arg1)) {
-                    click(closeBtn);
-                    QApplication::processEvents();
+                    if (pointerClick(closeBtn) || !coveredByFloating)
+                        continue;
+                }
+                // 后台页签的标题栏不显示，没有关闭按钮；单独显示的面板必须有
+                auto *dw = ui.window()->findChild<QDockWidget *>(arg1);
+                auto *mw = qobject_cast<QMainWindow *>(ui.window());
+                if (!coveredByFloating && dw && !dw->isHidden() && mw && mw->tabifiedDockWidgets(dw).isEmpty()) {
+                    pointerFail(QStringLiteral("找不到关闭按钮 vf_dock_close_") + arg1);
                     continue;
                 }
                 args.insert(QStringLiteral("dock"), arg1);
@@ -801,9 +904,11 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                     const QPoint startGlobal = hdrWidget->mapToGlobal(hdrWidget->rect().center());
                     const QPoint delta(targetX - fbWidget->x(), targetY - fbWidget->y());
                     const QPoint endGlobal = startGlobal + delta;
-                    sendMouseDrag(hdrWidget, hdrWidget->rect().center(), endGlobal);
+                    pointerDrag(hdrWidget, hdrWidget->rect().center(), endGlobal);
                     continue;
                 }
+                pointerFail(QStringLiteral("找不到浮动嵌入框或标题栏 ") + fbId);
+                continue;
             }
         }
 

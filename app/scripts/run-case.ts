@@ -324,6 +324,29 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string; noEffects
     steps:
       "dock:split:layersDock:timelineDock:after;dock:split:timelineDock:inspectorDock:after;dock:close:layersDock;dock:move:layersDock:right;check;state;dock:resizeSplit:left:0:220;check;state",
   },
+  {
+    name: "61. 真实坐标拖分隔条：初始状态四个停靠区的分隔条都拖得动",
+    steps: "dock:resize:left:300;check;state;dock:resize:right:300;check;state;dock:resize:bottom:160;check;state;dock:resize:top:90;check;state",
+  },
+  {
+    name: "62. 真实坐标拖分隔条：点按钮之后分栏分隔条和停靠区分隔条仍拖得动",
+    steps:
+      "dock:split:layersDock:inspectorDock:after;click:toolEraserBtn;check;dock:resizeSplit:left:0:330;check;state;click:toolBrushBtn;dock:resizeSplit:left:0:260;check;state;click:toolEraserBtn;dock:resize:left:280;check;state",
+  },
+  {
+    name: "63. 真实坐标拖分隔条：拖后回到原尺寸再拖",
+    steps: "click:toolEraserBtn;dock:resize:left:320;check;state;dock:resize:left:236;check;state;click:toolBrushBtn;dock:resize:left:260;check;state",
+  },
+  {
+    name: "64. 窗口内的浮动嵌入框压在分隔条上时不被盖住",
+    steps:
+      "toggle:onionSkinBox;floatbox:move:onionSkinBox:116,300;check;state;click:toolEraserBtn;floatbox:move:onionSkinBox:420,180;check;state;dock:resize:left:280;check;state",
+  },
+  {
+    name: "65. 真实坐标操作浮窗：浮出按钮、拖标题栏、拖缩放手柄、还原按钮、关闭按钮",
+    steps:
+      "dock:float:layersDock:640,200,300,420;check;state;dock:restore:layersDock;check;state;dock:float:inspectorDock;check;state;dock:close:inspectorDock;check;state",
+  },
 ];
 
 interface FlatTreeRow {

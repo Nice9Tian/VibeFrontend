@@ -944,6 +944,9 @@ struct DockEntry
     bool isActiveInGroup = true;
 };
 
+// QMainWindow 自己在停靠区之间放的分隔线。面板尺寸是定死的，它拖不动，却会挡住我们的分隔条
+const char *const kQtSeparatorName = "qt_qmainwindow_extended_splitter";
+
 struct DockDropAction
 {
     QString op;
@@ -1564,6 +1567,7 @@ struct Ui::Private
     void registerFloatBox(const QString &id, QFrame *frame, QWidget *header, QWidget *body, int headerHeight, int designWidth, int designHeight);
     void applyDockLayout(const QJSValue &views);
     void rebuildDockSplitters();
+    void raiseDockSplitters();
     QString dockSplitterKey() const;
     void applyFloatBoxes(const QJSValue &views, const QJSValue *knownBoxes = nullptr);
     void finishDockPass(bool prevApplying);
@@ -2199,6 +2203,12 @@ void Ui::setDataFormField(const QString &id, const QString &fieldName, const QSt
 bool Ui::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == &d->window) {
+        // Qt 在布局时随时可能新建分隔线
+        if (event->type() == QEvent::ChildPolished) {
+            auto *child = qobject_cast<QWidget *>(static_cast<QChildEvent *>(event)->child());
+            if (child && child->objectName() == QLatin1String(kQtSeparatorName))
+                child->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        }
         if (event->type() == QEvent::Resize || event->type() == QEvent::Show) {
             // 窗口尺寸已经在布局的键里，只有重新显示时才要强制重排
             if (event->type() == QEvent::Show)
@@ -3552,6 +3562,7 @@ QString Ui::Private::dockSplitterKey() const
 
 void Ui::Private::finishDockPass(bool prevApplying)
 {
+    raiseDockSplitters();
     applyingLayout = prevApplying;
     dockPassRunning = false;
 
@@ -3562,6 +3573,27 @@ void Ui::Private::finishDockPass(bool prevApplying)
         applyDockLayout(latestViews);
         applyFloatBoxes(latestViews);
         dockPassCatchingUp = false;
+    }
+}
+
+// 分隔条要盖在面板上才点得到，不管这一遍布局走了哪条路都要保证。
+// 顺序和预览相同：停靠区分隔条在分栏分隔条上面；窗口内浮出的 FloatBox 又在它们上面
+void Ui::Private::raiseDockSplitters()
+{
+    const QList<QWidget *> qtSeparators = window.findChildren<QWidget *>(QLatin1String(kQtSeparatorName), Qt::FindDirectChildrenOnly);
+    for (QWidget *separator : qtSeparators)
+        separator->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    for (const DockSplitterEntry &sp : dockSplitters) {
+        if (sp.widget && sp.kind == QLatin1String("split"))
+            sp.widget->raise();
+    }
+    for (const DockSplitterEntry &sp : dockSplitters) {
+        if (sp.widget && sp.kind == QLatin1String("area"))
+            sp.widget->raise();
+    }
+    for (const FloatBoxEntry &fb : floatBoxes) {
+        if (fb.isFloating && fb.frame->parentWidget() == &window)
+            fb.frame->raise();
     }
 }
 
@@ -4589,6 +4621,9 @@ void Ui::Private::applyView()
         clockTimer.stop();
     QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
     syncWindowLayout(false);
+    // 上面的 applyFloatBoxes 可能动了浮动框的层次
+    if (!docks.isEmpty())
+        raiseDockSplitters();
 }
 
 // 显示或隐藏一个控件。指定了效果、并且有人提供了实现时，带着过渡动画做：
