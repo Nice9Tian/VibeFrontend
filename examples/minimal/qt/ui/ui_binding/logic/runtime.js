@@ -6090,6 +6090,8 @@ var VF = (function(exports) {
 			_defineProperty(this, "runningActions", /* @__PURE__ */ new Set());
 			_defineProperty(this, "hoveredControls", /* @__PURE__ */ new Set());
 			_defineProperty(this, "pressedControls", /* @__PURE__ */ new Set());
+			_defineProperty(this, "viewSnapshot", null);
+			_defineProperty(this, "stackContainersSnapshot", null);
 			_defineProperty(this, "activePromises", /* @__PURE__ */ new Set());
 			_defineProperty(this, "exprCache", /* @__PURE__ */ new Map());
 			_defineProperty(this, "fnCache", /* @__PURE__ */ new Map());
@@ -6202,6 +6204,7 @@ var VF = (function(exports) {
 			}), {}, { dockLayout: layout }));
 			this.dockLayouts.set(winId, normalized);
 			this.lastSceneDockLayouts.set(winId, JSON.stringify((_winNode$dockLayout = winNode === null || winNode === void 0 ? void 0 : winNode.dockLayout) !== null && _winNode$dockLayout !== void 0 ? _winNode$dockLayout : null));
+			this.releaseDockedPointerStates();
 			this.notifyChanged();
 		}
 		dockTabify(targetDockId, dockId, winId = this.project.scene.root) {
@@ -6512,7 +6515,38 @@ var VF = (function(exports) {
 			return val === void 0 ? void 0 : cloneValue(val);
 		}
 		/** 某个节点（或菜单项）当前应有的样子：静态默认值、scene.json 的值、逻辑计算值依次覆盖。 */
+		/**
+		* 连续读很多控件时共用一份结果：一次读取里状态不变，同一个控件不用算第二遍。
+		* 排版计算会反复读同一个控件，不共用时每读一次都要重新求值。read 里不能改状态。
+		*/
+		readSnapshot(read) {
+			if (this.viewSnapshot) return read();
+			this.viewSnapshot = /* @__PURE__ */ new Map();
+			this.stackContainersSnapshot = this.findStackContainers();
+			try {
+				return read();
+			} finally {
+				this.viewSnapshot = null;
+				this.stackContainersSnapshot = null;
+			}
+		}
+		findStackContainers() {
+			return Object.entries(this.project.scene.nodes).filter(([, n]) => {
+				var _layoutOf;
+				return ((_layoutOf = layoutOf(n)) === null || _layoutOf === void 0 ? void 0 : _layoutOf.kind) === "stack";
+			});
+		}
 		view(id) {
+			const snapshot = this.viewSnapshot;
+			if (!snapshot) return this.computeView(id);
+			let view = snapshot.get(id);
+			if (!view) {
+				view = this.computeView(id);
+				snapshot.set(id, view);
+			}
+			return view;
+		}
+		computeView(id) {
 			var _this$project$logic$o3, _decl$props, _node$props, _object$props2, _ref3, _props$selected;
 			const menuItem = findMenuItem(this.project.scene, id);
 			if (menuItem && !this.project.scene.nodes[id]) {
@@ -6574,16 +6608,19 @@ var VF = (function(exports) {
 				const val = Number((_props$value = props.value) !== null && _props$value !== void 0 ? _props$value : 0);
 				if (Number.isFinite(val)) props.value = Math.max(min, Math.min(max, val));
 			}
-			if (visible) for (const [parentId, parentNode] of Object.entries(this.project.scene.nodes)) {
-				var _layoutOf, _parentNode$children;
-				if (((_layoutOf = layoutOf(parentNode)) === null || _layoutOf === void 0 ? void 0 : _layoutOf.kind) === "stack" && ((_parentNode$children = parentNode.children) === null || _parentNode$children === void 0 ? void 0 : _parentNode$children.includes(id))) {
-					var _pView$props$currentI, _pView$props$currentP;
-					const pView = this.view(parentId);
-					const activeIdx = Number((_pView$props$currentI = pView.props.currentIndex) !== null && _pView$props$currentI !== void 0 ? _pView$props$currentI : 0);
-					const activePage = String((_pView$props$currentP = pView.props.currentPage) !== null && _pView$props$currentP !== void 0 ? _pView$props$currentP : "");
-					const idx = parentNode.children.indexOf(id);
-					if (!(activePage ? id === activePage : idx === activeIdx)) visible = false;
-					break;
+			if (visible) {
+				var _this$stackContainers;
+				for (const [parentId, parentNode] of (_this$stackContainers = this.stackContainersSnapshot) !== null && _this$stackContainers !== void 0 ? _this$stackContainers : this.findStackContainers()) {
+					var _parentNode$children;
+					if ((_parentNode$children = parentNode.children) === null || _parentNode$children === void 0 ? void 0 : _parentNode$children.includes(id)) {
+						var _pView$props$currentI, _pView$props$currentP;
+						const pView = this.view(parentId);
+						const activeIdx = Number((_pView$props$currentI = pView.props.currentIndex) !== null && _pView$props$currentI !== void 0 ? _pView$props$currentI : 0);
+						const activePage = String((_pView$props$currentP = pView.props.currentPage) !== null && _pView$props$currentP !== void 0 ? _pView$props$currentP : "");
+						const idx = parentNode.children.indexOf(id);
+						if (!(activePage ? id === activePage : idx === activeIdx)) visible = false;
+						break;
+					}
 				}
 			}
 			const enabled = props.enabled !== false;
@@ -6616,10 +6653,17 @@ var VF = (function(exports) {
 			const { active, tabs } = loc.group;
 			return (active && tabs.includes(active) && this.view(active).visible ? active : tabs.find((tid) => this.view(tid).visible)) === dockId;
 		}
-		/** 控件此刻显示在界面上并且可用。view().visible 只看控件自己，这里还看所属窗口、容器和停靠页签。 */
+		releasePointerOn(nodeId, event) {
+			const wasHovered = event === "mouseleave" && this.hoveredControls.delete(nodeId);
+			const wasPressed = (event === "mouseleave" || event === "mouseup") && this.pressedControls.delete(nodeId);
+			if (wasHovered || wasPressed) this.notifyChanged();
+		}
+		/** 控件此刻显示在界面上并且可用。view().visible 只看控件自己，这里还看所属窗口、容器、停靠页签和打开的模态框。 */
 		canTakePointer(id) {
 			const scene = this.project.scene;
 			if (!this.view(id).enabled) return false;
+			const modalWin = this.activeModalWindow();
+			if (modalWin && !this.isInsideSubtree(modalWin, id)) return false;
 			for (let cur = id; cur && cur !== scene.root; cur = parentOfNode(scene, cur)) {
 				const node = scene.nodes[cur];
 				const curView = this.view(cur);
@@ -6633,8 +6677,9 @@ var VF = (function(exports) {
 		releaseDockedPointerStates() {
 			const scene = this.project.scene;
 			for (const set of [this.hoveredControls, this.pressedControls]) for (const id of [...set]) for (let cur = id; cur; cur = parentOfNode(scene, cur)) {
-				var _scene$nodes$cur;
-				if (((_scene$nodes$cur = scene.nodes[cur]) === null || _scene$nodes$cur === void 0 ? void 0 : _scene$nodes$cur.type) === "Dock") {
+				const node = scene.nodes[cur];
+				if ((node === null || node === void 0 ? void 0 : node.type) === "FloatBox" && this.view(cur).props.floating) break;
+				if ((node === null || node === void 0 ? void 0 : node.type) === "Dock") {
 					set.delete(id);
 					break;
 				}
@@ -6657,6 +6702,7 @@ var VF = (function(exports) {
 			if (nodeId !== null) {
 				const modalWin = this.activeModalWindow();
 				if (modalWin && !this.isInsideSubtree(modalWin, nodeId)) {
+					this.releasePointerOn(nodeId, event);
 					if (event !== "mouseenter" && event !== "mouseleave") this.hooks.onLog({
 						title: `${nodeId}.${event}`,
 						lines: [`已忽略：模态窗口 ${modalWin} 正在打开`]
@@ -6725,13 +6771,8 @@ var VF = (function(exports) {
 				}
 			}
 			if (nodeId) {
-				if (event === "mouseleave") {
-					const wasHovered = this.hoveredControls.delete(nodeId);
-					const wasPressed = this.pressedControls.delete(nodeId);
-					if (wasHovered || wasPressed) this.notifyChanged();
-				} else if (event === "mouseup") {
-					if (this.pressedControls.delete(nodeId)) this.notifyChanged();
-				} else if (event === "mouseenter" || event === "mousedown") {
+				if (event === "mouseleave" || event === "mouseup") this.releasePointerOn(nodeId, event);
+				else if (event === "mouseenter" || event === "mousedown") {
 					if (this.canTakePointer(nodeId)) {
 						if (event === "mouseenter") this.hoveredControls.add(nodeId);
 						else this.pressedControls.add(nodeId);
@@ -7486,13 +7527,15 @@ var VF = (function(exports) {
 	}
 	/** 每个控件（及菜单项）当前应有的样子：ID → 可见、可用、属性。 */
 	function views() {
-		const result = {};
-		for (const id of Object.keys(scene.nodes)) result[id] = runtime.view(id);
-		for (const { item } of allMenuItems(scene)) if (!result[item.id]) result[item.id] = runtime.view(item.id);
-		return result;
+		return runtime.readSnapshot(() => {
+			const result = {};
+			for (const id of Object.keys(scene.nodes)) result[id] = runtime.view(id);
+			for (const { item } of allMenuItems(scene)) if (!result[item.id]) result[item.id] = runtime.view(item.id);
+			return result;
+		});
 	}
 	function computeLayout(width, height) {
-		const boxes = computeSceneLayout(scene, {
+		const boxes = runtime.readSnapshot(() => computeSceneLayout(scene, {
 			rootSize: {
 				width,
 				height
@@ -7503,7 +7546,7 @@ var VF = (function(exports) {
 				return (_runtime$view$props$p = runtime.view(id).props[prop]) !== null && _runtime$view$props$p !== void 0 ? _runtime$view$props$p : null;
 			},
 			getDockLayout: (winId) => runtime.getDockLayout(winId)
-		});
+		}));
 		const out = {};
 		for (const [id, box] of boxes) out[id] = box;
 		return out;

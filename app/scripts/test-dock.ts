@@ -488,6 +488,38 @@ async function testDockModelAndReferences(): Promise<void> {
     assert.equal(stateOf(rt), "selected", "移出时悬停和按下一起清掉");
   }
 
+  // 15) [审核五] 模态框打开时背景控件不残留悬停和按下；移出和松开被模态拦截时也要清掉
+  {
+    const rt = await freshRuntime();
+    rt.dispatch(btn, "mouseenter");
+    assert.equal(stateOf(rt), "hover");
+    rt.dispatch("newProjectBtn", "click");
+    await rt.waitForIdle();
+    assert.equal(stateOf(rt), "selected", "模态框打开后背景控件不再悬停");
+    rt.dispatch(btn, "mouseenter");
+    assert.equal(stateOf(rt), "selected", "模态框打开时背景控件不能进入悬停");
+    rt.closeWindow("newProjectDialog");
+    assert.equal(stateOf(rt), "selected", "模态框关闭后不残留");
+    rt.dispatch(btn, "mouseenter");
+    rt.dispatch(btn, "mousedown");
+    assert.equal(stateOf(rt), "pressed");
+    rt.setDockLayout(rt.getDockLayout());
+    assert.equal(stateOf(rt), "selected", "setDockLayout 也清掉停靠面板里的悬停和按下");
+  }
+  // 16) 已浮出的 FloatBox 脱离了原面板，停靠操作不清它里面的状态
+  {
+    const rt = await freshRuntime();
+    const pointerSets = rt as unknown as { hoveredControls: Set<string> };
+    const insideBox = project.scene.nodes.onionSkinBox.children![0];
+    rt.dispatch("onionSkinBox", "toggle", true);
+    await rt.waitForIdle();
+    assert.equal(rt.view("onionSkinBox").props.floating, true);
+    rt.dispatch(insideBox, "mouseenter");
+    assert.ok(pointerSets.hoveredControls.has(insideBox));
+    rt.dockOp("resizeArea", { area: "left", size: 250 });
+    assert.ok(pointerSets.hoveredControls.has(insideBox), "停靠操作不影响已浮出 FloatBox 里的控件");
+  }
+
   console.log("PASS 1. 停靠纯模型运算、layoutedit 同步、3组分栏缩放、关闭激活页签自动切换、持久化撤销重做与 FloatBox 独立显隐检查");
 }
 
@@ -1123,6 +1155,7 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
       const urlPath = (req.url ?? "/").split("?")[0];
       if (req.method === "POST" && urlPath === "/report") {
         let body = "";
+        req.setEncoding("utf8");
         req.on("data", (chunk) => (body += chunk));
         req.on("end", () => {
           res.writeHead(200, { "Content-Type": "text/plain" });
@@ -1476,6 +1509,25 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
         assert.equal((s.views[id] as { visible?: boolean }).visible, true, `最小化后 ${id} 不应被当成关闭`);
       }
     }
+
+    // [审核五] 模态框：Qt 与逻辑层走同一份清理
+    assert.deepEqual(
+      hoverSeen("enter:colorPanelToggleBtn;state;click:newProjectBtn;leave:colorPanelToggleBtn;state;click:confirmNewProjectBtn;state"),
+      ["hover", "selected", "selected"],
+      "Qt 悬停时弹出模态框不残留",
+    );
+
+    // [审核五] check 读真实控件：面板被背着逻辑层隐藏时必须报错；最小化时面板逻辑上还开着，check ok 是对的
+    const rawChecks = (steps: string) =>
+      execFileSync(ANIMEAN_QT_EXE, ["--steps", steps], { encoding: "utf8", env: qtEnv })
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith("check "));
+    const brokenChecks = rawChecks("break:hide:inspectorDock;check");
+    assert.ok(
+      brokenChecks.some((l) => l.includes("check MISMATCH inspectorDock.visible")),
+      `面板被意外隐藏时 check 应报 inspectorDock.visible，实际：${brokenChecks.join("\n").slice(0, 300)}`,
+    );
+    assert.deepEqual(rawChecks("window:minimize;wait:200;check"), ["check ok"], "最小化时面板逻辑上仍开着");
 
     // 窗口放不下时 Qt 不被停靠面板撑大
     const qtHuge = qtRun("dock:resize:bottom:700;check;docks;layout");

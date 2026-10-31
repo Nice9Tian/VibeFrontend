@@ -505,6 +505,12 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                 ui.window()->resize(w, h);
             continue;
         }
+        if (verb == QLatin1String("break")) {
+            // 故意弄坏控件状态，用来证明 check 查得出来
+            if (id == QLatin1String("hide"))
+                ui.hideDockBehindLogic(step.section(QLatin1Char(':'), 2, 2));
+            continue;
+        }
         if (verb == QLatin1String("window")) {
             if (id == QLatin1String("minimize"))
                 ui.window()->showMinimized();

@@ -1536,6 +1536,9 @@ struct Ui::Private
     QRect dragStartDockRect;
     bool dockDragMoved = false;
     QString lastDockStructureKey;
+    QString lastDockPassKey;          // 上一遍布局的全部输入，没变就不用再动 QDockWidget
+    QString lastSplitterKey;          // 上次放分隔条时各面板的位置
+    QJSValue dockPassBoxes;           // 这一遍算出的几何，FloatBox 接着用
 
     QHash<QWidget *, QMenu *> popupMenus;
     QStatusBar *statusBar = nullptr;
@@ -1561,7 +1564,8 @@ struct Ui::Private
     void registerFloatBox(const QString &id, QFrame *frame, QWidget *header, QWidget *body, int headerHeight, int designWidth, int designHeight);
     void applyDockLayout(const QJSValue &views);
     void rebuildDockSplitters();
-    void applyFloatBoxes(const QJSValue &views);
+    void applyFloatBoxes(const QJSValue &views, const QJSValue *knownBoxes = nullptr);
+    void finishDockPass(bool prevApplying);
     void beginDockDrag(const QString &dockId, const QString &visibleDockId, const QPoint &globalPos);
     void updateDockDrag(const QMouseEvent *mouse);
     bool finishDockDrag(const QMouseEvent *mouse);
@@ -1577,7 +1581,7 @@ struct Ui::Private
     void drain(const QJSValue &pending);
     void scheduleTimers();
     void syncFlowDocks();
-    void syncWindowLayout();
+    void syncWindowLayout(bool relayoutDocks = true);
     void syncStatusBar();
     void syncGraphics();
     void onDialogFinished(const QString &id);
@@ -1716,10 +1720,8 @@ QString Ui::widgetDump() const
         // 只看这个控件自己的设置，不受外层控件影响
         one.insert(QStringLiteral("enabled"), !control.widget->testAttribute(Qt::WA_ForceDisabled));
         one.insert(QStringLiteral("props"), props);
-        bool isVis = !control.widget->isHidden();
-        if (d->docks.contains(control.id))
-            isVis = !d->docks.value(control.id).isClosed;
-        one.insert(QStringLiteral("visible"), isVis);
+        // isHidden 只反映控件自己被隐藏：面板关闭时为真，主窗口最小化时面板仍算开着
+        one.insert(QStringLiteral("visible"), !control.widget->isHidden());
         if (control.stateImageWidget) {
             one.insert(QStringLiteral("visualState"), control.stateImageWidget->visualState());
             one.insert(QStringLiteral("stateImage"), control.stateImageWidget->currentStateImage());
@@ -2019,6 +2021,16 @@ QString Ui::wantedDockDump() const
     return d->call("effectiveDockLayoutAt", { d->window.width(), d->window.height() }).toString();
 }
 
+void Ui::hideDockBehindLogic(const QString &dockId)
+{
+    if (!d->docks.contains(dockId))
+        return;
+    const bool prev = d->applyingLayout;
+    d->applyingLayout = true;
+    d->docks.value(dockId).dock->hide();
+    d->applyingLayout = prev;
+}
+
 QString Ui::dockDropAt(const QString &dockId, const QPoint &globalPos) const
 {
     if (!d->docks.contains(dockId))
@@ -2181,8 +2193,10 @@ void Ui::setDataFormField(const QString &id, const QString &fieldName, const QSt
 bool Ui::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == &d->window) {
-        if (event->type() == QEvent::Resize || event->type() == QEvent::Show)
+        if (event->type() == QEvent::Resize || event->type() == QEvent::Show) {
+            d->lastDockPassKey.clear();
             d->syncWindowLayout();
+        }
     }
 
     if (watched == d->statusBar) {
@@ -3070,6 +3084,31 @@ void Ui::Private::applyDockLayout(const QJSValue &views)
     const QJsonObject areasObj = layoutObj.value(QStringLiteral("areas")).toObject();
     const QJsonArray floatingArr = layoutObj.value(QStringLiteral("floating")).toArray();
     const QJSValue boxesObj = call("computeLayout", { window.width(), window.height() });
+    dockPassBoxes = boxesObj;
+
+    // 排列、窗口尺寸、各面板几何和标题都没变时，这一遍不用再动 QDockWidget，
+    // 否则每次状态变化都要重排一次。面板里的内容可能变了，它们的布局还是要刷新
+    QStringList passParts{ dockJson, QString::number(window.width()), QString::number(window.height()), QString::number(window.isVisible()) };
+    for (auto it = docks.cbegin(); it != docks.cend(); ++it) {
+        const QJSValue box = boxesObj.property(it.key());
+        const QJSValue view = views.property(it.key());
+        passParts << QString::number(box.property(QStringLiteral("x")).toInt())
+                  << QString::number(box.property(QStringLiteral("y")).toInt())
+                  << QString::number(box.property(QStringLiteral("width")).toInt())
+                  << QString::number(box.property(QStringLiteral("height")).toInt())
+                  << QString::number(view.property(QStringLiteral("visible")).toBool())
+                  << view.property(QStringLiteral("props")).property(QStringLiteral("title")).toString();
+    }
+    const QString passKey = passParts.join(QChar(0x1f));
+    if (passKey == lastDockPassKey) {
+        for (auto it = docks.begin(); it != docks.end(); ++it) {
+            if (!it->dock->isHidden() && it->body->layout())
+                it->body->layout()->activate();
+        }
+        finishDockPass(prevApplying);
+        return;
+    }
+    lastDockPassKey = passKey;
 
     QStringList structParts;
     for (const QString &areaKey : { QStringLiteral("top"), QStringLiteral("bottom"), QStringLiteral("left"), QStringLiteral("right") }) {
@@ -3484,8 +3523,25 @@ void Ui::Private::applyDockLayout(const QJSValue &views)
             cw->layout()->activate();
     }
 
-    if (draggingSplitterIdx < 0)
-        rebuildDockSplitters();
+    if (draggingSplitterIdx < 0) {
+        // 分隔条要删掉重建，只在面板的位置或显隐变了才做
+        QStringList splitterParts;
+        for (auto it = docks.cbegin(); it != docks.cend(); ++it) {
+            const QRect r = it->dock->geometry();
+            splitterParts << QStringLiteral("%1,%2,%3,%4,%5,%6,%7").arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height())
+                                 .arg(it->dock->isHidden()).arg(it->dock->isFloating()).arg(it->isActiveInGroup);
+        }
+        const QString splitterKey = splitterParts.join(QLatin1Char(';'));
+        if (splitterKey != lastSplitterKey) {
+            lastSplitterKey = splitterKey;
+            rebuildDockSplitters();
+        }
+    }
+    finishDockPass(prevApplying);
+}
+
+void Ui::Private::finishDockPass(bool prevApplying)
+{
     applyingLayout = prevApplying;
     dockPassRunning = false;
 
@@ -3622,11 +3678,11 @@ void Ui::Private::rebuildDockSplitters()
     }
 }
 
-void Ui::Private::applyFloatBoxes(const QJSValue &views)
+void Ui::Private::applyFloatBoxes(const QJSValue &views, const QJSValue *knownBoxes)
 {
     if (floatBoxes.isEmpty())
         return;
-    const QJSValue boxesObj = call("computeLayout", { window.width(), window.height() });
+    const QJSValue boxesObj = knownBoxes ? *knownBoxes : call("computeLayout", { window.width(), window.height() });
     for (FloatBoxEntry &fb : floatBoxes) {
         const QJSValue view = views.property(fb.id);
         const QJSValue boxVal = boxesObj.property(fb.id);
@@ -4128,13 +4184,13 @@ void Ui::Private::syncFlowDocks()
     }
 }
 
-void Ui::Private::syncWindowLayout()
+void Ui::Private::syncWindowLayout(bool relayoutDocks)
 {
     if (syncingLayout)
         return;
     syncingLayout = true;
     syncFlowDocks();
-    if (!applyingLayout && (!docks.isEmpty() || !floatBoxes.isEmpty())) {
+    if (relayoutDocks && !applyingLayout && (!docks.isEmpty() || !floatBoxes.isEmpty())) {
         const QJSValue views = call("views");
         if (views.isObject()) {
             applyDockLayout(views);
@@ -4511,8 +4567,9 @@ void Ui::Private::applyView()
             control.widget->layout()->activate();
         }
     }
+    // 窗口尺寸变化由 Resize 事件走完整流程；这里状态变了但窗口没变，刚算过一遍，后面不用再算
     applyDockLayout(views);
-    applyFloatBoxes(views);
+    applyFloatBoxes(views, (!docks.isEmpty() && !dockPassRunning) ? &dockPassBoxes : nullptr);
     const bool playing = call("getState", { QStringLiteral("timeline.playing") }).toBool() ||
                          call("getState", { QStringLiteral("project.playing") }).toBool();
     if (playing && !manualClock && !clockTimer.isActive())
@@ -4520,7 +4577,7 @@ void Ui::Private::applyView()
     else if ((!playing || manualClock) && clockTimer.isActive())
         clockTimer.stop();
     QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
-    syncWindowLayout();
+    syncWindowLayout(false);
 }
 
 // 显示或隐藏一个控件。指定了效果、并且有人提供了实现时，带着过渡动画做：

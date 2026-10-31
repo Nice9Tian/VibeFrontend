@@ -296,6 +296,11 @@ export const ANIMEAN_SUITE_CASES: Array<{ name: string; steps: string; noEffects
     steps:
       "dock:tabify:layersDock:inspectorDock;check;state;window:minimize;wait:200;state;window:restore;wait:200;check;state",
   },
+  {
+    name: "55. 悬停时弹出模态框：背景控件不残留悬停，模态拦截不变",
+    steps:
+      "enter:colorPanelToggleBtn;check;state;click:newProjectBtn;leave:colorPanelToggleBtn;check;state;click:confirmNewProjectBtn;check;state",
+  },
 ];
 
 interface FlatTreeRow {
@@ -377,6 +382,7 @@ async function runStepsOnWeb(project: Project, stepsArg: string): Promise<string
       verb === "shot" ||
       verb === "resize" ||
       verb === "window" ||
+      verb === "break" ||
       verb === "layout"
     ) {
       continue;

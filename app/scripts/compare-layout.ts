@@ -469,6 +469,7 @@ async function measureInHeadlessBrowser(
       const urlPath = (req.url ?? "/").split("?")[0];
       if (req.method === "POST" && urlPath === "/report") {
         let body = "";
+        req.setEncoding("utf8");
         req.on("data", (chunk) => (body += chunk));
         req.on("end", () => {
           res.writeHead(200, { "Content-Type": "text/plain" });

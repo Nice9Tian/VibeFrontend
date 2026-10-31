@@ -34,6 +34,7 @@ class Ui;
 //   mock:动作名:模式[:毫秒]  切换动作模拟方式（real / success / error）及可选延迟毫秒数
 //   resize:宽x高             调整主窗口尺寸
 //   window:minimize|restore  最小化或恢复主窗口
+//   break:hide:面板ID        把面板藏起来但不告诉逻辑层，用来证明 check 查得出这种不一致
 //   layout                   输出 "layout " 加上各可见控件当前相对于所属窗口的位置和大小
 //   wait:毫秒                等一会儿（让过渡放完）
 //   size:控件ID              输出 "size 控件ID 宽x高"，是控件此刻实际的大小（过渡放到一半时能看出来）

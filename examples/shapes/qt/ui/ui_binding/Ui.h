@@ -38,6 +38,8 @@ public:
     QString dockDump() const;
     // 逻辑层认为当前窗口尺寸下应有的实际排列，和 dockDump 比较
     QString wantedDockDump() const;
+    // 隐藏面板但不同步给逻辑层，只给驱动的负面测试用
+    void hideDockBehindLogic(const QString &dockId);
     // 把 dockId 拖到 globalPos 松手会发生什么（"tabify"、"split:after:vertical"、"move:left"、"float"），驱动用它找落点
     QString dockDropAt(const QString &dockId, const QPoint &globalPos) const;
 

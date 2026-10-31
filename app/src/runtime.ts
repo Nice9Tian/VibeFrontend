@@ -41,6 +41,7 @@ import {
   type StateLeaf,
   type Step,
   parentOfNode,
+  type SceneNode,
 } from "./model.ts";
 
 export interface LogEntry {
@@ -229,6 +230,8 @@ export class Runtime {
   private hoveredControls = new Set<string>();
   /** 当前鼠标按下中的控件 ID 集合（用于状态图片选图） */
   private pressedControls = new Set<string>();
+  private viewSnapshot: Map<string, NodeView> | null = null;
+  private stackContainersSnapshot: Array<[string, SceneNode]> | null = null;
   private activePromises = new Set<Promise<unknown>>();
   private exprCache = new Map<string, Expr>();
   private fnCache = new Map<string, (state: Record<string, unknown>, args: Record<string, Value>) => unknown>();
@@ -368,6 +371,7 @@ export class Runtime {
     });
     this.dockLayouts.set(winId, normalized);
     this.lastSceneDockLayouts.set(winId, JSON.stringify(winNode?.dockLayout ?? null));
+    this.releaseDockedPointerStates();
     this.notifyChanged();
   }
 
@@ -729,7 +733,38 @@ export class Runtime {
   }
 
   /** 某个节点（或菜单项）当前应有的样子：静态默认值、scene.json 的值、逻辑计算值依次覆盖。 */
+  /**
+   * 连续读很多控件时共用一份结果：一次读取里状态不变，同一个控件不用算第二遍。
+   * 排版计算会反复读同一个控件，不共用时每读一次都要重新求值。read 里不能改状态。
+   */
+  readSnapshot<T>(read: () => T): T {
+    if (this.viewSnapshot) return read();
+    this.viewSnapshot = new Map();
+    this.stackContainersSnapshot = this.findStackContainers();
+    try {
+      return read();
+    } finally {
+      this.viewSnapshot = null;
+      this.stackContainersSnapshot = null;
+    }
+  }
+
+  private findStackContainers(): Array<[string, SceneNode]> {
+    return Object.entries(this.project.scene.nodes).filter(([, n]) => layoutOf(n)?.kind === "stack");
+  }
+
   view(id: string): NodeView {
+    const snapshot = this.viewSnapshot;
+    if (!snapshot) return this.computeView(id);
+    let view = snapshot.get(id);
+    if (!view) {
+      view = this.computeView(id);
+      snapshot.set(id, view);
+    }
+    return view;
+  }
+
+  private computeView(id: string): NodeView {
     const menuItem = findMenuItem(this.project.scene, id);
     if (menuItem && !this.project.scene.nodes[id]) {
       const object = this.project.logic.objects?.[id];
@@ -806,8 +841,8 @@ export class Runtime {
       }
     }
     if (visible) {
-      for (const [parentId, parentNode] of Object.entries(this.project.scene.nodes)) {
-        if (layoutOf(parentNode)?.kind === "stack" && parentNode.children?.includes(id)) {
+      for (const [parentId, parentNode] of this.stackContainersSnapshot ?? this.findStackContainers()) {
+        if (parentNode.children?.includes(id)) {
           const pView = this.view(parentId);
           const activeIdx = Number(pView.props.currentIndex ?? 0);
           const activePage = String(pView.props.currentPage ?? "");
@@ -854,10 +889,18 @@ export class Runtime {
     return shown === dockId;
   }
 
-  /** 控件此刻显示在界面上并且可用。view().visible 只看控件自己，这里还看所属窗口、容器和停靠页签。 */
+  private releasePointerOn(nodeId: string, event: string): void {
+    const wasHovered = event === "mouseleave" && this.hoveredControls.delete(nodeId);
+    const wasPressed = (event === "mouseleave" || event === "mouseup") && this.pressedControls.delete(nodeId);
+    if (wasHovered || wasPressed) this.notifyChanged();
+  }
+
+  /** 控件此刻显示在界面上并且可用。view().visible 只看控件自己，这里还看所属窗口、容器、停靠页签和打开的模态框。 */
   private canTakePointer(id: string): boolean {
     const scene = this.project.scene;
     if (!this.view(id).enabled) return false;
+    const modalWin = this.activeModalWindow();
+    if (modalWin && !this.isInsideSubtree(modalWin, id)) return false;
     for (let cur: string | null = id; cur && cur !== scene.root; cur = parentOfNode(scene, cur)) {
       const node = scene.nodes[cur];
       const curView = this.view(cur);
@@ -875,7 +918,10 @@ export class Runtime {
     for (const set of [this.hoveredControls, this.pressedControls]) {
       for (const id of [...set]) {
         for (let cur: string | null = id; cur; cur = parentOfNode(scene, cur)) {
-          if (scene.nodes[cur]?.type === "Dock") {
+          const node = scene.nodes[cur];
+          // 已浮出的 FloatBox 脱离了原面板，不跟着重排
+          if (node?.type === "FloatBox" && this.view(cur).props.floating) break;
+          if (node?.type === "Dock") {
             set.delete(id);
             break;
           }
@@ -900,6 +946,8 @@ export class Runtime {
     if (nodeId !== null) {
       const modalWin = this.activeModalWindow();
       if (modalWin && !this.isInsideSubtree(modalWin, nodeId)) {
+        // 事件本身被拦下，但鼠标确实离开、松开了，界面状态要跟上
+        this.releasePointerOn(nodeId, event);
         if (event !== "mouseenter" && event !== "mouseleave") {
           this.hooks.onLog({ title: `${nodeId}.${event}`, lines: [`已忽略：模态窗口 ${modalWin} 正在打开`] });
         }
@@ -978,12 +1026,8 @@ export class Runtime {
       }
     }
     if (nodeId) {
-      if (event === "mouseleave") {
-        const wasHovered = this.hoveredControls.delete(nodeId);
-        const wasPressed = this.pressedControls.delete(nodeId);
-        if (wasHovered || wasPressed) this.notifyChanged();
-      } else if (event === "mouseup") {
-        if (this.pressedControls.delete(nodeId)) this.notifyChanged();
+      if (event === "mouseleave" || event === "mouseup") {
+        this.releasePointerOn(nodeId, event);
       } else if (event === "mouseenter" || event === "mousedown") {
         if (this.canTakePointer(nodeId)) {
           if (event === "mouseenter") this.hoveredControls.add(nodeId);

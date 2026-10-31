@@ -221,21 +221,25 @@ export function getState(path: string): Value {
 
 /** 每个控件（及菜单项）当前应有的样子：ID → 可见、可用、属性。 */
 export function views(): Record<string, NodeView> {
-  const result: Record<string, NodeView> = {};
-  for (const id of Object.keys(scene.nodes)) result[id] = runtime.view(id);
-  for (const { item } of allMenuItems(scene)) {
-    if (!result[item.id]) result[item.id] = runtime.view(item.id);
-  }
-  return result;
+  return runtime.readSnapshot(() => {
+    const result: Record<string, NodeView> = {};
+    for (const id of Object.keys(scene.nodes)) result[id] = runtime.view(id);
+    for (const { item } of allMenuItems(scene)) {
+      if (!result[item.id]) result[item.id] = runtime.view(item.id);
+    }
+    return result;
+  });
 }
 
 export function computeLayout(width: number, height: number): Record<string, { x: number; y: number; width: number; height: number; absX: number; absY: number; visible: boolean; windowId: string }> {
-  const boxes = computeSceneLayout(scene, {
-    rootSize: { width, height },
-    isVisible: (id) => runtime.view(id).visible,
-    getProp: (id, prop) => runtime.view(id).props[prop] ?? null,
-    getDockLayout: (winId) => runtime.getDockLayout(winId),
-  });
+  const boxes = runtime.readSnapshot(() =>
+    computeSceneLayout(scene, {
+      rootSize: { width, height },
+      isVisible: (id) => runtime.view(id).visible,
+      getProp: (id, prop) => runtime.view(id).props[prop] ?? null,
+      getDockLayout: (winId) => runtime.getDockLayout(winId),
+    }),
+  );
   const out: Record<string, { x: number; y: number; width: number; height: number; absX: number; absY: number; visible: boolean; windowId: string }> = {};
   for (const [id, box] of boxes) out[id] = box;
   return out;

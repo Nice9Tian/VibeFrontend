@@ -803,7 +803,11 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
 
     // 等待 CDP 端口就绪并连接页面
     let wsUrl = "";
-    const deadline = Date.now() + 10000;
+    let chromeExit: string | null = null;
+    chromeProc.once("exit", (code, signal) => {
+      chromeExit = `code=${code} signal=${signal}`;
+    });
+    const deadline = Date.now() + 30000;
     while (Date.now() < deadline) {
       try {
         const res = await fetch(`http://127.0.0.1:${cdpPort}/json/list`);
@@ -820,7 +824,7 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
       }
       await new Promise((r) => setTimeout(r, 80));
     }
-    assert.ok(wsUrl, "应当成功连接 Headless Chrome CDP");
+    assert.ok(wsUrl, `应当成功连接 Headless Chrome CDP（30 秒内未就绪，Chrome ${chromeExit ?? "仍在运行"}）`);
 
     cdp = await CdpSession.connect(wsUrl);
     await cdp.waitForSelector("#stage");

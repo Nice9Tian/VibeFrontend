@@ -341,7 +341,8 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (req.method === "POST" && url.pathname === "/report") {
       let body = "";
-      req.on("data", (chunk) => (body += chunk));
+      req.setEncoding("utf8");
+        req.on("data", (chunk) => (body += chunk));
       req.on("end", () => {
         reportData = JSON.parse(body);
         res.writeHead(200);
@@ -352,7 +353,8 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
     }
     if (url.pathname === "/__fs/set-overrides" && req.method === "POST") {
       let body = "";
-      req.on("data", (chunk) => (body += chunk));
+      req.setEncoding("utf8");
+        req.on("data", (chunk) => (body += chunk));
       req.on("end", () => {
         fsOverrides = JSON.parse(body);
         res.writeHead(200);
