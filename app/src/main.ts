@@ -307,53 +307,98 @@ function currentSnapshot(): HistorySnapshot {
   };
 }
 
-async function applyHistorySnapshot(target: HistorySnapshot): Promise<void> {
+interface FileChange {
+  path: string;
+  next: string;
+  /** 写之前的内容；null 表示文件原来不存在 */
+  prev: string | null;
+}
+
+let fileBatch: Promise<unknown> | null = null;
+
+/**
+ * 一次操作要改几个文件时，依次写入。中途失败就把已写的写回原内容，磁盘不留半截。
+ * 成功返回 null；失败返回给用户看的说明，写回也失败时说明里列出哪些文件停在了新内容。
+ */
+function writeFilesTogether(changes: FileChange[]): Promise<string | null> {
+  const run = (async () => {
+    const written: FileChange[] = [];
+    for (const change of changes) {
+      try {
+        await writeText(change.path, change.next);
+        written.push(change);
+      } catch (e) {
+        const reason = (e as Error).message ?? String(e);
+        const stuck: string[] = [];
+        for (const done of written.reverse()) {
+          try {
+            if (done.prev === null) await removeFile(done.path);
+            else await writeText(done.path, done.prev);
+          } catch {
+            stuck.push(done.path);
+          }
+        }
+        if (stuck.length === 0) return reason;
+        return `${reason}。${stuck.join("、")} 已是新内容但写不回去，磁盘上的文件现在不一致，修好写入问题后请检查这些文件`;
+      }
+    }
+    return null;
+  })();
+  const tracked = run.finally(() => {
+    if (fileBatch === tracked) fileBatch = null;
+  });
+  fileBatch = tracked;
+  return tracked;
+}
+
+/** 从磁盘版本的文本还原内存里的场景，丢掉没存上的修改。 */
+function rollbackScene(sceneText: string): void {
+  project.sceneText = sceneText;
+  project.scene = JSON.parse(sceneText) as Project["scene"];
+  designRuntime = new Runtime(project);
+  previewRuntime?.adopt(project);
+  if (selectedId && !node(selectedId)) selectedId = null;
+  renderAll();
+}
+
+/** 写成功才提交 nextHistory；失败时内存、界面和历史都保持操作之前的样子。 */
+async function applyHistorySnapshot(target: HistorySnapshot, nextHistory: typeof history): Promise<boolean> {
   const sceneChanged = target.sceneText !== project.sceneText;
+  const logicChanged = target.logicText !== project.logicText;
+  const prevLogicText = project.logicText;
+  const changes: FileChange[] = [];
+  if (logicChanged) changes.push({ path: LOGIC_PATH, next: target.logicText, prev: prevLogicText });
+  if (sceneChanged) changes.push({ path: SCENE_PATH, next: target.sceneText, prev: project.sceneText });
+  for (const [docPath, content] of Object.entries(target.docs ?? {})) {
+    const prevDoc = project.docs.get(docPath);
+    if ((prevDoc ?? "") !== content) changes.push({ path: docPath, next: content, prev: prevDoc ?? null });
+  }
+  if (target.presetsText !== undefined && target.presetsText !== currentPresetsText()) {
+    changes.push({ path: PRESETS_PATH, next: target.presetsText, prev: currentPresetsText() });
+  }
+  window.clearTimeout(yamlTimer);
+  project.logicText = target.logicText;
+  const failure = await writeFilesTogether(changes);
+  if (failure !== null) {
+    if (project.logicText === target.logicText) project.logicText = prevLogicText;
+    toast(`写入快照失败：${failure}`);
+    return false;
+  }
+  history = nextHistory;
+  if (logicChanged) {
+    yamlDirty = false;
+    yamlBaseContent = target.logicText;
+    yamlConflictNotified = false;
+  }
   if (sceneChanged) {
     try {
-      project.scene = JSON.parse(target.sceneText) as Project["scene"];
-      project.sceneText = target.sceneText;
-      designRuntime = new Runtime(project);
-      previewRuntime?.adopt(project);
-      if (selectedId && !node(selectedId)) selectedId = null;
-      renderAll();
+      rollbackScene(target.sceneText);
     } catch {
       // 由后续 reload 兜底
     }
   }
-  try {
-    if (target.logicText !== project.logicText) {
-      window.clearTimeout(yamlTimer);
-      await writeText(LOGIC_PATH, target.logicText);
-      yamlDirty = false;
-      yamlBaseContent = target.logicText;
-      yamlConflictNotified = false;
-      project.logicText = target.logicText;
-    }
-    if (sceneChanged) {
-      await writeText(SCENE_PATH, target.sceneText);
-    }
-    if (target.docs) {
-      for (const [docPath, content] of Object.entries(target.docs)) {
-        if ((project.docs.get(docPath) ?? "") !== content) {
-          window.clearTimeout(docTimer);
-          await writeText(docPath, content);
-          docDirty = false;
-          if (docTarget?.path === docPath) {
-            docBaseContent = content;
-            docConflictNotified = false;
-          }
-        }
-      }
-    }
-    if (target.presetsText !== undefined && target.presetsText !== currentPresetsText()) {
-      await writeText(PRESETS_PATH, target.presetsText);
-    }
-  } catch (e) {
-    toast(`写入快照失败：${(e as Error).message ?? String(e)}`);
-    return;
-  }
   await reload(true);
+  return true;
 }
 
 async function saveScene(options: { history?: boolean; nextLogicText?: string; label?: string } = {}): Promise<void> {
@@ -364,8 +409,10 @@ async function saveScene(options: { history?: boolean; nextLogicText?: string; l
     previewRuntime?.setDockLayout(rootWin.dockLayout, project.scene.root);
   }
   const text = JSON.stringify(project.scene, null, 2) + "\n";
-  if (docDirty || yamlDirty || docSavingPromise || yamlSavingPromise) {
-    if (!(await flushEditors())) return;
+  if (hasUnsavedEditors() && !(await flushEditors())) {
+    // 调用方已经改了内存里的场景，存不下去就要退回去，否则下一次修改会把它带进文件
+    if (text !== project.sceneText) rollbackScene(project.sceneText);
+    return;
   }
   const nextLogic = options.nextLogicText ?? project.logicText;
   const logicChanged = nextLogic !== project.logicText;
@@ -374,31 +421,32 @@ async function saveScene(options: { history?: boolean; nextLogicText?: string; l
   const prevSceneText = project.sceneText;
   const prevLogicText = project.logicText;
   const before = currentSnapshot();
+  const changes: FileChange[] = [];
+  if (logicChanged) changes.push({ path: LOGIC_PATH, next: nextLogic, prev: prevLogicText });
+  if (sceneChanged) changes.push({ path: SCENE_PATH, next: text, prev: prevSceneText });
+  project.sceneText = text;
+  project.logicText = nextLogic;
   if (sceneChanged && !logicChanged) {
-    project.sceneText = text;
     designRuntime = new Runtime(project);
     previewRuntime?.adopt(project);
     if (selectedId && !node(selectedId)) selectedId = null;
     renderAll();
   }
-  try {
-    if (logicChanged) {
-      window.clearTimeout(yamlTimer);
-      await writeText(LOGIC_PATH, nextLogic);
-      yamlDirty = false;
-      yamlBaseContent = nextLogic;
-      yamlConflictNotified = false;
-      project.logicText = nextLogic;
+  if (logicChanged) window.clearTimeout(yamlTimer);
+  const failure = await writeFilesTogether(changes);
+  if (failure !== null) {
+    // 只有这次保存还是最新的才退回去，否则后面的修改已经在这份内容上继续了
+    if (project.sceneText === text && project.logicText === nextLogic) {
+      project.logicText = prevLogicText;
+      rollbackScene(prevSceneText);
     }
-    if (sceneChanged) {
-      project.sceneText = text;
-      await writeText(SCENE_PATH, text);
-    }
-  } catch (e) {
-    project.sceneText = prevSceneText;
-    project.logicText = prevLogicText;
-    toast(`保存画布失败：${(e as Error).message ?? String(e)}`);
+    toast(`保存画布失败：${failure}`);
     return;
+  }
+  if (logicChanged) {
+    yamlDirty = false;
+    yamlBaseContent = nextLogic;
+    yamlConflictNotified = false;
   }
   if (options.history !== false) {
     history = pushHistory(
@@ -415,25 +463,21 @@ async function undo(): Promise<void> {
   if (!(await flushEditors())) return;
   const res = undoHistory(history, currentSnapshot());
   if (!res.snapshot) return toast("没有可以撤销的画布操作");
-  history = res.stack;
-  await applyHistorySnapshot(res.snapshot);
+  await applyHistorySnapshot(res.snapshot, res.stack);
 }
 
 async function redo(): Promise<void> {
   if (!(await flushEditors())) return;
   const res = redoHistory(history, currentSnapshot());
   if (!res.snapshot) return toast("没有可以重做的画布操作");
-  history = res.stack;
-  await applyHistorySnapshot(res.snapshot);
+  await applyHistorySnapshot(res.snapshot, res.stack);
 }
 
 async function restoreVersion(index: number): Promise<void> {
   if (!(await flushEditors())) return;
   const res = restoreHistoryVersion(history, index, currentSnapshot());
   if (!res.snapshot) return;
-  history = res.stack;
-  await applyHistorySnapshot(res.snapshot);
-  toast("已恢复到所选版本");
+  if (await applyHistorySnapshot(res.snapshot, res.stack)) toast("已恢复到所选版本");
 }
 
 /** 用保留注释和格式的方式修改 YAML。 */
@@ -527,8 +571,8 @@ async function reload(force = false): Promise<void> {
       const mustRender = reloadForce;
       reloadForce = false;
       // 磁盘要追上内存才能读：文件监听触发的重载如果读到自己还没写完的文件，会用旧内容盖掉内存
-      if (docSavingPromise || yamlSavingPromise) {
-        await Promise.all([docSavingPromise, yamlSavingPromise]);
+      if (docSavingPromise || yamlSavingPromise || fileBatch) {
+        await Promise.all([docSavingPromise, yamlSavingPromise, fileBatch]);
       }
       await writesSettled();
       const writesBefore = localWriteCount();
@@ -3620,6 +3664,11 @@ async function renameId(oldId: string, nextId: string): Promise<void> {
   renameNodeReferences(scene, oldId, nextId);
   selectedId = nextId;
   await saveScene({ nextLogicText: logicText, label: `重命名 ${oldId} → ${nextId}` });
+  if (!node(nextId) && node(oldId)) {
+    selectedId = oldId;
+    selectedIds = [oldId];
+    afterSelectionChange();
+  }
 }
 
 async function createDocSection(id: string): Promise<void> {
@@ -3639,25 +3688,19 @@ async function createDocSection(id: string): Promise<void> {
 
   const before = currentSnapshot();
   const nextDocs = { ...(before.docs ?? {}), [path]: nextDocContent };
-  try {
-    if (nextDocContent !== current) {
-      window.clearTimeout(docTimer);
-      await writeText(path, nextDocContent);
-      docDirty = false;
-      docBaseContent = nextDocContent;
-      docConflictNotified = false;
-    }
-    if (nextLogicText !== project.logicText) {
-      window.clearTimeout(yamlTimer);
-      await writeText(LOGIC_PATH, nextLogicText);
-      yamlDirty = false;
-      yamlBaseContent = nextLogicText;
-      yamlConflictNotified = false;
-    }
-  } catch (e) {
-    toast(`创建说明失败：${(e as Error).message ?? String(e)}`);
+  const changes: FileChange[] = [];
+  if (nextDocContent !== current) changes.push({ path, next: nextDocContent, prev: project.docs.get(path) ?? null });
+  if (nextLogicText !== project.logicText) changes.push({ path: LOGIC_PATH, next: nextLogicText, prev: project.logicText });
+  window.clearTimeout(docTimer);
+  window.clearTimeout(yamlTimer);
+  const failure = await writeFilesTogether(changes);
+  if (failure !== null) {
+    toast(`创建说明失败：${failure}`);
     return;
   }
+  yamlDirty = false;
+  yamlBaseContent = nextLogicText;
+  yamlConflictNotified = false;
   history = pushHistory(
     history,
     before,
@@ -4591,11 +4634,30 @@ function setSelection(ids: string[]): void {
 
 const docText = $<HTMLTextAreaElement>("doc-text");
 const yamlText = $<HTMLTextAreaElement>("yaml-text");
-let docDirty = false;
 let yamlDirty = false;
-let docBaseContent: string | null = null;
-let docConflictNotified = false;
-let docEditSeq = 0;
+
+/**
+ * 一份还没存下来的说明，绑定它开始时的文件和小节。保存只看这里的字段，不看当前选中了什么：
+ * 选中随时会变，内容不能跟着写到新控件的小节里。
+ */
+interface DocDraft {
+  path: string;
+  /** null 表示整份文件 */
+  section: string | null;
+  text: string;
+  /** 开始编辑时文件的内容，用来发现外部修改 */
+  base: string;
+  conflictNotified: boolean;
+  /** 改过几次、存到了第几次，保存途中继续打字时靠它接着存 */
+  edits: number;
+  savedEdits: number;
+  failed: boolean;
+}
+
+/** 文档框里正在编辑的草稿 */
+let activeDocDraft: DocDraft | null = null;
+/** 选中切走后留下的草稿，按先后保存；保存失败的留在这里，等重试或回到它的目标 */
+const detachedDocDrafts: DocDraft[] = [];
 let yamlBaseContent: string | null = null;
 let yamlConflictNotified = false;
 let yamlEditSeq = 0;
@@ -4630,6 +4692,63 @@ function setTextarea(area: HTMLTextAreaElement, value: string, enabled = true): 
   area.disabled = !enabled;
 }
 
+/** 当前选中对应的文档目标、文档框内容和说明文字。 */
+function docViewForSelection(): {
+  target: { path: string; section: string | null } | null;
+  text: string;
+  note: () => void;
+} {
+  if (!selectedId) {
+    return {
+      target: { path: project.pageDoc, section: null },
+      text: project.docs.get(project.pageDoc) ?? "",
+      note: () => noteWithButton($("doc-note"), `整份页面文档 ${project.pageDoc}`),
+    };
+  }
+  const id = selectedId;
+  const object = project.logic.objects?.[id];
+  const ref = object?.doc ? parseDocRef(object.doc) : null;
+  const file = ref ? project.docs.get(ref.path) : undefined;
+  const section = ref?.section && file !== undefined ? getSection(file, ref.section) : null;
+  if (!ref || file === undefined || (ref.section !== null && section === null)) {
+    return {
+      target: null,
+      text: "",
+      note: () => noteWithButton($("doc-note"), "这个控件还没有说明。", "创建说明", () => void createDocSection(id)),
+    };
+  }
+  const shared = Object.entries(project.logic.objects ?? {})
+    .filter(([other, o]) => other !== id && o?.doc === object!.doc)
+    .map(([other]) => other);
+  return {
+    target: ref,
+    text: ref.section === null ? file : section!,
+    note: () => noteWithButton($("doc-note"), `${object!.doc}${shared.length ? `　也被 ${shared.join("、")} 引用` : ""}`),
+  };
+}
+
+function isDocDraftFor(draft: DocDraft, target: { path: string; section: string | null } | null): boolean {
+  return target !== null && draft.path === target.path && draft.section === target.section;
+}
+
+/** 有切走后没存上的说明时，在文档页给一个重试的入口。 */
+function syncDocRetryButton(): void {
+  const note = $("doc-note");
+  note.querySelector("[data-doc-retry]")?.remove();
+  const failed = detachedDocDrafts.filter((draft) => draft.failed).length;
+  if (failed === 0) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.docRetry = "true";
+  button.textContent = `重试保存（${failed} 处说明没存上）`;
+  button.addEventListener("click", () => void saveDoc());
+  note.append(button);
+}
+
+function hasUnsavedEditors(): boolean {
+  return Boolean(activeDocDraft || detachedDocDrafts.length > 0 || yamlDirty || docSavingPromise || yamlSavingPromise);
+}
+
 function renderRight(): void {
   const idInput = $<HTMLInputElement>("selection-id");
   const n = selectedId ? node(selectedId) : undefined;
@@ -4638,56 +4757,42 @@ function renderRight(): void {
   idInput.disabled = !selectedId || locked;
   $("selection-type").textContent = n ? `${n.type}${locked ? "（已锁定）" : ""}` : "";
 
-  // 文档页签
-  if (!docDirty) {
-    const object = selectedId ? project.logic.objects?.[selectedId] : undefined;
-    if (!selectedId) {
-      docTarget = { path: project.pageDoc, section: null };
-      noteWithButton($("doc-note"), `整份页面文档 ${project.pageDoc}`);
-      setTextarea(docText, project.docs.get(project.pageDoc) ?? "");
-    } else {
-      const ref = object?.doc ? parseDocRef(object.doc) : null;
-      const file = ref ? project.docs.get(ref.path) : undefined;
-      const section = ref?.section && file !== undefined ? getSection(file, ref.section) : null;
-      if (ref && file !== undefined && (ref.section === null || section !== null)) {
-        docTarget = ref;
-        const shared = Object.entries(project.logic.objects ?? {})
-          .filter(([other, o]) => other !== selectedId && o?.doc === object!.doc)
-          .map(([other]) => other);
-        noteWithButton($("doc-note"), `${object!.doc}${shared.length ? `　也被 ${shared.join("、")} 引用` : ""}`);
-        setTextarea(docText, ref.section === null ? file : section!);
-      } else {
-        docTarget = null;
-        const id = selectedId;
-        noteWithButton($("doc-note"), "这个控件还没有说明。", "创建说明", () => void createDocSection(id));
-        setTextarea(docText, "", false);
-      }
-    }
+  // 文档页签：界面总是跟着选中走，没存完的内容留在自己的草稿里继续保存
+  const view = docViewForSelection();
+  if (activeDocDraft && !isDocDraftFor(activeDocDraft, view.target)) {
+    detachedDocDrafts.push(activeDocDraft);
+    activeDocDraft = null;
+    void saveDoc();
   }
+  docTarget = view.target;
+  view.note();
+  if (!activeDocDraft) {
+    const returning = detachedDocDrafts.findIndex((draft) => isDocDraftFor(draft, view.target));
+    if (returning >= 0) activeDocDraft = detachedDocDrafts.splice(returning, 1)[0];
+  }
+  if (activeDocDraft) {
+    setTextarea(docText, activeDocDraft.text);
+    const latest = project.docs.get(activeDocDraft.path) ?? "";
+    if (!activeDocDraft.conflictNotified && latest !== activeDocDraft.base) {
+      activeDocDraft.conflictNotified = true;
+      toast(`已忽略 ${activeDocDraft.path} 的外部修改，保留当前编辑内容`);
+    }
+  } else {
+    setTextarea(docText, view.text, view.target !== null);
+  }
+  syncDocRetryButton();
 
-  if (!docDirty) {
-    docBaseContent = docTarget ? (project.docs.get(docTarget.path) ?? "") : null;
-    docConflictNotified = false;
-  } else if (docTarget && !docConflictNotified) {
-    const latest = project.docs.get(docTarget.path) ?? "";
-    if (docBaseContent !== null && latest !== docBaseContent) {
-      docConflictNotified = true;
-      toast(`已忽略 ${docTarget.path} 的外部修改，保留当前编辑内容`);
-    }
+  // YAML 页签只有一个目标，切换选中不影响正在编辑的内容，备注跟着选中走
+  if (selectedId && !project.logic.objects?.[selectedId]) {
+    const id = selectedId;
+    noteWithButton($("yaml-note"), "这个控件还没有逻辑条目。", "添加逻辑条目", () => {
+      void editLogic((doc) => ensureObject(doc, id)).then(() => scrollYamlTo(`  ${id}:`));
+    });
+  } else {
+    noteWithButton($("yaml-note"), LOGIC_PATH);
   }
-  // YAML 页签
   if (!yamlDirty) {
     setTextarea(yamlText, project.logicText);
-    if (selectedId && !project.logic.objects?.[selectedId]) {
-      const id = selectedId;
-      noteWithButton($("yaml-note"), "这个控件还没有逻辑条目。", "添加逻辑条目", () => {
-        void editLogic((doc) => ensureObject(doc, id)).then(() => scrollYamlTo(`  ${id}:`));
-      });
-    } else {
-      noteWithButton($("yaml-note"), LOGIC_PATH);
-    }
-  }
-  if (!yamlDirty) {
     yamlBaseContent = project.logicText;
     yamlConflictNotified = false;
   } else if (!yamlConflictNotified && yamlBaseContent !== null && project.logicText !== yamlBaseContent) {
@@ -4711,41 +4816,47 @@ function scrollYamlTo(prefix: string): void {
 let docSavingPromise: Promise<boolean> | null = null;
 let yamlSavingPromise: Promise<boolean> | null = null;
 
-async function performSaveDoc(): Promise<boolean> {
-  while (docDirty && docTarget) {
-    window.clearTimeout(docTimer);
-    const { path, section } = docTarget;
-    const current = project.docs.get(path) ?? "";
-    const draft = docText.value;
-    const nextDocContent = section === null ? draft : replaceSection(current, section, draft);
-    const docBase = docBaseContent;
-    const docNotified = docConflictNotified;
-    const docSeq = docEditSeq;
-    let externalConflict = false;
-    if (!docNotified && docBase !== null) {
+/** 把一份草稿写进它自己的文件和小节。保存途中继续打字时接着存。 */
+async function writeDocDraft(draft: DocDraft): Promise<boolean> {
+  draft.failed = false;
+  while (draft.savedEdits !== draft.edits) {
+    const { path, section } = draft;
+    const edits = draft.edits;
+    const text = draft.text;
+    let diskNow: string | null = null;
+    if (!draft.conflictNotified) {
       try {
-        const diskNow = await readText(path);
-        if (docSeq !== docEditSeq) continue;
-        if (diskNow !== null && diskNow !== docBase && diskNow !== nextDocContent) {
-          externalConflict = true;
-        }
+        diskNow = await readText(path);
       } catch (e) {
         toast(`读取 ${path} 失败：${(e as Error).message ?? String(e)}`);
+        draft.failed = true;
         return false;
       }
+      if (edits !== draft.edits) continue;
     }
-    if (docSeq !== docEditSeq) continue;
+    const current = project.docs.get(path) ?? "";
+    if (section !== null && getSection(current, section) === null) {
+      // replaceSection 找不到小节时什么也不做，内容会悄悄丢掉
+      toast(`${path} 里已经没有小节 ${section}，这段说明没有保存`);
+      draft.failed = true;
+      return false;
+    }
+    const nextDocContent = section === null ? text : replaceSection(current, section, text);
+    const externalConflict = diskNow !== null && diskNow !== draft.base && diskNow !== nextDocContent;
     try {
       await writeText(path, nextDocContent);
     } catch (e) {
       toast(`保存 ${path} 失败：${(e as Error).message ?? String(e)}`);
+      draft.failed = true;
       return false;
     }
-    if (externalConflict) {
-      toast(`已忽略 ${path} 的外部修改，保留当前编辑内容`);
+    if (externalConflict) toast(`已忽略 ${path} 的外部修改，保留当前编辑内容`);
+    for (const other of [...detachedDocDrafts, activeDocDraft]) {
+      if (other && other !== draft && other.path === path && other.base === current) other.base = nextDocContent;
     }
-    docBaseContent = nextDocContent;
-    docConflictNotified = false;
+    draft.base = nextDocContent;
+    draft.conflictNotified = false;
+    draft.savedEdits = edits;
     if (nextDocContent !== current) {
       const before = currentSnapshot();
       const nextDocs = { ...(before.docs ?? {}), [path]: nextDocContent };
@@ -4753,25 +4864,41 @@ async function performSaveDoc(): Promise<boolean> {
       project.docs.set(path, nextDocContent);
       renderToolbar();
     }
-    if (docSeq === docEditSeq) {
-      docDirty = false;
-      break;
-    }
   }
   return true;
 }
 
+/** 按先后保存切走的草稿和正在编辑的草稿，一份失败不影响其它的。 */
+async function saveDocDrafts(): Promise<boolean> {
+  const attempted = new Set<DocDraft>();
+  let ok = true;
+  for (;;) {
+    const draft = [...detachedDocDrafts, ...(activeDocDraft ? [activeDocDraft] : [])].find((each) => !attempted.has(each));
+    if (!draft) break;
+    attempted.add(draft);
+    if (await writeDocDraft(draft)) {
+      const index = detachedDocDrafts.indexOf(draft);
+      if (index >= 0) detachedDocDrafts.splice(index, 1);
+      if (activeDocDraft === draft) activeDocDraft = null;
+    } else {
+      ok = false;
+    }
+  }
+  syncDocRetryButton();
+  return ok;
+}
+
 async function saveDoc(): Promise<boolean> {
   window.clearTimeout(docTimer);
-  if (!docDirty || !docTarget) {
+  if (!activeDocDraft && detachedDocDrafts.length === 0) {
     return docSavingPromise ? await docSavingPromise : true;
   }
-  if (!docSavingPromise) {
-    docSavingPromise = performSaveDoc().finally(() => {
-      docSavingPromise = null;
-    });
-  }
-  const ok = await docSavingPromise;
+  const run = (docSavingPromise ?? Promise.resolve(true)).then(saveDocDrafts);
+  const tracked = run.finally(() => {
+    if (docSavingPromise === tracked) docSavingPromise = null;
+  });
+  docSavingPromise = tracked;
+  const ok = await tracked;
   if (ok) await reload();
   return ok;
 }
@@ -4849,12 +4976,18 @@ async function flushEditors(): Promise<boolean> {
 }
 
 docText.addEventListener("input", () => {
-  docEditSeq++;
-  if (!docDirty) {
-    docBaseContent = docTarget ? (project.docs.get(docTarget.path) ?? "") : null;
-    docConflictNotified = false;
-  }
-  docDirty = true;
+  if (!docTarget) return;
+  activeDocDraft ??= {
+    ...docTarget,
+    text: docText.value,
+    base: project.docs.get(docTarget.path) ?? "",
+    conflictNotified: false,
+    edits: 0,
+    savedEdits: 0,
+    failed: false,
+  };
+  activeDocDraft.text = docText.value;
+  activeDocDraft.edits++;
   window.clearTimeout(docTimer);
   docTimer = window.setTimeout(() => void saveDoc(), 600);
 });
@@ -4890,8 +5023,8 @@ $("doc-quote").addEventListener("click", async () => {
   const selStart = docText.selectionStart;
   const selEnd = docText.selectionEnd;
   const textSnapshot = docText.value;
-  if (!(await saveDoc())) return;
   const { path, section } = docTarget;
+  if (!(await saveDoc())) return;
   const file = project.docs.get(path) ?? "";
   const offsets = section ? sectionOffsets(file, section) : null;
   const context: [string, string] | undefined = section ? ["section", section] : undefined;
@@ -5262,9 +5395,7 @@ function isInTauri(): boolean {
 }
 
 async function openExportQtModal(): Promise<void> {
-  if (docDirty || yamlDirty || docSavingPromise || yamlSavingPromise) {
-    if (!(await flushEditors())) return;
-  }
+  if (hasUnsavedEditors() && !(await flushEditors())) return;
   document.getElementById("export-qt-modal")?.remove();
 
   const inTauri = isInTauri();

@@ -1530,6 +1530,195 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
       timingProblems.push("文档写失败后 dirty 丢失，恢复写盘后重试未能把内容写入磁盘");
     }
 
+    // 11) 保存途中切换选中、写失败时的状态。延迟和失败都在页面里用 fetch 包装注入
+    await cdp.clickSelector("#tab-doc");
+    const fsRule = (rule: string) =>
+      cdp!.eval(`(() => {
+        window.__vfOrigFetch ??= window.fetch;
+        const original = window.__vfOrigFetch;
+        const counts = {};
+        const rule = ${rule};
+        window.fetch = async (url, init) => {
+          const u = decodeURIComponent(String(url));
+          const key = u.includes("/__fs/write") ? "write" : u.includes("/__fs/read") ? "read" : "";
+          if (!key) return original(url, init);
+          const name = key + ":" + u.split("path=")[1];
+          counts[name] = (counts[name] ?? 0) + 1;
+          const act = rule(key, u, counts[name]);
+          if (act === "fail") return new Response("模拟磁盘已满", { status: 500 });
+          if (typeof act === "number") await new Promise((r) => setTimeout(r, act));
+          return original(url, init);
+        };
+      })()`);
+    const clearFsRule = () => cdp!.eval(`window.fetch = window.__vfOrigFetch ?? window.fetch`);
+    const typeDoc = (text: string) =>
+      cdp!.eval(`(() => {
+        const el = document.querySelector("#doc-text");
+        el.value = ${JSON.stringify(text)};
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      })()`);
+    const docValue = () => inputValue("#doc-text");
+    const docNote = () => cdp!.eval<string>(`document.querySelector("#doc-note").textContent`);
+    const toastText = () => cdp!.eval<string>(`document.querySelector("#toast").textContent`);
+    const clearToast = () => cdp!.eval(`document.querySelector("#toast").textContent = ""`);
+    const clickNoteButton = () => cdp!.eval(`document.querySelector("#doc-note button")?.click()`);
+    const sectionOnDisk = (name: string) =>
+      new RegExp(`<!-- ui-section: ${name} -->([\\s\\S]*?)<!-- /ui-section -->`).exec(fs.readFileSync(docFile, "utf8"))?.[1] ?? "";
+    const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const hasLayer = (id: string) =>
+      cdp!.eval<boolean>(`Boolean(document.querySelector('#layers .layer[data-id="${id}"]'))`);
+    const saveProblems: string[] = [];
+    const expectTrue = (what: string, ok: boolean) => {
+      if (!ok) saveProblems.push(what);
+    };
+
+    await clearFsRule();
+    for (const [id, section] of [["layerList", "layer-list"], ["addLayerBtn", "add-layer-btn"]] as const) {
+      if ((await inputValue("#selection-id")) !== id) await selectLayerInTree(id);
+      if ((await docNote()).includes("没有说明")) await clickNoteButton();
+      await waitUntil(`创建 ${id} 的说明`, async () => (await docNote()).includes(`#${section}`));
+    }
+
+    // 情形 A：改了又删回原样，保存途中切到别的控件，文档页要立刻跟过去
+    await selectLayerInTree("layerList");
+    await waitUntil("选中 layerList 后文档页跟过去", async () => (await docNote()).includes("#layer-list"));
+    const layerListBase = await docValue();
+    await fsRule(`(key) => (key === "read" ? 500 : undefined)`);
+    await typeDoc(layerListBase + "临时");
+    await typeDoc(layerListBase);
+    await selectLayerInTree("addLayerBtn");
+    await pause(120);
+    expectTrue("情形 A：保存途中切换，文档页没有立刻跟到新控件", (await docNote()).includes("#add-layer-btn"));
+    await pause(800);
+    expectTrue("情形 A：保存结束后文档页停在旧控件", (await docNote()).includes("#add-layer-btn"));
+    await clearFsRule();
+
+    // 情形 B：切换后立即打字，两份文字各写进自己的小节
+    await selectLayerInTree("layerList");
+    await waitUntil("回到 layerList", async () => (await docNote()).includes("#layer-list"));
+    const firstDraft = (await docValue()) + "\n写给列表的说明";
+    await fsRule(`(key, url, n) => (key === "write" && n === 1 ? 500 : undefined)`);
+    await typeDoc(firstDraft);
+    await selectLayerInTree("addLayerBtn");
+    await waitUntil("切到 addLayerBtn", async () => (await docNote()).includes("#add-layer-btn"), 300);
+    const secondDraft = (await docValue()) + "\n写给按钮的说明";
+    await typeDoc(secondDraft);
+    await cdp.eval(`document.querySelector("#doc-text").dispatchEvent(new Event("blur"))`);
+    await waitUntil("情形 B：两份说明都应落盘", () => sectionOnDisk("layer-list").includes("写给列表的说明") && sectionOnDisk("add-layer-btn").includes("写给按钮的说明"));
+    expectTrue("情形 B：新控件的文字被写进了旧控件的小节", !sectionOnDisk("layer-list").includes("写给按钮的说明"));
+    expectTrue("情形 B：旧控件的文字被写进了新控件的小节", !sectionOnDisk("add-layer-btn").includes("写给列表的说明"));
+    await clearFsRule();
+    await pause(100);
+
+    // 情形 C：保存失败时切换，界面跟到新控件，内容不丢，能重试；回到旧控件能看到没保存的内容
+    await selectLayerInTree("layerList");
+    await waitUntil("回到 layerList", async () => (await docNote()).includes("#layer-list"));
+    const failedDraft = (await docValue()) + "\n失败时写的说明";
+    await fsRule(`(key) => (key === "write" ? "fail" : undefined)`);
+    await typeDoc(failedDraft);
+    await selectLayerInTree("addLayerBtn");
+    await pause(300);
+    expectTrue("情形 C：保存失败时文档页没有跟到新控件", (await docNote()).includes("#add-layer-btn"));
+    expectTrue("情形 C：选中和文档目标错位", (await inputValue("#selection-id")) === "addLayerBtn" && !(await docValue()).includes("失败时写的说明"));
+    await selectLayerInTree("layerList");
+    await pause(150);
+    expectTrue("情形 C：回到旧控件时看不到没保存的内容", (await docValue()).includes("失败时写的说明"));
+    await selectLayerInTree("addLayerBtn");
+    await pause(150);
+    await clearFsRule();
+    await cdp.eval(`document.querySelector("[data-doc-retry]")?.click()`);
+    await waitUntil("情形 C：恢复后重试应把内容写进旧控件的小节", () => sectionOnDisk("layer-list").includes("失败时写的说明"));
+
+    // 改名同时写 logic 和 scene，第二个失败：写回 logic，内存和界面回到改名之前
+    const renameTo = async (from: string, to: string) => {
+      await selectLayerInTree(from);
+      await waitUntil(`选中 ${from}`, async () => (await inputValue("#selection-id")) === from);
+      await clearToast();
+      await cdp!.setInputValue("#selection-id", to);
+    };
+    const logicBefore = fs.readFileSync(logicFile, "utf8");
+    await fsRule(`(key, url) => (key === "write" && url.includes("scene.json") ? "fail" : undefined)`);
+    await renameTo("layerList", "layerListRenamed");
+    await waitUntil("部分写入失败应提示", async () => (await toastText()).includes("失败"));
+    await pause(500);
+    await clearFsRule();
+    await pause(400);
+    expectTrue("两文件写入第二个失败：logic 没有写回原内容", fs.readFileSync(logicFile, "utf8") === logicBefore);
+    expectTrue("两文件写入第二个失败：界面没有回到改名之前", (await hasLayer("layerList")) && !(await hasLayer("layerListRenamed")));
+    expectTrue("两文件写入第二个失败：选中没有回到原控件", (await inputValue("#selection-id")) === "layerList");
+
+    // 写回也失败：明确告诉用户磁盘的状态
+    await fsRule(`(key, url, n) => (key === "write" && (url.includes("scene.json") || n >= 2) ? "fail" : undefined)`);
+    await renameTo("layerList", "layerListRenamed2");
+    await waitUntil("写回也失败时应提示", async () => (await toastText()).includes("失败"));
+    await pause(150);
+    expectTrue(`写回失败要说明磁盘不一致，实际：${await toastText()}`, (await toastText()).includes("不一致"));
+    await clearFsRule();
+    fs.writeFileSync(logicFile, logicBefore);
+    await waitUntil("手动修好文件后界面恢复", () => yamlEditorHas("layerList:"));
+    await pause(400);
+
+    // 单文件写失败：内存回到之前，下一次修改不带上失败的内容
+    await fsRule(`(key, url) => (key === "write" && url.includes("scene.json") ? "fail" : undefined)`);
+    await renameTo("externalLabel", "failedLabelName");
+    await waitUntil("单文件写失败应提示", async () => (await toastText()).includes("失败"));
+    await pause(100);
+    await clearFsRule();
+    expectTrue("单文件写失败：界面停在失败的新值", (await hasLayer("externalLabel")) && !(await hasLayer("failedLabelName")));
+    if (await hasLayer("externalLabel")) await renameTo("externalLabel", "savedLabelName");
+    await waitUntil("恢复后下一次修改落盘", () => fs.readFileSync(sceneFile, "utf8").includes("savedLabelName"));
+    expectTrue("单文件写失败：下一次修改带上了失败的内容", !fs.readFileSync(sceneFile, "utf8").includes("failedLabelName"));
+    await pause(200);
+
+    // 撤销、重做、恢复版本写失败：历史不丢这一步
+    await fsRule(`(key) => (key === "write" ? "fail" : undefined)`);
+    await clearToast();
+    await cdp.clickSelector('[data-action="undo"]');
+    await waitUntil("撤销写失败应提示", async () => (await toastText()).includes("失败"));
+    await clearFsRule();
+    expectTrue("撤销写失败：界面变了", await hasLayer("savedLabelName"));
+    await cdp.clickSelector('[data-action="undo"]');
+    await waitUntil("撤销写失败后再撤销应恢复这一步", () => fs.readFileSync(sceneFile, "utf8").includes('"externalLabel"'));
+    await pause(250);
+    await fsRule(`(key) => (key === "write" ? "fail" : undefined)`);
+    await clearToast();
+    await cdp.clickSelector('[data-action="redo"]');
+    await waitUntil("重做写失败应提示", async () => (await toastText()).includes("失败"));
+    await clearFsRule();
+    await cdp.clickSelector('[data-action="redo"]');
+    await waitUntil("重做写失败后再重做应恢复这一步", () => fs.readFileSync(sceneFile, "utf8").includes("savedLabelName"));
+    await pause(250);
+    const versionItems = `[...document.body.querySelectorAll("*")].filter((e) => e.children.length === 0 && /#\\d+ /.test(e.textContent))`;
+    await cdp.clickSelector('[data-action="versions"]');
+    const currentVersion = await cdp.eval<string>(`${versionItems}.find((e) => e.textContent.includes("●"))?.textContent ?? ""`);
+    await fsRule(`(key) => (key === "write" ? "fail" : undefined)`);
+    await clearToast();
+    await cdp.eval(`${versionItems}.find((e) => !e.textContent.includes("●"))?.click()`);
+    await waitUntil("恢复版本写失败应提示", async () => (await toastText()).includes("失败"));
+    expectTrue("恢复版本写失败：仍提示已恢复", !(await toastText()).includes("已恢复"));
+    await clearFsRule();
+    await cdp.eval(`document.body.click()`);
+    await cdp.clickSelector('[data-action="versions"]');
+    expectTrue("恢复版本写失败：历史游标动了", (await cdp.eval<string>(`${versionItems}.find((e) => e.textContent.includes("●"))?.textContent ?? ""`)) === currentVersion);
+    await cdp.eval(`document.body.click()`);
+
+    // 创建说明写两个文件，第二个失败：写回文档，界面不变，之后能重新创建
+    await selectLayerInTree("toggleVisibleBtn");
+    await waitUntil("选中没有说明的控件", async () => (await docNote()).includes("没有说明"));
+    const docBeforeCreate = fs.readFileSync(docFile, "utf8");
+    await fsRule(`(key, url) => (key === "write" && url.includes("app.logic.yaml") ? "fail" : undefined)`);
+    await clearToast();
+    await clickNoteButton();
+    await waitUntil("创建说明失败应提示", async () => (await toastText()).includes("失败"));
+    await pause(300);
+    await clearFsRule();
+    expectTrue("创建说明第二个文件失败：文档没有写回原内容", fs.readFileSync(docFile, "utf8") === docBeforeCreate);
+    expectTrue("创建说明失败：界面不是原来的样子", (await docNote()).includes("没有说明"));
+    await clickNoteButton();
+    await waitUntil("恢复后能重新创建说明", () => sectionOnDisk("toggle-visible-btn") !== "");
+
+    assert.deepEqual(saveProblems, [], "保存途中切换与写失败");
+
     assert.deepEqual(timingProblems, [], "保存与重载时序");
   } finally {
     cdp?.close();
