@@ -9,8 +9,13 @@ export interface DirEntry {
 
 const inTauri = "__TAURI_INTERNALS__" in window;
 
-async function devFetch(endpoint: string, path = "", init?: RequestInit): Promise<Response> {
-  return fetch(`/__fs/${endpoint}?path=${encodeURIComponent(path)}`, init);
+async function devFetch(endpoint: string, path = "", init?: RequestInit, allow404 = false): Promise<Response> {
+  const res = await fetch(`/__fs/${endpoint}?path=${encodeURIComponent(path)}`, init);
+  if (!res.ok && !(allow404 && res.status === 404)) {
+    const detail = (await res.text().catch(() => "")).trim();
+    throw new Error(detail || `${endpoint} ${path} 失败（HTTP ${res.status}）`);
+  }
+  return res;
 }
 
 export async function projectRoot(): Promise<string> {
@@ -24,7 +29,7 @@ export async function readText(path: string): Promise<string | null> {
   if (inTauri) {
     text = await invoke<string | null>("read_text", { path });
   } else {
-    const res = await devFetch("read", path);
+    const res = await devFetch("read", path, undefined, true);
     text = res.status === 404 ? null : await res.text();
   }
   return text === null ? null : text.replace(/\r\n/g, "\n");
