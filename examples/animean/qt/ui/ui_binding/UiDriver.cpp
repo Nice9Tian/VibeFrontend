@@ -972,18 +972,23 @@ QStringList runSteps(Ui &ui, const QStringList &steps)
                         parts.append(QStringLiteral("%1=%2x%3").arg(btn->text()).arg(btn->width()).arg(btn->height()));
                 }
                 output.append(QStringLiteral("size %1 buttons %2").arg(id, parts.join(QLatin1String(","))));
-            } else if (sub == QLatin1String("scroll")) {
+            } else if (sub == QLatin1String("scroll") || sub.startsWith(QLatin1String("scroll="))) {
                 if (auto *sa = widget->findChild<QScrollArea *>()) {
                     auto *vp = sa->viewport();
                     auto *cw = sa->widget();
                     auto *vsb = sa->verticalScrollBar();
-                    output.append(QStringLiteral("size %1 scroll viewport=%2x%3 content=%4x%5 maxScroll=%6")
+                    if (vsb && sub.startsWith(QLatin1String("scroll="))) {
+                        vsb->setValue(sub.mid(7).toInt());
+                        QApplication::processEvents();
+                    }
+                    output.append(QStringLiteral("size %1 scroll viewport=%2x%3 content=%4x%5 maxScroll=%6 value=%7")
                                       .arg(id)
                                       .arg(vp ? vp->width() : 0)
                                       .arg(vp ? vp->height() : 0)
                                       .arg(cw ? cw->width() : 0)
                                       .arg(cw ? cw->height() : 0)
-                                      .arg(vsb ? vsb->maximum() : 0));
+                                      .arg(vsb ? vsb->maximum() : 0)
+                                      .arg(vsb ? vsb->value() : 0));
                 } else {
                     output.append(QStringLiteral("size %1 scroll none").arg(id));
                 }

@@ -3885,6 +3885,8 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
         const QString emptyText = props.property(QStringLiteral("emptyText")).toString();
         auto *lbl = new QLabel(emptyText.isEmpty() ? QStringLiteral("当前工具无可调节参数") : emptyText, content);
         grid->addWidget(lbl, 0, 0);
+        if (QScrollBar *vsb = scrollArea->verticalScrollBar())
+            vsb->setValue(0);
         return;
     }
 
@@ -4069,6 +4071,8 @@ void Ui::Private::rebuildDataForm(const QString &id, QFrame *frame, const QJSVal
     grid->activate();
     content->updateGeometry();
     QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    if (QScrollBar *vsb = scrollArea->verticalScrollBar())
+        vsb->setValue(0);
 }
 
 void Ui::Private::syncDataFormValues(QFrame *frame, const QJSValue &props)

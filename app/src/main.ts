@@ -321,26 +321,37 @@ async function applyHistorySnapshot(target: HistorySnapshot): Promise<void> {
       // 由后续 reload 兜底
     }
   }
-  if (target.logicText !== project.logicText) {
-    window.clearTimeout(yamlTimer);
-    yamlDirty = false;
-    project.logicText = target.logicText;
-    await writeText(LOGIC_PATH, target.logicText);
-  }
-  if (sceneChanged) {
-    await writeText(SCENE_PATH, target.sceneText);
-  }
-  if (target.docs) {
-    for (const [docPath, content] of Object.entries(target.docs)) {
-      if ((project.docs.get(docPath) ?? "") !== content) {
-        window.clearTimeout(docTimer);
-        docDirty = false;
-        await writeText(docPath, content);
+  try {
+    if (target.logicText !== project.logicText) {
+      window.clearTimeout(yamlTimer);
+      await writeText(LOGIC_PATH, target.logicText);
+      yamlDirty = false;
+      yamlBaseContent = target.logicText;
+      yamlConflictNotified = false;
+      project.logicText = target.logicText;
+    }
+    if (sceneChanged) {
+      await writeText(SCENE_PATH, target.sceneText);
+    }
+    if (target.docs) {
+      for (const [docPath, content] of Object.entries(target.docs)) {
+        if ((project.docs.get(docPath) ?? "") !== content) {
+          window.clearTimeout(docTimer);
+          await writeText(docPath, content);
+          docDirty = false;
+          if (docTarget?.path === docPath) {
+            docBaseContent = content;
+            docConflictNotified = false;
+          }
+        }
       }
     }
-  }
-  if (target.presetsText !== undefined && target.presetsText !== currentPresetsText()) {
-    await writeText(PRESETS_PATH, target.presetsText);
+    if (target.presetsText !== undefined && target.presetsText !== currentPresetsText()) {
+      await writeText(PRESETS_PATH, target.presetsText);
+    }
+  } catch (e) {
+    toast(`写入快照失败：${(e as Error).message ?? String(e)}`);
+    return;
   }
   await reload(true);
 }
@@ -353,22 +364,16 @@ async function saveScene(options: { history?: boolean; nextLogicText?: string; l
     previewRuntime?.setDockLayout(rootWin.dockLayout, project.scene.root);
   }
   const text = JSON.stringify(project.scene, null, 2) + "\n";
-  if (docDirty || yamlDirty) {
-    await flushEditors();
+  if (docDirty || yamlDirty || docSavingPromise || yamlSavingPromise) {
+    if (!(await flushEditors())) return;
   }
   const nextLogic = options.nextLogicText ?? project.logicText;
   const logicChanged = nextLogic !== project.logicText;
   const sceneChanged = text !== project.sceneText;
   if (!sceneChanged && !logicChanged) return;
-  if (options.history !== false) {
-    const before = currentSnapshot();
-    history = pushHistory(
-      history,
-      before,
-      { ...before, sceneText: text, logicText: nextLogic },
-      options.label ?? "画布修改",
-    );
-  }
+  const prevSceneText = project.sceneText;
+  const prevLogicText = project.logicText;
+  const before = currentSnapshot();
   if (sceneChanged && !logicChanged) {
     project.sceneText = text;
     designRuntime = new Runtime(project);
@@ -376,21 +381,38 @@ async function saveScene(options: { history?: boolean; nextLogicText?: string; l
     if (selectedId && !node(selectedId)) selectedId = null;
     renderAll();
   }
-  if (logicChanged) {
-    window.clearTimeout(yamlTimer);
-    yamlDirty = false;
-    project.logicText = nextLogic;
-    await writeText(LOGIC_PATH, nextLogic);
+  try {
+    if (logicChanged) {
+      window.clearTimeout(yamlTimer);
+      await writeText(LOGIC_PATH, nextLogic);
+      yamlDirty = false;
+      yamlBaseContent = nextLogic;
+      yamlConflictNotified = false;
+      project.logicText = nextLogic;
+    }
+    if (sceneChanged) {
+      project.sceneText = text;
+      await writeText(SCENE_PATH, text);
+    }
+  } catch (e) {
+    project.sceneText = prevSceneText;
+    project.logicText = prevLogicText;
+    toast(`保存画布失败：${(e as Error).message ?? String(e)}`);
+    return;
   }
-  if (sceneChanged) {
-    project.sceneText = text;
-    await writeText(SCENE_PATH, text);
+  if (options.history !== false) {
+    history = pushHistory(
+      history,
+      before,
+      { ...before, sceneText: text, logicText: nextLogic },
+      options.label ?? "画布修改",
+    );
   }
   await reload(true);
 }
 
 async function undo(): Promise<void> {
-  await flushEditors();
+  if (!(await flushEditors())) return;
   const res = undoHistory(history, currentSnapshot());
   if (!res.snapshot) return toast("没有可以撤销的画布操作");
   history = res.stack;
@@ -398,7 +420,7 @@ async function undo(): Promise<void> {
 }
 
 async function redo(): Promise<void> {
-  await flushEditors();
+  if (!(await flushEditors())) return;
   const res = redoHistory(history, currentSnapshot());
   if (!res.snapshot) return toast("没有可以重做的画布操作");
   history = res.stack;
@@ -406,7 +428,7 @@ async function redo(): Promise<void> {
 }
 
 async function restoreVersion(index: number): Promise<void> {
-  await flushEditors();
+  if (!(await flushEditors())) return;
   const res = restoreHistoryVersion(history, index, currentSnapshot());
   if (!res.snapshot) return;
   history = res.stack;
@@ -416,7 +438,7 @@ async function restoreVersion(index: number): Promise<void> {
 
 /** 用保留注释和格式的方式修改 YAML。 */
 async function editLogic(mutate: (doc: Document) => void, label = "修改逻辑"): Promise<boolean> {
-  await flushEditors();
+  if (!(await flushEditors())) return false;
   const doc = parseDocument(project.logicText);
   if (doc.errors.length > 0) {
     toast("YAML 有语法错误，请先在 YAML 页签中修正");
@@ -424,8 +446,26 @@ async function editLogic(mutate: (doc: Document) => void, label = "修改逻辑"
   }
   mutate(doc);
   const nextText = doc.toString(YAML_OUTPUT);
-  if (nextText !== project.logicText) {
-    const before = currentSnapshot();
+  const prevText = project.logicText;
+  const prevBase = yamlBaseContent;
+  const before = currentSnapshot();
+  window.clearTimeout(yamlTimer);
+  yamlDirty = false;
+  yamlBaseContent = nextText;
+  yamlConflictNotified = false;
+  // 先更新内存再写盘：紧接着的下一次修改要以这次的结果为基准，不能等 reload 读回来
+  project.logicText = nextText;
+  try {
+    await writeText(LOGIC_PATH, nextText);
+  } catch (e) {
+    if (project.logicText === nextText) {
+      project.logicText = prevText;
+      yamlBaseContent = prevBase;
+    }
+    toast(`保存 ${LOGIC_PATH} 失败：${(e as Error).message ?? String(e)}`);
+    return false;
+  }
+  if (nextText !== prevText) {
     history = pushHistory(
       history,
       before,
@@ -433,11 +473,6 @@ async function editLogic(mutate: (doc: Document) => void, label = "修改逻辑"
       label,
     );
   }
-  window.clearTimeout(yamlTimer);
-  yamlDirty = false;
-  // 先更新内存再写盘：紧接着的下一次修改要以这次的结果为基准，不能等 reload 读回来
-  project.logicText = nextText;
-  await writeText(LOGIC_PATH, nextText);
   await reload();
   return true;
 }
@@ -492,6 +527,9 @@ async function reload(force = false): Promise<void> {
       const mustRender = reloadForce;
       reloadForce = false;
       // 磁盘要追上内存才能读：文件监听触发的重载如果读到自己还没写完的文件，会用旧内容盖掉内存
+      if (docSavingPromise || yamlSavingPromise) {
+        await Promise.all([docSavingPromise, yamlSavingPromise]);
+      }
       await writesSettled();
       const writesBefore = localWriteCount();
       const next = await loadProject(project);
@@ -3585,7 +3623,7 @@ async function renameId(oldId: string, nextId: string): Promise<void> {
 }
 
 async function createDocSection(id: string): Promise<void> {
-  await flushEditors();
+  if (!(await flushEditors())) return;
   const doc = parseDocument(project.logicText);
   if (doc.errors.length > 0) {
     toast("YAML 有语法错误，请先在 YAML 页签中修正");
@@ -3601,22 +3639,31 @@ async function createDocSection(id: string): Promise<void> {
 
   const before = currentSnapshot();
   const nextDocs = { ...(before.docs ?? {}), [path]: nextDocContent };
+  try {
+    if (nextDocContent !== current) {
+      window.clearTimeout(docTimer);
+      await writeText(path, nextDocContent);
+      docDirty = false;
+      docBaseContent = nextDocContent;
+      docConflictNotified = false;
+    }
+    if (nextLogicText !== project.logicText) {
+      window.clearTimeout(yamlTimer);
+      await writeText(LOGIC_PATH, nextLogicText);
+      yamlDirty = false;
+      yamlBaseContent = nextLogicText;
+      yamlConflictNotified = false;
+    }
+  } catch (e) {
+    toast(`创建说明失败：${(e as Error).message ?? String(e)}`);
+    return;
+  }
   history = pushHistory(
     history,
     before,
     { ...before, logicText: nextLogicText, docs: nextDocs },
     "创建说明",
   );
-  if (nextDocContent !== current) {
-    window.clearTimeout(docTimer);
-    docDirty = false;
-    await writeText(path, nextDocContent);
-  }
-  if (nextLogicText !== project.logicText) {
-    window.clearTimeout(yamlTimer);
-    yamlDirty = false;
-    await writeText(LOGIC_PATH, nextLogicText);
-  }
   await reload();
 }
 
@@ -4211,13 +4258,18 @@ async function reverseLine(id: string): Promise<void> {
 // ---------- 用户的预设 ----------
 
 async function writePresets(presets: ShapePreset[]): Promise<void> {
-  await flushEditors();
+  if (!(await flushEditors())) return;
   const nextText = currentPresetsText(presets);
   const before = currentSnapshot();
+  try {
+    await writeText(PRESETS_PATH, nextText);
+  } catch (e) {
+    toast(`保存预设失败：${(e as Error).message ?? String(e)}`);
+    return;
+  }
   if (nextText !== before.presetsText) {
     history = pushHistory(history, before, { ...before, presetsText: nextText }, "修改预设");
   }
-  await writeText(PRESETS_PATH, nextText);
   await reload();
 }
 
@@ -4656,71 +4708,144 @@ function scrollYamlTo(prefix: string): void {
   yamlText.scrollTop = Math.max(0, index - 2) * 18;
 }
 
-async function saveDoc(): Promise<void> {
-  window.clearTimeout(docTimer);
-  if (!docDirty || !docTarget) return;
-  const { path, section } = docTarget;
-  const current = project.docs.get(path) ?? "";
-  const nextDocContent = section === null ? docText.value : replaceSection(current, section, docText.value);
-  const docBase = docBaseContent;
-  const docNotified = docConflictNotified;
-  const docSeq = docEditSeq;
-  docDirty = false;
-  docBaseContent = nextDocContent;
-  docConflictNotified = false;
-  if (nextDocContent !== current) {
-    const before = currentSnapshot();
-    const nextDocs = { ...(before.docs ?? {}), [path]: nextDocContent };
-    history = pushHistory(history, before, { ...before, docs: nextDocs }, "编辑说明");
-    project.docs.set(path, nextDocContent);
-    renderToolbar();
-  }
-  if (!docNotified && docBase !== null) {
-    const diskNow = await readText(path);
-    if (docSeq !== docEditSeq) return;
-    if (diskNow !== null && diskNow !== docBase && diskNow !== nextDocContent) {
+let docSavingPromise: Promise<boolean> | null = null;
+let yamlSavingPromise: Promise<boolean> | null = null;
+
+async function performSaveDoc(): Promise<boolean> {
+  while (docDirty && docTarget) {
+    window.clearTimeout(docTimer);
+    const { path, section } = docTarget;
+    const current = project.docs.get(path) ?? "";
+    const draft = docText.value;
+    const nextDocContent = section === null ? draft : replaceSection(current, section, draft);
+    const docBase = docBaseContent;
+    const docNotified = docConflictNotified;
+    const docSeq = docEditSeq;
+    let externalConflict = false;
+    if (!docNotified && docBase !== null) {
+      try {
+        const diskNow = await readText(path);
+        if (docSeq !== docEditSeq) continue;
+        if (diskNow !== null && diskNow !== docBase && diskNow !== nextDocContent) {
+          externalConflict = true;
+        }
+      } catch (e) {
+        toast(`读取 ${path} 失败：${(e as Error).message ?? String(e)}`);
+        return false;
+      }
+    }
+    if (docSeq !== docEditSeq) continue;
+    try {
+      await writeText(path, nextDocContent);
+    } catch (e) {
+      toast(`保存 ${path} 失败：${(e as Error).message ?? String(e)}`);
+      return false;
+    }
+    if (externalConflict) {
       toast(`已忽略 ${path} 的外部修改，保留当前编辑内容`);
     }
-  }
-  await writeText(path, nextDocContent);
-  await reload();
-}
-
-async function saveYaml(): Promise<void> {
-  window.clearTimeout(yamlTimer);
-  if (!yamlDirty) return;
-  yamlDirty = false;
-  const yamlBase = yamlBaseContent;
-  const yamlNotified = yamlConflictNotified;
-  const yamlSeq = yamlEditSeq;
-  const nextYaml = yamlText.value;
-  yamlBaseContent = nextYaml;
-  yamlConflictNotified = false;
-  if (nextYaml !== project.logicText) {
-    const before = currentSnapshot();
-    history = pushHistory(
-      history,
-      before,
-      { ...before, logicText: nextYaml },
-      "编辑 YAML",
-    );
-    project.logicText = nextYaml;
-    renderToolbar();
-  }
-  if (!yamlNotified && yamlBase !== null) {
-    const diskNow = await readText(LOGIC_PATH);
-    if (yamlSeq !== yamlEditSeq) return;
-    if (diskNow !== null && diskNow !== yamlBase && diskNow !== nextYaml) {
-      toast(`已忽略 ${LOGIC_PATH} 的外部修改，保留当前编辑内容`);
+    docBaseContent = nextDocContent;
+    docConflictNotified = false;
+    if (nextDocContent !== current) {
+      const before = currentSnapshot();
+      const nextDocs = { ...(before.docs ?? {}), [path]: nextDocContent };
+      history = pushHistory(history, before, { ...before, docs: nextDocs }, "编辑说明");
+      project.docs.set(path, nextDocContent);
+      renderToolbar();
+    }
+    if (docSeq === docEditSeq) {
+      docDirty = false;
+      break;
     }
   }
-  await writeText(LOGIC_PATH, nextYaml);
-  await reload();
+  return true;
+}
+
+async function saveDoc(): Promise<boolean> {
+  window.clearTimeout(docTimer);
+  if (!docDirty || !docTarget) {
+    return docSavingPromise ? await docSavingPromise : true;
+  }
+  if (!docSavingPromise) {
+    docSavingPromise = performSaveDoc().finally(() => {
+      docSavingPromise = null;
+    });
+  }
+  const ok = await docSavingPromise;
+  if (ok) await reload();
+  return ok;
+}
+
+async function performSaveYaml(): Promise<boolean> {
+  while (yamlDirty) {
+    window.clearTimeout(yamlTimer);
+    const yamlBase = yamlBaseContent;
+    const yamlNotified = yamlConflictNotified;
+    const yamlSeq = yamlEditSeq;
+    const nextYaml = yamlText.value;
+    let externalConflict = false;
+    if (!yamlNotified && yamlBase !== null) {
+      try {
+        const diskNow = await readText(LOGIC_PATH);
+        if (yamlSeq !== yamlEditSeq) continue;
+        if (diskNow !== null && diskNow !== yamlBase && diskNow !== nextYaml) {
+          externalConflict = true;
+        }
+      } catch (e) {
+        toast(`读取 ${LOGIC_PATH} 失败：${(e as Error).message ?? String(e)}`);
+        return false;
+      }
+    }
+    if (yamlSeq !== yamlEditSeq) continue;
+    try {
+      await writeText(LOGIC_PATH, nextYaml);
+    } catch (e) {
+      toast(`保存 ${LOGIC_PATH} 失败：${(e as Error).message ?? String(e)}`);
+      return false;
+    }
+    if (externalConflict) {
+      toast(`已忽略 ${LOGIC_PATH} 的外部修改，保留当前编辑内容`);
+    }
+    yamlBaseContent = nextYaml;
+    yamlConflictNotified = false;
+    if (nextYaml !== project.logicText) {
+      const before = currentSnapshot();
+      history = pushHistory(
+        history,
+        before,
+        { ...before, logicText: nextYaml },
+        "编辑 YAML",
+      );
+      project.logicText = nextYaml;
+      renderToolbar();
+    }
+    if (yamlSeq === yamlEditSeq) {
+      yamlDirty = false;
+      break;
+    }
+  }
+  return true;
+}
+
+async function saveYaml(): Promise<boolean> {
+  window.clearTimeout(yamlTimer);
+  if (!yamlDirty) {
+    return yamlSavingPromise ? await yamlSavingPromise : true;
+  }
+  if (!yamlSavingPromise) {
+    yamlSavingPromise = performSaveYaml().finally(() => {
+      yamlSavingPromise = null;
+    });
+  }
+  const ok = await yamlSavingPromise;
+  if (ok) await reload();
+  return ok;
 }
 
 /** 切换选中对象或执行撤销/重做之前，把还没保存的编辑先写入文件。 */
-async function flushEditors(): Promise<void> {
-  await Promise.all([saveDoc(), saveYaml()]);
+async function flushEditors(): Promise<boolean> {
+  const [docOk, yamlOk] = await Promise.all([saveDoc(), saveYaml()]);
+  return docOk && yamlOk;
 }
 
 docText.addEventListener("input", () => {
@@ -4765,7 +4890,7 @@ $("doc-quote").addEventListener("click", async () => {
   const selStart = docText.selectionStart;
   const selEnd = docText.selectionEnd;
   const textSnapshot = docText.value;
-  await saveDoc();
+  if (!(await saveDoc())) return;
   const { path, section } = docTarget;
   const file = project.docs.get(path) ?? "";
   const offsets = section ? sectionOffsets(file, section) : null;
@@ -4784,7 +4909,7 @@ $("doc-quote").addEventListener("click", async () => {
 
 // YAML 页签的“引用所选”：选中了文字就引用那几行；否则引用当前控件的条目，再否则引用光标所在的条目
 $("yaml-quote").addEventListener("click", async () => {
-  await saveYaml();
+  if (!(await saveYaml())) return;
   const text = project.logicText;
   const { selectionStart, selectionEnd } = yamlText;
   if (selectionStart !== selectionEnd) {
@@ -5137,8 +5262,8 @@ function isInTauri(): boolean {
 }
 
 async function openExportQtModal(): Promise<void> {
-  if (docDirty || yamlDirty) {
-    await flushEditors();
+  if (docDirty || yamlDirty || docSavingPromise || yamlSavingPromise) {
+    if (!(await flushEditors())) return;
   }
   document.getElementById("export-qt-modal")?.remove();
 
@@ -5440,7 +5565,7 @@ async function main(): Promise<void> {
     writeText,
     removeFile,
     onComponentRenamed: async (oldTypes, nextType) => {
-      await flushEditors();
+      if (!(await flushEditors())) return;
       const oldSet = new Set(oldTypes.filter(Boolean));
       let sceneChanged = false;
       for (const n of Object.values(project.scene.nodes)) {
@@ -5451,8 +5576,15 @@ async function main(): Promise<void> {
       }
       if (sceneChanged) {
         const nextSceneText = JSON.stringify(project.scene, null, 2) + "\n";
+        const prevSceneText = project.sceneText;
         project.sceneText = nextSceneText;
-        await writeText(SCENE_PATH, nextSceneText);
+        try {
+          await writeText(SCENE_PATH, nextSceneText);
+        } catch (e) {
+          project.sceneText = prevSceneText;
+          toast(`保存画布失败：${(e as Error).message ?? String(e)}`);
+          return;
+        }
       }
       history = renameComponentTypeInHistory(history, oldSet, nextType);
     },

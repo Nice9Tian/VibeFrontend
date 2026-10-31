@@ -1547,7 +1547,7 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     // DataForm (toolOptionsForm) 在固定 58px 高度下应保持自然行高（按钮高度 >= 20px）并提供纵向滚动
     const qtFormCheck = execFileSync(
       ANIMEAN_QT_EXE,
-      ["--steps", "resize:1280x800;size:toolOptionsForm;size:toolOptionsForm:buttons;size:toolOptionsForm:scroll"],
+      ["--steps", "resize:1280x800;size:toolOptionsForm;size:toolOptionsForm:buttons;size:toolOptionsForm:scroll;size:toolOptionsForm:scroll=20;form:toolOptionsForm:color:blue;size:toolOptionsForm:scroll;click:toolAutoMapBtn;size:toolOptionsForm:scroll"],
       { encoding: "utf8", env: qtEnv },
     )
       .split(/\r?\n/)
@@ -1569,6 +1569,17 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     assert.ok(
       maxScrollMatch && Number(maxScrollMatch[1]) > 0,
       `toolOptionsForm 内容超出 58px 时应可纵向滚动 (maxScroll > 0)，实际：${formScrollLine}`,
+    );
+    const formScrollLines = qtFormCheck.filter((l) => l.startsWith("size toolOptionsForm scroll "));
+    const afterSyncScrollLine = formScrollLines[2] ?? "";
+    assert.ok(
+      /value=20\b/.test(afterSyncScrollLine),
+      `同表单内改值（syncDataFormValues）应保留滚动位置 value=20，实际：${afterSyncScrollLine}`,
+    );
+    const afterRebuildScrollLine = formScrollLines[3] ?? "";
+    assert.ok(
+      /value=0\b/.test(afterRebuildScrollLine),
+      `切换工具表单结构（rebuildDataForm）时应将滚动条归零 value=0，实际：${afterRebuildScrollLine}`,
     );
 
     console.log(

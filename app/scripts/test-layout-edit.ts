@@ -1376,6 +1376,160 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     if (!fsErrorCheck.remove400Threw) timingProblems.push("removeFile 越界 400 未抛异常");
     if (!fsErrorCheck.write500Threw) timingProblems.push("writeText 500 未抛异常");
 
+    // 回归 1：saveYaml / saveDoc 在 readText 延迟期间用户继续打字时，不能把自身连续输入误报为外部修改，且内容必须写盘
+    const selfEditDuringReadCheck = await cdp.eval<{
+      yamlToasts: string[];
+      docToasts: string[];
+    }>(`(async () => {
+      const origFetch = window.fetch;
+      const toastEl = document.getElementById("toast");
+      const yamlToasts = [];
+      const docToasts = [];
+      const obs = new MutationObserver(() => {
+        const txt = toastEl?.textContent?.trim() ?? "";
+        if (txt) {
+          if (window.__vfWatchPhase === "yaml") yamlToasts.push(txt);
+          if (window.__vfWatchPhase === "doc") docToasts.push(txt);
+        }
+      });
+      if (toastEl) obs.observe(toastEl, { childList: true, characterData: true, subtree: true, attributes: true });
+
+      try {
+        window.__vfWatchPhase = "yaml";
+        if (toastEl) { toastEl.textContent = ""; toastEl.classList.remove("show"); }
+        let yamlReadHooked = false;
+        window.fetch = async (url, init) => {
+          const u = String(url);
+          if (!yamlReadHooked && u.includes("/__fs/read") && u.includes("app.logic.yaml")) {
+            yamlReadHooked = true;
+            const res = await origFetch(url, init);
+            const el = document.querySelector("#yaml-text");
+            el.value = el.value + "# 连续打字V2\\n";
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            return res;
+          }
+          return origFetch(url, init);
+        };
+        const yamlEl = document.querySelector("#yaml-text");
+        yamlEl.value = yamlEl.value + "# 连续打字V1\\n";
+        yamlEl.dispatchEvent(new Event("input", { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 1500));
+
+        window.__vfWatchPhase = "doc";
+        if (toastEl) { toastEl.textContent = ""; toastEl.classList.remove("show"); }
+        let docReadHooked = false;
+        window.fetch = async (url, init) => {
+          const u = String(url);
+          if (!docReadHooked && u.includes("/__fs/read") && u.includes("docs%2Fpage.md")) {
+            docReadHooked = true;
+            const res = await origFetch(url, init);
+            const el = document.querySelector("#doc-text");
+            el.value = el.value + "\\n连续打字文档V2\\n";
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            return res;
+          }
+          return origFetch(url, init);
+        };
+        const docEl = document.querySelector("#doc-text");
+        docEl.value = docEl.value + "\\n连续打字文档V1\\n";
+        docEl.dispatchEvent(new Event("input", { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 1500));
+      } finally {
+        window.fetch = origFetch;
+        window.__vfWatchPhase = "";
+        obs.disconnect();
+      }
+      return { yamlToasts, docToasts };
+    })()`);
+    if (selfEditDuringReadCheck.yamlToasts.some((t) => t.includes("外部修改"))) {
+      timingProblems.push(`YAML 连续打字误报外部修改：${selfEditDuringReadCheck.yamlToasts.join(" | ")}`);
+    }
+    if (selfEditDuringReadCheck.docToasts.some((t) => t.includes("外部修改"))) {
+      timingProblems.push(`文档连续打字误报外部修改：${selfEditDuringReadCheck.docToasts.join(" | ")}`);
+    }
+    if (!fs.readFileSync(logicFile, "utf8").includes("# 连续打字V2")) {
+      timingProblems.push("YAML 在 readText 延迟期间连续打字后未写入磁盘");
+    }
+    if (!fs.readFileSync(docFile, "utf8").includes("连续打字文档V2")) {
+      timingProblems.push("文档在 readText 延迟期间连续打字后未写入磁盘");
+    }
+
+    // 回归 2：写失败时用 toast 提示、保留 dirty 以便重试、不出现 unhandledrejection、导出流程给出明确错误
+    const writeFailCheck = await cdp.eval<{
+      unhandled: string[];
+      failToasts: string[];
+      modalOpenedOrHandled: boolean;
+    }>(`(async () => {
+      const origFetch = window.fetch;
+      const unhandled = [];
+      const failToasts = [];
+      const onUnhandled = (e) => {
+        unhandled.push(String(e.reason?.message || e.reason || e));
+        e.preventDefault();
+      };
+      window.addEventListener("unhandledrejection", onUnhandled);
+      const toastEl = document.getElementById("toast");
+      const obs = new MutationObserver(() => {
+        const txt = toastEl?.textContent?.trim() ?? "";
+        if (txt) failToasts.push(txt);
+      });
+      if (toastEl) {
+        toastEl.textContent = "";
+        toastEl.classList.remove("show");
+        obs.observe(toastEl, { childList: true, characterData: true, subtree: true, attributes: true });
+      }
+      let modalOpenedOrHandled = false;
+      try {
+        window.fetch = async (url, init) => {
+          if (String(url).includes("/__fs/write")) {
+            return new Response("模拟磁盘已满 500", { status: 500 });
+          }
+          return origFetch(url, init);
+        };
+        const yamlEl = document.querySelector("#yaml-text");
+        yamlEl.value = yamlEl.value + "# 失败后重试保存的内容\\n";
+        yamlEl.dispatchEvent(new Event("input", { bubbles: true }));
+        yamlEl.dispatchEvent(new Event("blur"));
+        const docEl = document.querySelector("#doc-text");
+        docEl.value = docEl.value + "\\n失败后重试保存的文档\\n";
+        docEl.dispatchEvent(new Event("input", { bubbles: true }));
+        docEl.dispatchEvent(new Event("blur"));
+        await new Promise((r) => setTimeout(r, 150));
+        if (toastEl) toastEl.textContent = "";
+        document.getElementById("export-qt-btn")?.click();
+        await new Promise((r) => setTimeout(r, 150));
+        const modal = document.getElementById("export-qt-modal");
+        modalOpenedOrHandled = !modal && Boolean(toastEl?.textContent?.includes("失败") || toastEl?.textContent?.includes("500"));
+        modal?.remove();
+
+        // 恢复写盘后不再重新输入，仅靠之前保留的 dirty 触发 blur 重试落盘
+        window.fetch = origFetch;
+        yamlEl.dispatchEvent(new Event("blur"));
+        docEl.dispatchEvent(new Event("blur"));
+        await new Promise((r) => setTimeout(r, 300));
+      } finally {
+        window.fetch = origFetch;
+        window.removeEventListener("unhandledrejection", onUnhandled);
+        obs.disconnect();
+      }
+      return { unhandled, failToasts, modalOpenedOrHandled };
+    })()`);
+    if (writeFailCheck.unhandled.length > 0) {
+      timingProblems.push(`写失败产生了未处理的 Promise 拒绝：${writeFailCheck.unhandled.join(" | ")}`);
+    }
+    if (!writeFailCheck.failToasts.some((t) => t.includes("失败") || t.includes("500"))) {
+      timingProblems.push(`写失败未弹出 toast 错误提示：${writeFailCheck.failToasts.join(" | ")}`);
+    }
+    if (!writeFailCheck.modalOpenedOrHandled) {
+      timingProblems.push("导出前写失败未中止弹窗并给出明确错误提示");
+    }
+    if (!fs.readFileSync(logicFile, "utf8").includes("# 失败后重试保存的内容")) {
+      timingProblems.push("YAML 写失败后 dirty 丢失，恢复写盘后重试未能把内容写入磁盘");
+    }
+    if (!fs.readFileSync(docFile, "utf8").includes("失败后重试保存的文档")) {
+      timingProblems.push("文档写失败后 dirty 丢失，恢复写盘后重试未能把内容写入磁盘");
+    }
+
     assert.deepEqual(timingProblems, [], "保存与重载时序");
   } finally {
     cdp?.close();
