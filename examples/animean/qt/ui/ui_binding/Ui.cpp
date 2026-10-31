@@ -3553,9 +3553,14 @@ QString Ui::Private::dockSplitterKey() const
 {
     QStringList parts;
     for (auto it = docks.cbegin(); it != docks.cend(); ++it) {
+        // 隐藏的面板和后台页签不影响分隔条，它们的几何也不稳定，算进来只会误判
+        if (it->dock->isHidden() || !it->isActiveInGroup) {
+            parts << QStringLiteral("-");
+            continue;
+        }
         const QRect r = it->dock->geometry();
-        parts << QStringLiteral("%1,%2,%3,%4,%5,%6,%7,%8").arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height())
-                     .arg(it->dock->isHidden()).arg(it->dock->isFloating()).arg(it->isActiveInGroup).arg(it->groupOrder);
+        parts << QStringLiteral("%1,%2,%3,%4,%5,%6").arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height())
+                     .arg(it->dock->isFloating()).arg(it->groupOrder);
     }
     return parts.join(QLatin1Char(';'));
 }
