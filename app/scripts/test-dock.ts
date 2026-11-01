@@ -7,6 +7,7 @@
 //      拖拽下沿并排分栏 → 拖拽分栏分隔条改大小 → 拖拽停靠区分隔条改大小 → 点击 × 关闭与菜单重开 →
 //      点击 FloatBox 浮出按钮 → 拖拽 FloatBox 标题栏移动 → 点击还原按钮嵌回原容器
 // 4. 在完成复杂停靠编排 + FloatBox 浮出后，实测无头 Chrome getBoundingClientRect() 与 Qt 可执行文件 layoutDump 逐控件对比（<= 3px）
+//    这一项要启动 Qt 程序，带 --qt 才跑
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -65,29 +66,13 @@ import {
 } from "../src/model.ts";
 import { Runtime } from "../src/runtime.ts";
 import { nodeIO } from "./node-io.ts";
+import { animeanQtExe, buildQtEnv } from "./qt-env.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..");
 const ANIMEAN_DIR = path.resolve(APP_ROOT, "../examples/animean/design");
-const ANIMEAN_QT_EXE = [
-  process.env.VF_ANIMEAN_EXE,
-  path.join(os.tmpdir(), "vf-build-animean/app/vf_animean.exe"),
-  path.resolve(APP_ROOT, "../examples/animean/qt/build/app/vf_animean.exe"),
-].find((p): p is string => Boolean(p) && fs.existsSync(p!)) ?? path.join(os.tmpdir(), "vf-build-animean/app/vf_animean.exe");
-
-function buildQtEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  if (process.platform === "win32") {
-    const extraDirs = ["C:\\Qt\\6.9.1\\mingw_64\\bin", "C:\\Qt\\Tools\\mingw1310_64\\bin"].filter((d) =>
-      fs.existsSync(d),
-    );
-    if (extraDirs.length > 0) {
-      const pathKey = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
-      env[pathKey] = [...extraDirs, env[pathKey] ?? ""].join(";");
-    }
-  }
-  return env;
-}
+const ANIMEAN_QT_EXE = animeanQtExe(APP_ROOT);
+const RUN_QT = process.argv.includes("--qt");
 
 function findBrowserExecutable(): string {
   const candidates = [
@@ -1330,7 +1315,9 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
   console.log("PASS 2. 无头 Chrome 真实 DOM 拖拽与点击交互（叠页签/切页签/浮出/缩放/恢复/分栏/分隔条/关闭重开/FloatBox/iframe 坐标）");
 
   // 对照 Qt 可执行文件在相同停靠编排 + FloatBox 浮出移位后的 layoutDump
-  if (fs.existsSync(ANIMEAN_QT_EXE)) {
+  if (!RUN_QT) {
+    console.log("跳过第 3 项（要启动 Qt 程序）：改到 Qt 导出时用 npm run test:qt 跑。");
+  } else if (fs.existsSync(ANIMEAN_QT_EXE)) {
     const qtEnv = buildQtEnv();
     const qtSteps =
       "resize:1280x800;dock:tabify:layersDock:inspectorDock;dock:tab:inspectorDock;dock:resize:left:260;toggle:onionSkinBox;floatbox:move:onionSkinBox:420,180;check;layout";

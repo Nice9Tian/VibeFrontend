@@ -2,7 +2,7 @@
 //   按住鼠标中键拖动，或者按住空格再用左键拖动：平移
 //   滚轮：上下平移；Shift + 滚轮：左右平移
 //   Ctrl + 滚轮（触控板双指捏合也是这样传过来的）：以鼠标所在的点为中心缩放
-//   Ctrl + =、Ctrl + -：放大、缩小；Ctrl + 0：回到 100%；Shift + 1：缩放到刚好装下整个窗口
+//   Ctrl + =、Ctrl + -：放大、缩小；Ctrl + 0：回到 100%；Shift + 1：缩放到刚好装下整个窗口；Shift + 2：缩放到所选
 //
 // 做法：设计窗口（#stage-frame）放在一块比它大得多的画布（#stage-space）上，四周留出空白，
 // 这样可以把视角移到窗口外面；缩放用 CSS 的 transform 把设计窗口整个放大缩小。
@@ -14,6 +14,8 @@ const MAX_ZOOM = 4;
 const MARGIN = 800;
 /** 工具栏里的放大、缩小按钮每次走一档 */
 const STEPS = [0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+/** 缩放到所选时最多放大到这么多，一个小按钮不至于占满视口、看不到旁边的东西 */
+const SELECTION_MAX_ZOOM = 2;
 
 let zoom = 1;
 const listeners: Array<() => void> = [];
@@ -103,6 +105,35 @@ export function zoomToFit(): void {
   for (const listener of listeners) listener();
 }
 
+type Rect = { x: number; y: number; width: number; height: number };
+
+let selectionRect: () => Rect | null = () => null;
+
+/** 告诉视角怎么取当前选中的范围（设计窗口坐标）。 */
+export function setSelectionRectSource(source: () => Rect | null): void {
+  selectionRect = source;
+}
+
+/** 缩放到刚好装下选中的东西，并把它放在视口正中。没有选中时不动。 */
+export function zoomToSelection(): void {
+  const rect = selectionRect();
+  if (!rect) return;
+  const { scroll } = elements();
+  userMoved = true;
+  const padding = 96;
+  const fit = Math.min(
+    (scroll.clientWidth - padding) / Math.max(rect.width, 1),
+    (scroll.clientHeight - padding) / Math.max(rect.height, 1),
+    SELECTION_MAX_ZOOM,
+  );
+  zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fit));
+  layout();
+  const origin = frameOrigin();
+  scroll.scrollLeft = origin.x + (rect.x + rect.width / 2) * zoom - scroll.clientWidth / 2;
+  scroll.scrollTop = origin.y + (rect.y + rect.height / 2) * zoom - scroll.clientHeight / 2;
+  for (const listener of listeners) listener();
+}
+
 function stepZoom(direction: 1 | -1): void {
   const next = direction > 0 ? STEPS.find((step) => step > zoom + 1e-3) : [...STEPS].reverse().find((step) => step < zoom - 1e-3);
   setZoom(next ?? zoom);
@@ -132,6 +163,7 @@ function buildZoomBar(): void {
     button("100%", "回到 100%（Ctrl + 0）", () => setZoom(1), "zoom-level"),
     button("+", "放大（Ctrl + =）", () => stepZoom(1)),
     button("适应", "缩放到刚好装下整个窗口（Shift + 1）", () => zoomToFit()),
+    button("所选", "缩放到所选（Shift + 2）", () => zoomToSelection()),
   );
   renderZoomBar();
 }
@@ -255,6 +287,9 @@ export function initViewport(): void {
     } else if (e.shiftKey && !ctrl && e.code === "Digit1") {
       e.preventDefault();
       zoomToFit();
+    } else if (e.shiftKey && !ctrl && e.code === "Digit2") {
+      e.preventDefault();
+      zoomToSelection();
     }
   });
   document.addEventListener("keyup", (e) => {
@@ -338,6 +373,9 @@ export function initViewport(): void {
       } else if (e.shiftKey && !ctrl && e.code === "Digit1") {
         e.preventDefault();
         zoomToFit();
+      } else if (e.shiftKey && !ctrl && e.code === "Digit2") {
+        e.preventDefault();
+        zoomToSelection();
       }
     });
     doc.addEventListener("keyup", (e) => {

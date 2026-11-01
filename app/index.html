@@ -19,8 +19,8 @@
     </header>
 
     <aside id="left">
-      <section>
-        <h2>素材栏</h2>
+      <section id="palette-section">
+        <h2>素材栏<button id="palette-toggle" type="button" class="h2-action">收起</button></h2>
         <h3>基础素材</h3>
         <div id="palette-basic" class="palette"></div>
         <h3>项目素材</h3>
@@ -35,7 +35,7 @@
         <div id="palette-user" class="palette-grid"></div>
       </section>
       <section id="layers-section">
-        <h2>图层</h2>
+        <h2>图层<button id="layers-collapse" type="button" class="h2-action">全部折叠</button><button id="layers-expand" type="button" class="h2-action">全部展开</button></h2>
         <div id="layers"></div>
       </section>
     </aside>
@@ -46,6 +46,7 @@
           <button id="mode-edit" type="button" aria-pressed="true">编辑模式</button>
           <button id="mode-preview" type="button" aria-pressed="false">预览模式</button>
         </div>
+        <button id="reset-state" type="button" title="画布正显示预览留下的状态，点这里回到初始状态" hidden>恢复初始状态</button>
         <div id="preview-bar" hidden>
           <button id="restart" type="button">重新开始</button>
           <div id="conditions"></div>

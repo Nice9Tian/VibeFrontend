@@ -8,6 +8,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { check, RESERVED_IDENTIFIER_NAMES } from "../src/check.ts";
 import { loadProjectFiles } from "../src/loader.ts";
 import { computeSceneLayout, type Scene } from "../src/model.ts";
+import { activePage, hiddenPages, pagesToReveal } from "../src/stackview.ts";
+import { qtRelevantFiles, qtSourceFiles } from "./test-tiers.ts";
+import { eventRowsFor } from "../src/eventedit.ts";
 import { nodeIO } from "./node-io.ts";
 import {
   applyAddNodeToScene,
@@ -170,6 +173,111 @@ test("锁定与解锁：节点自身及父节点锁定、过滤未锁定节点",
 });
 
 // 2. 版本的恢复与重做（移动、缩放、旋转、属性、增删、YAML 同步与版本跳转）
+test("层叠容器：当前页判定、隐藏页集合、切到选中控件所在的页", () => {
+  const scene: Scene = {
+    version: 1,
+    root: "win",
+    nodes: {
+      win: { type: "Window", width: 400, height: 300, children: ["outer"] },
+      outer: { type: "Stack", width: 400, height: 300, layout: { kind: "stack", padding: 0 }, children: ["pageA", "pageB"] },
+      pageA: { type: "Container", width: 400, height: 300, children: ["inner"] },
+      pageB: { type: "Container", width: 400, height: 300, children: ["btnB"] },
+      btnB: { type: "Button", width: 80, height: 24 },
+      inner: { type: "Stack", width: 400, height: 300, layout: { kind: "stack", padding: 0 }, children: ["pageC", "pageD"] },
+      pageC: { type: "Container", width: 400, height: 300 },
+      pageD: { type: "Container", width: 400, height: 300, children: ["btnD"] },
+      btnD: { type: "Button", width: 80, height: 24 },
+    },
+  };
+
+  assert.equal(activePage(["a", "b"], {}), "a", "没写时看第 0 页");
+  assert.equal(activePage(["a", "b"], { currentIndex: 1 }), "b");
+  assert.equal(activePage(["a", "b"], { currentIndex: 0, currentPage: "b" }), "b", "currentPage 优先");
+  assert.equal(activePage(["a", "b"], { currentPage: "gone" }), null, "currentPage 指向不存在的页时哪页都不显示，和运行层一致");
+  assert.equal(activePage(["a", "b"], { currentIndex: 5 }), null);
+
+  const firstPages = (id: string) => (id === "outer" ? "pageA" : "pageC");
+  assert.deepEqual([...hiddenPages(scene, firstPages)].sort(), ["pageB", "pageD"], "只列层叠容器的非当前页，不列页里的子节点");
+  assert.deepEqual([...hiddenPages(scene, () => null)].sort(), ["pageA", "pageB", "pageC", "pageD"]);
+
+  assert.deepEqual(pagesToReveal(scene, "btnD"), [{ stack: "inner", page: "pageD" }, { stack: "outer", page: "pageA" }], "嵌套时每层都要切");
+  assert.deepEqual(pagesToReveal(scene, "pageB"), [{ stack: "outer", page: "pageB" }], "选中页本身也要切到它");
+  assert.deepEqual(pagesToReveal(scene, "outer"), [], "层叠容器本身不用切");
+});
+
+test("交互事件：列出控件能收到的事件，接了逻辑的在前", () => {
+  const project = {
+    components: new Map(),
+    scene: {
+      version: 1,
+      root: "win",
+      nodes: {
+        win: { type: "Window", width: 400, height: 300, children: ["tabs", "btn", "plain"] },
+        tabs: { type: "TabBar", width: 100, height: 24 },
+        btn: { type: "Button", width: 80, height: 24 },
+        plain: { type: "Container", width: 80, height: 24 },
+      },
+    },
+    logic: {
+      version: 1,
+      objects: {
+        tabs: { bind: "ui.page" },
+        btn: { events: { dblclick: [{ set: "a = 1" }], custom: [{ set: "a = 2" }] } },
+      },
+    },
+  } as unknown as Parameters<typeof eventRowsFor>[0];
+
+  const tabs = eventRowsFor(project, "tabs");
+  assert.equal(tabs[0].event, "change", "绑定了状态的 change 排在最前");
+  assert.equal(tabs[0].wired, true);
+  assert.equal(tabs[0].valueType, "number", "TabBar 的值是数字");
+  assert.equal(tabs.find((row) => row.event === "click")?.valueType, null, "鼠标事件不带值");
+
+  const btn = eventRowsFor(project, "btn");
+  assert.deepEqual(btn.slice(0, 2).map((row) => row.event), ["dblclick", "custom"], "写了步骤的在前，逻辑里自定义的事件也列出来");
+  assert.equal(btn[0].label, "被双击");
+  assert.equal(btn.find((row) => row.event === "click")?.label, "被单击");
+  assert.equal(btn.find((row) => row.event === "click")?.wired, false);
+
+  assert.equal(eventRowsFor(project, "plain").length, 6, "没有逻辑的容器也有六个鼠标事件");
+  assert.deepEqual(eventRowsFor(project, "gone"), [], "节点不存在时没有事件");
+});
+
+test("测试分级：只有碰到 Qt 导出的改动才跑真实 Qt 程序", () => {
+  const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const sources = qtSourceFiles(appRoot);
+  const needsQt = (file: string) => qtRelevantFiles([file], sources).length > 0;
+
+  for (const file of [
+    "app/src/export/qt.ts",
+    "app/src/runtime.ts",
+    "app/src/expr.ts",
+    "app/src/model.ts",
+    "app/src/dock.ts",
+    "app/standard/Button/index.js",
+    "app/qt-templates/generated/ui_binding/Ui.cpp",
+    "examples/animean/design/ui/scene.json",
+    "examples/minimal/qt/ui/CMakeLists.txt",
+    "app/scripts/test-dock.ts",
+  ]) {
+    assert.ok(needsQt(file), `${file} 应该触发 Qt 测试`);
+  }
+  for (const file of [
+    "app/src/main.ts",
+    "app/src/viewport.ts",
+    "app/src/stackview.ts",
+    "app/src/eventedit.ts",
+    "app/src/styles.css",
+    "app/index.html",
+    "app/README.md",
+    "app/scripts/test-editor.ts",
+    "project/ui/scene.json",
+    "AGENTS.md",
+  ]) {
+    assert.ok(!needsQt(file), `${file} 不应该触发 Qt 测试`);
+  }
+});
+
 test("版本的恢复与重做：覆盖移动、缩放、旋转、改属性、增删节点与历史版本跳转", () => {
   let scene: Scene = makeBaseScene();
   let logic = `version: 1\nobjects:\n  box1:\n    props:\n      visible: true\n`;

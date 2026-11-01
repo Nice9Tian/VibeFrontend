@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { loadProjectFiles } from "../src/loader.ts";
 import { nodeIO } from "./node-io.ts";
+import { buildQtEnv } from "./qt-env.ts";
 
 interface Box {
   x: number;
@@ -639,16 +640,7 @@ async function main(): Promise<number> {
   console.log(`DOM 实测浏览器：${domMeasured.userAgent}`);
 
   // 2. 启动 Qt 可执行文件量取相同场景下的真实 QWidget 几何
-  const qtEnv = { ...process.env };
-  if (process.platform === "win32") {
-    const extraDirs = ["C:\\Qt\\6.9.1\\mingw_64\\bin", "C:\\Qt\\Tools\\mingw1310_64\\bin"].filter((d) =>
-      fs.existsSync(d),
-    );
-    if (extraDirs.length > 0) {
-      const pathKey = Object.keys(qtEnv).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
-      qtEnv[pathKey] = [...extraDirs, qtEnv[pathKey] ?? ""].join(";");
-    }
-  }
+  const qtEnv = buildQtEnv();
   const steps = [
     ...SIZES.map((s) => `resize:${s.width}x${s.height};layout`),
     ...(hasNewProjectBtn ? ["click:newProjectBtn;layout"] : []),
