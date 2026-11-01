@@ -10,6 +10,8 @@
     "tauri": "tauri",
     "export:qt": "node scripts/export-qt.ts",
     "case": "node scripts/run-case.ts",
+    "test": "node scripts/test-all.ts",
+    "test:qt": "node scripts/test-all.ts --qt",
     "test:editor": "node scripts/test-editor.ts",
     "test:library": "node scripts/test-library.ts",
     "test:docview": "node scripts/test-docview.ts",

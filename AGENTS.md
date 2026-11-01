@@ -25,6 +25,21 @@
 - `app/qt-templates/scaffold/` 存放 `ui_effects/` 的起始文件（`CMakeLists.txt`、`EffectsSetup.h`、`EffectsSetup.cpp`），仅在目标导出目录中尚不存在对应文件时写入，不会覆盖已手写的效果实现。
 - 因此，`examples/*/qt/ui/` 中除 `ui_effects/` 以外的所有文件都是由对应的 `design/` 和 `app/qt-templates/` 通过 `npm run export:qt` 生成的产物。不要直接手改 `examples/*/qt/ui/` 里的生成文件；若要调整界面或逻辑请修改 `design/`，若要调整通用导出运行时或模板请修改 `app/qt-templates/` 与 `app/src/export/`，然后重新运行 `npm run export:qt`。
 
+## 测试
+
+改了 `app/` 后，在 `app/` 里跑 `npm test`。它按改动范围选测试，不用自己挑：
+
+| 命令 | 跑什么 | 什么时候用 |
+| --- | --- | --- |
+| `npm test` | 快速测试（纯函数和无头浏览器）；改动碰到 Qt 导出时再跑 Qt 测试 | 平时都用它 |
+| `npm test -- --fast` | 只跑快速测试 | 明确不需要 Qt 时 |
+| `npm test -- --full` | 全部 | 合并或发布前想全部过一遍时 |
+| `npm run test:qt` | 只跑 Qt 测试 | 刚重新编译完 Qt 程序时 |
+
+- “碰到 Qt 导出”指改了 `app/src/export/`、`app/qt-templates/`、`app/standard/`、`examples/*/design/`、`examples/*/qt/`、Qt 测试脚本，或导出代码 import 到的源文件（如 `runtime.ts`、`model.ts`）。判断在 `app/scripts/test-tiers.ts`。
+- Qt 程序默认用 `offscreen` 平台运行，不开窗口，不抢前台。要亲眼看窗口时设环境变量 `VF_QT_SHOW=1`。
+- Qt 测试用的是已经编译好的程序，不会自己重新导出和编译，程序位置见 `app/scripts/qt-env.ts`。`npm test` 发现程序比改动旧时会在最后提示，这时 Qt 结果不代表这次改动。
+
 ## 修改设计项目
 
 1. 所有修改都在 `project/` 文件夹（或用户指定的 `examples/*/design/` 文件夹）内进行。

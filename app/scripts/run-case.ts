@@ -6,26 +6,12 @@
 // 步骤的写法和导出的 Qt 程序的 --steps 相同（见导出工程里的 ui_binding/UiDriver.h）。
 // 两边以 "state " 开头的行应该逐字相同。这里没有界面，wait、check、size、shot、resize、layout 直接跳过。
 import { execFile } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-function buildQtEnv(): NodeJS.ProcessEnv {
-  // Windows 上 Qt 的警告默认进调试输出，这里要它写到 stderr，下面才查得到
-  const env: NodeJS.ProcessEnv = { ...process.env, QT_FORCE_STDERR_LOGGING: "1" };
-  if (process.platform === "win32") {
-    const extraDirs = ["C:\\Qt\\6.9.1\\mingw_64\\bin", "C:\\Qt\\Tools\\mingw1310_64\\bin"].filter((d) =>
-      fs.existsSync(d),
-    );
-    if (extraDirs.length > 0) {
-      const pathKey = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
-      env[pathKey] = [...extraDirs, env[pathKey] ?? ""].join(";");
-    }
-  }
-  return env;
-}
+import { buildQtEnv } from "./qt-env.ts";
 import { dumpRuntime } from "../src/export/dump.ts";
 import type { Value } from "../src/expr.ts";
 import { loadProjectFiles } from "../src/loader.ts";

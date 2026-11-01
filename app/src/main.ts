@@ -27,6 +27,7 @@ import {
 } from "./layoutedit";
 import { focusMenuItemInEditor, initMenuEdit, renderMenuEditPane } from "./menuedit";
 import { initStateEdit, renderStateEditPane } from "./stateedit";
+import { initEventEdit, refreshEventPane, renderEventPane } from "./eventedit";
 import { initPreviewLauncher, initStandalonePreviewWindow, isStandalonePreview, notifyMainWindowSelect, syncStandalonePreviewTitle } from "./previewwindow";
 import {
   allSceneMenuIds,
@@ -158,7 +159,8 @@ import {
   type MultiResizeItem,
 } from "./transform";
 import { snapMove, snapPoint, snapResize, type Guide, type SnapOptions } from "./snap";
-import { onZoomChange, viewZoom } from "./viewport";
+import { activePage, hiddenPages, pagesToReveal } from "./stackview";
+import { onZoomChange, setSelectionRectSource, viewZoom, zoomToSelection } from "./viewport";
 import { PRESETS_PATH } from "./loader";
 import type { Value } from "./expr";
 
@@ -235,13 +237,32 @@ function isDialogShownInStage(winId: string): boolean {
   return selectedIds.some((id) => windowRootOf(id) === winId);
 }
 
+/** 编辑模式下正在看层叠容器的哪一页，键是容器，值是页。只影响看，不写进文件。 */
+const revealedPages = new Map<string, string>();
+
+/** 层叠容器现在显示哪一页。 */
+function shownPage(stackId: string): string | null {
+  const children = childrenOf(node(stackId));
+  const revealed = mode === "edit" ? revealedPages.get(stackId) : undefined;
+  if (revealed && children.includes(revealed)) return revealed;
+  return activePage(children, activeRuntime().view(stackId).props);
+}
+
+function layoutHooks(runtime: Runtime) {
+  const revealed = new Set(mode === "edit" ? revealedPages.values() : []);
+  return {
+    isVisible: (nid: string) => runtime.view(nid).visible || revealed.has(nid),
+    getProp: (nid: string, prop: string) =>
+      prop === "currentPage" && mode === "edit" && revealedPages.has(nid) ? shownPage(nid) : (runtime.view(nid).props[prop] ?? null),
+    getDockLayout: (wid: string) => runtime.getDockLayout(wid),
+  };
+}
+
+/** 一次点选要查很多节点，这段时间里排版只算一遍。 */
+let frozenBoxes: ReturnType<typeof computeSceneLayout> | null = null;
+
 function currentLayoutBoxes() {
-  const runtime = activeRuntime();
-  return computeSceneLayout(project.scene, {
-    isVisible: (nid) => runtime.view(nid).visible,
-    getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
-    getDockLayout: (wid) => runtime.getDockLayout(wid),
-  });
+  return frozenBoxes ?? computeSceneLayout(project.scene, layoutHooks(activeRuntime()));
 }
 
 /** 节点相对于设计窗口左上角的位置（含排版计算与旋转父容器对子节点中心位置的变换）。根窗口在 (0, 0)。 */
@@ -261,9 +282,10 @@ function worldRotation(id: string): number {
 
 function hitTest(px: number, py: number): string | null {
   const runtime = activeRuntime();
+  const hidden = hiddenPages(project.scene, shownPage);
   const visit = (id: string): string | null => {
     const n = node(id);
-    if (!n) return null;
+    if (!n || hidden.has(id)) return null;
     if (mode === "preview" && !runtime.view(id).visible) return null;
     const children = childrenOf(n);
     for (let i = children.length - 1; i >= 0; i--) {
@@ -274,13 +296,18 @@ function hitTest(px: number, py: number): string | null {
     return containsPoint(id, px, py) ? id : null;
   };
   const winIds = allWindowIds(project.scene);
-  for (let i = winIds.length - 1; i >= 0; i--) {
-    const winId = winIds[i];
-    if (winId !== project.scene.root && !isDialogShownInStage(winId)) continue;
-    const hit = visit(winId);
-    if (hit) return hit;
+  frozenBoxes = currentLayoutBoxes();
+  try {
+    for (let i = winIds.length - 1; i >= 0; i--) {
+      const winId = winIds[i];
+      if (winId !== project.scene.root && !isDialogShownInStage(winId)) continue;
+      const hit = visit(winId);
+      if (hit) return hit;
+    }
+    return null;
+  } finally {
+    frozenBoxes = null;
   }
-  return null;
 }
 
 function canHoldChildren(id: string): boolean {
@@ -598,8 +625,9 @@ async function reload(force = false): Promise<void> {
 
 // ---------- 设计窗口 ----------
 
+/** 画布显示的运行状态。预览过之后编辑模式也接着看预览留下的状态，“恢复初始状态”才回到 designRuntime。 */
 function activeRuntime(): Runtime {
-  return mode === "preview" && previewRuntime ? previewRuntime : designRuntime;
+  return previewRuntime ?? designRuntime;
 }
 
 function showNodeError(body: HTMLElement, message: string): void {
@@ -756,11 +784,8 @@ function setShown(id: string, entry: Mounted, shown: boolean): void {
 /** 按当前运行层的计算结果更新每个节点的可见性和属性。 */
 function applyViews(): void {
   const runtime = activeRuntime();
-  const boxes = computeSceneLayout(project.scene, {
-    isVisible: (nid) => runtime.view(nid).visible,
-    getProp: (nid, prop) => runtime.view(nid).props[prop] ?? null,
-    getDockLayout: (wid) => runtime.getDockLayout(wid),
-  });
+  const boxes = computeSceneLayout(project.scene, layoutHooks(runtime));
+  const hidden = hiddenPages(project.scene, shownPage);
   const rootId = project.scene.root;
   const rootNode = node(rootId);
   const stageEl = ensureStageIframe();
@@ -899,8 +924,8 @@ function applyViews(): void {
       setShown(id, entry, effectiveVis);
       entry.wrapper.classList.remove("vf-ghost");
     } else {
-      entry.wrapper.style.display = n?.type === "Dialog" && !isDialogShownInStage(id) ? "none" : "";
-      entry.wrapper.classList.toggle("vf-ghost", !effectiveVis);
+      entry.wrapper.style.display = hidden.has(id) || (n?.type === "Dialog" && !isDialogShownInStage(id)) ? "none" : "";
+      entry.wrapper.classList.toggle("vf-ghost", !effectiveVis && !hidden.has(id));
     }
     entry.wrapper.toggleAttribute("data-vf-disabled", !view.enabled);
     const type = n?.type;
@@ -1828,7 +1853,62 @@ outlines.id = "multi-outlines";
 // 折线、直线、曲线的拐点把手
 const bendHandles = document.createElement("div");
 bendHandles.id = "bend-handles";
-overlay.append(ghost, guidesLayer, outlines, selectionBox, bendHandles, ...endpointHandles, marqueeBox);
+// 鼠标指着的控件的细框，画布和图层互相提示
+const hoverOutline = document.createElement("div");
+hoverOutline.id = "hover-outline";
+overlay.append(ghost, guidesLayer, hoverOutline, outlines, selectionBox, bendHandles, ...endpointHandles, marqueeBox);
+
+let hoveredId: string | null = null;
+
+function layerRow(id: string): HTMLElement | null {
+  return $("layers").querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+}
+
+function isOnHiddenPage(id: string): boolean {
+  const hidden = hiddenPages(project.scene, shownPage);
+  for (let cur: string | null = id; cur; cur = parentOf(cur)) if (hidden.has(cur)) return true;
+  return false;
+}
+
+function setHover(id: string | null): void {
+  if (id === hoveredId) return;
+  if (hoveredId) layerRow(hoveredId)?.classList.remove("hovered");
+  hoveredId = id;
+  if (id) layerRow(id)?.classList.add("hovered");
+  if (!id || !node(id) || mode !== "edit" || isOnHiddenPage(id)) {
+    hoverOutline.style.display = "none";
+    return;
+  }
+  const r = absRect(id);
+  const rotation = worldRotation(id);
+  Object.assign(hoverOutline.style, {
+    display: "block",
+    left: `${r.x}px`,
+    top: `${r.y}px`,
+    width: `${r.width}px`,
+    height: `${r.height}px`,
+    transform: rotation ? `rotate(${rotation}deg)` : "",
+  });
+}
+
+let hoverFrame = 0;
+
+overlay.addEventListener("pointermove", (e) => {
+  cancelAnimationFrame(hoverFrame);
+  if (gesture || mode !== "edit" || tool.kind !== "select") {
+    setHover(null);
+    return;
+  }
+  const pt = stagePoint(e);
+  hoverFrame = requestAnimationFrame(() => setHover(hitTest(pt.x, pt.y)));
+});
+
+overlay.addEventListener("pointerleave", () => {
+  cancelAnimationFrame(hoverFrame);
+  setHover(null);
+});
+
+setSelectionRectSource(() => (mode === "edit" && selectedIds.length > 0 ? unionRect(topSelection()) : null));
 
 /** 多选时的外框：所有选中的东西（按旋转后的视觉外包围盒）合起来的方框。 */
 function unionRect(ids: string[]): Rect | null {
@@ -2547,7 +2627,7 @@ overlay.addEventListener("pointermove", (e) => {
     syncResizedNodeDimensions(n, nextW, nextH, MIN_SIZE, project.scene, gesture.id);
     if (n.type === "Dock") {
       const rootNode = node(project.scene.root);
-      if (rootNode?.dockLayout) designRuntime.setDockLayout(rootNode.dockLayout, project.scene.root);
+      if (rootNode?.dockLayout) activeRuntime().setDockLayout(rootNode.dockLayout, project.scene.root);
     }
     if (!isRoot && !isLayoutPositionedNode(project.scene, gesture.id)) {
       const local = worldRectToNodeLocalInScene(project.scene, gesture.id, {
@@ -2598,7 +2678,7 @@ overlay.addEventListener("pointermove", (e) => {
         syncResizedNodeDimensions(eachNode, scaled.width, scaled.height, MIN_SIZE, project.scene, id);
         if (eachNode.type === "Dock") {
           const rootNode = node(project.scene.root);
-          if (rootNode?.dockLayout) designRuntime.setDockLayout(rootNode.dockLayout, project.scene.root);
+          if (rootNode?.dockLayout) activeRuntime().setDockLayout(rootNode.dockLayout, project.scene.root);
         }
         if (isLayoutPositionedNode(project.scene, id)) {
           delete eachNode.x;
@@ -2654,8 +2734,9 @@ overlay.addEventListener("pointermove", (e) => {
     gesture.moved = true;
     Object.assign(marqueeBox.style, { display: "block", left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
     // 框住的是起点所在的那一层里、未锁定且和方框（含旋转后精确有向矩形）有交叠的东西
+    const hidden = hiddenPages(project.scene, shownPage);
     const hits = childrenOf(node(gesture.scope)).filter((child) => {
-      if (isNodeLocked(project.scene, child)) return false;
+      if (isNodeLocked(project.scene, child) || hidden.has(child)) return false;
       const r = absRect(child);
       return rectIntersectsRotatedRect(rect, r, worldRotation(child));
     });
@@ -3786,6 +3867,11 @@ function clipboardItems(): MenuItem[] {
   return items;
 }
 
+/** 选中的每个控件一行引用。 */
+function selectionReference(): string {
+  return selectedIds.map((id) => controlReference(project, id)).join("\n");
+}
+
 function showMenu(x: number, y: number, id: string): void {
   // 多选时的菜单：只放对整组都有意义的操作
   if (selectedIds.length > 1 && selectedIds.includes(id)) {
@@ -3793,6 +3879,9 @@ function showMenu(x: number, y: number, id: string): void {
     const anyUnlocked = ids.some((each) => !isNodeLocked(project.scene, each));
     const alignableCount = alignableSelection().length;
     const items: MenuItem[] = [
+      { label: `复制 ${selectedIds.length} 条引用`, action: () => void copyReference(selectionReference()) },
+      { label: "缩放到所选（Shift+2）", action: zoomToSelection },
+      "separator",
       ...clipboardItems(),
       "separator",
       { label: anyUnlocked ? "锁定所选（Ctrl+L）" : "解锁所选（Ctrl+L）", action: () => void toggleLock(ids) },
@@ -3826,6 +3915,7 @@ function showMenu(x: number, y: number, id: string): void {
   if (id !== project.scene.root) {
     const locked = isNodeLocked(project.scene, id);
     items.push(
+      { label: "缩放到所选（Shift+2）", action: zoomToSelection },
       "separator",
       { label: "打开说明", action: () => showRightTab("doc") },
       { label: "编辑逻辑", action: () => showRightTab("yaml") },
@@ -4523,6 +4613,9 @@ function startPaletteDrag(down: PointerEvent, type: string): void {
   document.addEventListener("pointerup", up);
 }
 
+/** 图层里折叠起来的节点。 */
+const collapsedLayers = new Set<string>();
+
 function renderLayers(): void {
   const rows: HTMLElement[] = [];
   const visit = (id: string, depth: number) => {
@@ -4530,9 +4623,26 @@ function renderLayers(): void {
     if (!n) return;
     const locked = isNodeLocked(project.scene, id);
     const row = document.createElement("div");
-    row.className = "layer" + (id === selectedId || selectedIds.includes(id) ? " selected" : "") + (locked ? " locked" : "");
+    row.className = "layer" + (id === selectedId || selectedIds.includes(id) ? " selected" : "") + (locked ? " locked" : "") + (id === hoveredId ? " hovered" : "");
     row.dataset.id = id;
     row.style.paddingLeft = `${6 + depth * 14}px`;
+    const children = childrenOf(n);
+    const collapsed = collapsedLayers.has(id);
+    const caret = document.createElement("button");
+    caret.type = "button";
+    caret.className = "layer-caret";
+    caret.disabled = children.length === 0;
+    if (children.length > 0) {
+      caret.textContent = collapsed ? "▸" : "▾";
+      caret.title = collapsed ? "展开" : "折叠";
+      caret.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (collapsed) collapsedLayers.delete(id);
+        else collapsedLayers.add(id);
+        renderLayers();
+      });
+    }
+    row.append(caret);
     const name = document.createElement("span");
     name.textContent = id;
     const type = document.createElement("span");
@@ -4569,13 +4679,60 @@ function renderLayers(): void {
       if (!selectedIds.includes(id)) select(id);
       showMenu(e.clientX, e.clientY, id);
     });
+    row.addEventListener("mouseenter", () => setHover(id));
+    row.addEventListener("mouseleave", () => setHover(null));
     rows.push(row);
     // 列表里越靠上的在画面里越靠前
-    for (const child of [...childrenOf(n)].reverse()) visit(child, depth + 1);
+    if (!collapsed) for (const child of [...children].reverse()) visit(child, depth + 1);
   };
   for (const winId of allWindowIds(project.scene)) visit(winId, 0);
   $("layers").replaceChildren(...rows);
 }
+
+/** 让选中的控件看得见：切到它所在的层叠页，展开图层里它的上级。 */
+function revealSelection(): void {
+  if (!selectedId) return;
+  for (const { stack, page } of pagesToReveal(project.scene, selectedId)) revealedPages.set(stack, page);
+  for (let parent = parentOf(selectedId); parent; parent = parentOf(parent)) collapsedLayers.delete(parent);
+}
+
+$("layers-collapse").addEventListener("click", () => {
+  const windows = new Set(allWindowIds(project.scene));
+  for (const id of Object.keys(project.scene.nodes)) {
+    if (!windows.has(id) && childrenOf(node(id)).length > 0) collapsedLayers.add(id);
+  }
+  revealSelection();
+  renderLayers();
+});
+
+$("layers-expand").addEventListener("click", () => {
+  collapsedLayers.clear();
+  renderLayers();
+});
+
+// 素材栏收起来，把地方让给图层
+const PALETTE_COLLAPSED_KEY = "vf.paletteCollapsed";
+
+function setPaletteCollapsed(collapsed: boolean): void {
+  $("palette-section").classList.toggle("collapsed", collapsed);
+  $("palette-toggle").textContent = collapsed ? "展开" : "收起";
+}
+
+try {
+  setPaletteCollapsed(localStorage.getItem(PALETTE_COLLAPSED_KEY) === "1");
+} catch {
+  setPaletteCollapsed(false);
+}
+
+$("palette-toggle").addEventListener("click", () => {
+  const collapsed = !$("palette-section").classList.contains("collapsed");
+  setPaletteCollapsed(collapsed);
+  try {
+    localStorage.setItem(PALETTE_COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch {
+    // 存不下只是下次打开要再收一次
+  }
+});
 
 
 function syncSelection(): void {
@@ -4600,8 +4757,10 @@ function topSelection(): string[] {
 }
 
 function afterSelectionChange(): void {
+  revealSelection();
   applyViews();
   renderLayers();
+  if (selectedId) layerRow(selectedId)?.scrollIntoView({ block: "nearest" });
   renderToolbar();
   renderRight();
   renderShapeBar();
@@ -4667,7 +4826,7 @@ let docTimer: number | undefined;
 let yamlTimer: number | undefined;
 
 function showRightTab(tab: string): void {
-  for (const id of ["doc", "yaml", "layout", "menu", "state"]) {
+  for (const id of ["doc", "yaml", "layout", "menu", "state", "events"]) {
     const t = document.getElementById(`tab-${id}`);
     const p = document.getElementById(`pane-${id}`);
     if (t) t.setAttribute("aria-selected", String(tab === id));
@@ -4808,6 +4967,7 @@ function renderRight(): void {
   renderLayoutEditPane();
   renderMenuEditPane();
   renderStateEditPane();
+  renderEventPane();
 }
 
 /** 把 YAML 编辑器滚动到以 prefix 开头的那一行。 */
@@ -5018,7 +5178,7 @@ yamlText.addEventListener("keydown", (e) => {
 
 // “引用”：选中的控件；没有选中控件时引用整个项目
 $("selection-quote").addEventListener("click", () => {
-  void copyReference(selectedId ? controlReference(project, selectedId) : projectReference(project));
+  void copyReference(selectedIds.length > 0 ? selectionReference() : selectedId ? controlReference(project, selectedId) : projectReference(project));
 });
 
 // 文档页签的“引用所选”：选中了文字就引用那几行，否则引用当前显示的整个小节或整份文档
@@ -5300,6 +5460,7 @@ function startPreviewRuntime(): void {
       }
       applyViews();
       renderConditions();
+      refreshEventPane();
     },
     onLog: (entry) => {
       log.push(entry);
@@ -5308,6 +5469,41 @@ function startPreviewRuntime(): void {
     },
   });
   previewRuntime.start();
+  syncResetButton();
+}
+
+function syncResetButton(): void {
+  $("reset-state").hidden = mode === "preview" || !previewRuntime;
+}
+
+/** 回到初始状态：丢掉预览留下的运行状态。下次进预览或触发事件时再从头开始。 */
+function resetLiveState(): void {
+  stopPreviewClockTimer();
+  previewRuntime = null;
+  log.length = 0;
+  revealedPages.clear();
+  renderLog();
+  renderStage();
+  renderConditions();
+  renderEventPane();
+  syncResetButton();
+}
+
+/** 在编辑模式里触发控件的事件：作用在画布显示的状态上，还没有运行状态时先从初始状态开一份。 */
+function fireEvent(id: string, event: string, value?: Value): void {
+  const fresh = !previewRuntime;
+  if (fresh) startPreviewRuntime();
+  const runtime = previewRuntime!;
+  const pageOf = (stack: string) => activePage(childrenOf(node(stack)), runtime.view(stack).props);
+  const before = [...revealedPages.keys()].map((stack) => [stack, pageOf(stack)] as const);
+  runtime.dispatch(id, event, value);
+  // 事件真的换了页，就听状态的，不再停在之前看的那一页
+  for (const [stack, page] of before) if (pageOf(stack) !== page) revealedPages.delete(stack);
+  if (fresh) renderStage();
+  applyViews();
+  updateSelectionBox();
+  renderEventPane();
+  showBottomTab("log");
 }
 
 function setMode(next: "edit" | "preview"): void {
@@ -5330,15 +5526,21 @@ function setMode(next: "edit" | "preview"): void {
     showBottomTab("log");
   } else {
     showBottomTab("problems");
+    // 预览里切到哪一页，回到编辑就看哪一页
+    revealedPages.clear();
   }
   renderToolbar();
   renderStage();
   renderShapeBar();
   renderConditions();
+  renderEventPane();
+  syncResetButton();
+  if (mode === "edit" && selectedId && isOnHiddenPage(selectedId)) select(null);
 }
 
 $("mode-edit").addEventListener("click", () => setMode("edit"));
 $("mode-preview").addEventListener("click", () => setMode("preview"));
+$("reset-state").addEventListener("click", resetLiveState);
 $("restart").addEventListener("click", () => {
   log.length = 0;
   startPreviewRuntime();
@@ -5765,6 +5967,20 @@ async function main(): Promise<void> {
     getProject: () => project,
     editLogic,
     toast,
+    activateRightTab: showRightTab,
+  });
+  initEventEdit({
+    getProject: () => project,
+    getSelectedId: () => selectedId,
+    getRuntime: activeRuntime,
+    isLive: () => previewRuntime !== null,
+    fire: fireEvent,
+    toggleCondition: (id) => {
+      if (!previewRuntime) startPreviewRuntime();
+      previewRuntime!.toggleTextCondition(id);
+      renderEventPane();
+    },
+    resetState: resetLiveState,
     activateRightTab: showRightTab,
   });
   initPreviewLauncher(
