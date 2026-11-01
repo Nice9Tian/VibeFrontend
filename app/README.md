@@ -134,6 +134,7 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 | `scripts/export-qt.ts` | 导出的命令行入口：读项目、打包逻辑、写文件 |
 | `scripts/run-case.ts` | 在工具这一侧按步骤跑逻辑的命令行入口 |
 | `scripts/compare-layout.ts` | 在三个窗口尺寸下对比工具与 Qt 控件位置和大小的命令行入口 |
+| `scripts/test-mode-switch.ts` | 用无头浏览器确认切换编辑、预览模式时设计窗口的位置不变，预览改外观不能改尺寸 |
 | `scripts/test-all.ts` | `npm test` 的入口：按改动范围选测试，分级判断在 `scripts/test-tiers.ts`，用法见根目录 `AGENTS.md` 的“测试”一节 |
 | `scripts/qt-env.ts` | 启动 Qt 程序的共用设置，默认不开窗口 |
 | `scripts/test-editor.ts` | 编辑器纯函数（`history.ts`、`transform.ts` 等）的单元测试入口（`npm run test:editor`） |

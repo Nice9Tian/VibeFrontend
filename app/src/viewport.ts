@@ -140,6 +140,22 @@ export function zoomToSelection(): void {
   for (const listener of listeners) listener();
 }
 
+/** 选中的东西跑到视口外面时，把视角挪过去，缩放不变。本来就看得见就不动。 */
+export function panToSelection(): void {
+  const rect = selectionRect();
+  if (!rect) return;
+  const { scroll } = elements();
+  const origin = frameOrigin();
+  const margin = 40;
+  const nudge = (start: number, size: number, from: number, to: number) =>
+    start < from + margin || size > to - from - 2 * margin ? start - from - margin : start + size > to - margin ? start + size - to + margin : 0;
+  const dx = nudge(origin.x + rect.x * zoom, rect.width * zoom, scroll.scrollLeft, scroll.scrollLeft + scroll.clientWidth);
+  const dy = nudge(origin.y + rect.y * zoom, rect.height * zoom, scroll.scrollTop + topInset(), scroll.scrollTop + scroll.clientHeight);
+  if (dx === 0 && dy === 0) return;
+  userMoved = true;
+  scroll.scrollBy(dx, dy);
+}
+
 function stepZoom(direction: 1 | -1): void {
   const next = direction > 0 ? STEPS.find((step) => step > zoom + 1e-3) : [...STEPS].reverse().find((step) => step < zoom - 1e-3);
   setZoom(next ?? zoom);

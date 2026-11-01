@@ -16,6 +16,7 @@
     "test:library": "node scripts/test-library.ts",
     "test:docview": "node scripts/test-docview.ts",
     "test:layout-edit": "node scripts/test-layout-edit.ts",
+    "test:mode-switch": "node scripts/test-mode-switch.ts",
     "test:dock": "node scripts/test-dock.ts"
   },
   "dependencies": {

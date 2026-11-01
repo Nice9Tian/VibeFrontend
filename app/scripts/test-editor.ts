@@ -215,11 +215,11 @@ test("拓展栏尺寸：不能拖过最小值，也不能把画布挤没", () =>
   assert.equal(clampPanels({ ...DEFAULT_PANELS, bottom: 10 }, big).bottom, 72, "底部栏有最小高度");
 
   const huge = clampPanels({ ...DEFAULT_PANELS, left: 5000 }, big);
-  assert.equal(huge.left + huge.right, 1600 - 320, "两栏加起来也要给画布留出 320");
+  assert.equal(huge.left + huge.right, 1600 - 500, "两栏加起来也要给画布留出 500");
   assert.equal(clampPanels({ ...DEFAULT_PANELS, bottom: 5000 }, big).bottom, 900 - 36 - 200, "底部栏要给画布留出 200 高");
 
   const closed = clampPanels({ ...DEFAULT_PANELS, rightOpen: false, left: 5000 }, big);
-  assert.equal(closed.left, 1600 - 320, "右栏收起后左栏能用它的地方");
+  assert.equal(closed.left, 1600 - 500, "右栏收起后左栏能用它的地方");
 
   const tiny = clampPanels(DEFAULT_PANELS, { width: 500, height: 300 });
   assert.deepEqual([tiny.left, tiny.right, tiny.bottom], [140, 260, 72], "窗口太小时各栏停在最小值");

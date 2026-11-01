@@ -163,7 +163,7 @@ import {
 } from "./transform";
 import { snapMove, snapPoint, snapResize, type Guide, type SnapOptions } from "./snap";
 import { activePage, hiddenPages, pagesToReveal } from "./stackview";
-import { onZoomChange, setSelectionRectSource, viewZoom, zoomToSelection } from "./viewport";
+import { onZoomChange, panToSelection, setSelectionRectSource, viewZoom, zoomToSelection } from "./viewport";
 import { PRESETS_PATH } from "./loader";
 import type { Value } from "./expr";
 
@@ -2063,6 +2063,8 @@ function updateSelectionBox(): void {
   });
   selectionTag.style.transform = flipLabels ? "rotate(180deg)" : "";
   sizeLabel.style.transform = flipLabels ? "translateX(-50%) rotate(180deg)" : "";
+  selectionTag.style.transformOrigin = flipLabels ? "center" : "";
+  sizeLabel.style.transformOrigin = flipLabels ? "center" : "";
   selectionBox.classList.toggle("line", isLine);
   selectionBox.classList.toggle("locked", locked);
   selectionTag.textContent = `${selectedId} · ${typeLabel(selectedId)}${nodeRot ? ` · ${nodeRot}°` : ""}${locked ? " · 已锁定" : ""}`;
@@ -4112,11 +4114,24 @@ function renderToolbar(): void {
   $("stage").classList.toggle("show-grid", snapSettings.grid > 0);
 }
 
+/** 工具栏夹在模式选择和缩放中间，比这还窄就不如换到第二行。 */
+const MIN_TOOLBAR_WIDTH = 150;
+
 const fitToolbar = overflowBar($("tool-bar"), {
   limit: () => {
     const bar = $("center-bar");
     const style = getComputedStyle(bar);
-    return bar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const inner = bar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const left = $("bar-left").offsetWidth;
+    const right = $("zoom-bar").offsetWidth;
+    const gaps = 2 * parseFloat(style.columnGap);
+    // 两边按较宽的一侧留出一样的空间，工具栏才在正中；放不下才退一步，用两边之间实际的空隙
+    const centered = inner - 2 * Math.max(left, right) - gaps;
+    const between = inner - left - right - gaps;
+    const narrow = between < MIN_TOOLBAR_WIDTH;
+    bar.classList.toggle("narrow", narrow);
+    if (narrow) return inner;
+    return centered >= MIN_TOOLBAR_WIDTH ? centered : between;
   },
   watch: $("center-bar"),
 });
@@ -4685,7 +4700,10 @@ function renderLayers(): void {
       row.append(lockBtn);
     }
     // 按住 Shift 或 Ctrl 点：多选
-    row.addEventListener("click", (e) => select(id, e.shiftKey || e.ctrlKey || e.metaKey));
+    row.addEventListener("click", (e) => {
+      select(id, e.shiftKey || e.ctrlKey || e.metaKey);
+      panToSelection();
+    });
     row.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       if (!selectedIds.includes(id)) select(id);
@@ -5490,6 +5508,7 @@ function startPreviewRuntime(): void {
 
 function syncResetButton(): void {
   $("reset-state").hidden = mode === "preview" || !previewRuntime;
+  fitToolbar();
 }
 
 /** 回到初始状态：丢掉预览留下的运行状态。下次进预览或触发事件时再从头开始。 */

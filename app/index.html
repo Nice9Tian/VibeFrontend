@@ -47,14 +47,16 @@
 
     <main id="center">
       <div id="center-bar">
-        <div class="segmented" role="group" aria-label="设计窗口的模式">
-          <button id="mode-edit" type="button" aria-pressed="true">编辑模式</button>
-          <button id="mode-preview" type="button" aria-pressed="false">预览模式</button>
-        </div>
-        <button id="reset-state" type="button" title="画布正显示预览留下的状态，点这里回到初始状态" hidden>恢复初始状态</button>
-        <div id="preview-bar" hidden>
-          <button id="restart" type="button">重新开始</button>
-          <div id="conditions"></div>
+        <div id="bar-left">
+          <div class="segmented" role="group" aria-label="设计窗口的模式">
+            <button id="mode-edit" type="button" aria-pressed="true">编辑模式</button>
+            <button id="mode-preview" type="button" aria-pressed="false">预览模式</button>
+          </div>
+          <button id="reset-state" type="button" title="画布正显示预览留下的状态，点这里回到初始状态" hidden>恢复初始状态</button>
+          <div id="preview-bar" hidden>
+            <button id="restart" type="button">重新开始</button>
+            <div id="conditions"></div>
+          </div>
         </div>
         <div id="view-tools">
           <div id="tool-bar" role="toolbar" aria-label="吸附和撤销"></div>

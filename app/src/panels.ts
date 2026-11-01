@@ -15,8 +15,8 @@ const MIN_LEFT = 140;
 const MIN_RIGHT = 260;
 const MIN_BOTTOM = 72;
 const TOPBAR_HEIGHT = 36;
-/** 不管怎么拖，中间的画布至少留这么大 */
-const MIN_CENTER_WIDTH = 320;
+/** 不管怎么拖，中间的画布至少留这么大。宽度要放得下顶部一行的模式选择和缩放 */
+const MIN_CENTER_WIDTH = 500;
 const MIN_CENTER_HEIGHT = 200;
 
 function clamp(value: number, min: number, max: number): number {

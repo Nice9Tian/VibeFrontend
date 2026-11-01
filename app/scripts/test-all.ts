@@ -15,7 +15,7 @@ import { qtRelevantFiles, qtSourceFiles } from "./test-tiers.ts";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.dirname(appRoot);
-const FAST = ["test-editor.ts", "test-step2.ts", "test-library.ts", "test-docview.ts", "test-layout-edit.ts", "test-dock.ts"];
+const FAST = ["test-editor.ts", "test-step2.ts", "test-library.ts", "test-docview.ts", "test-layout-edit.ts", "test-mode-switch.ts", "test-dock.ts"];
 const ANIMEAN_DESIGN = "../examples/animean/design";
 
 function changedFiles(): string[] | null {
