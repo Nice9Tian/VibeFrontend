@@ -11,12 +11,17 @@
 
   <body>
     <header id="topbar">
+      <button id="toggle-left" type="button" class="panel-toggle" title="收起或展开左侧的素材栏和图层" aria-pressed="true">素材栏</button>
       <span id="project-name">加载中…</span>
       <span id="window-size" class="muted"></span>
       <span class="spacer"></span>
       <span id="project-root" class="muted" title="设计项目所在的文件夹"></span>
       <button id="export-qt-btn" type="button" class="preview-window-btn" title="将当前设计项目导出成 Qt 工程">导出成 Qt</button>
+      <button id="toggle-right" type="button" class="panel-toggle" title="收起或展开右侧的详细信息" aria-pressed="true">详细信息</button>
     </header>
+    <div id="resize-left" class="panel-resizer vertical" title="拖动改宽度，双击恢复默认"></div>
+    <div id="resize-right" class="panel-resizer vertical" title="拖动改宽度，双击恢复默认"></div>
+    <div id="resize-bottom" class="panel-resizer horizontal" title="拖动改高度，双击恢复默认"></div>
 
     <aside id="left">
       <section id="palette-section">
@@ -96,6 +101,7 @@
       <div class="tabs" role="tablist">
         <button id="tab-problems" type="button" role="tab" aria-selected="true">问题</button>
         <button id="tab-log" type="button" role="tab" aria-selected="false">事件记录</button>
+        <button id="bottom-toggle" type="button" title="收起或展开底部栏">收起</button>
       </div>
       <div id="problems" class="bottom-pane"></div>
       <div id="log" class="bottom-pane" hidden></div>
