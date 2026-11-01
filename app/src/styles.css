@@ -226,6 +226,7 @@ h3 {
 /* ---------- 中间 ---------- */
 
 #center {
+  position: relative;
   grid-area: center;
   display: flex;
   flex-direction: column;
@@ -240,6 +241,32 @@ h3 {
   gap: 8px 12px;
   padding: 8px 12px;
   min-height: 44px;
+}
+
+/* 这一栏悬浮在画布上：画布占满，只有按钮本身盖住画布，按钮之间的空隙照常能操作下面的内容 */
+body:not(.standalone-preview) #center-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+body:not(.standalone-preview) #center-bar #view-tools,
+body:not(.standalone-preview) #center-bar #preview-bar,
+body:not(.standalone-preview) #center-bar #conditions {
+  pointer-events: none;
+}
+
+body:not(.standalone-preview) #center-bar .segmented,
+body:not(.standalone-preview) #center-bar #reset-state,
+body:not(.standalone-preview) #center-bar #restart,
+body:not(.standalone-preview) #center-bar #conditions > *,
+body:not(.standalone-preview) #center-bar #tool-bar,
+body:not(.standalone-preview) #center-bar #zoom-bar {
+  pointer-events: auto;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
 }
 
 .segmented {
@@ -280,6 +307,7 @@ h3 {
 }
 
 #restart,
+#reset-state,
 .note button {
   padding: 4px 10px;
   border: 1px solid var(--line);

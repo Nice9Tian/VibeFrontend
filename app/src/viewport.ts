@@ -85,12 +85,18 @@ export function setZoom(next: number, clientX?: number, clientY?: number): void 
   for (const listener of listeners) listener();
 }
 
+/** 悬浮在画布顶上的那一栏有多高。居中和缩放都按它下面的区域算，内容才不会被按钮盖住。 */
+function topInset(): number {
+  const bar = document.getElementById("center-bar");
+  return bar && getComputedStyle(bar).position === "absolute" ? bar.offsetHeight : 0;
+}
+
 /** 把设计窗口放在视口正中。 */
 export function centerView(): void {
   const { scroll, frame } = elements();
   const origin = frameOrigin();
   scroll.scrollLeft = origin.x + (frame.offsetWidth * zoom) / 2 - scroll.clientWidth / 2;
-  scroll.scrollTop = origin.y + (frame.offsetHeight * zoom) / 2 - scroll.clientHeight / 2;
+  scroll.scrollTop = origin.y + (frame.offsetHeight * zoom) / 2 - scroll.clientHeight / 2 - topInset() / 2;
 }
 
 /** 缩放到刚好装下整个设计窗口（最多 100%），并放在正中。 */
@@ -98,7 +104,7 @@ export function zoomToFit(): void {
   const { scroll, frame } = elements();
   userMoved = true;
   const padding = 48;
-  const fit = Math.min((scroll.clientWidth - padding) / frame.offsetWidth, (scroll.clientHeight - padding) / frame.offsetHeight, 1);
+  const fit = Math.min((scroll.clientWidth - padding) / frame.offsetWidth, (scroll.clientHeight - topInset() - padding) / frame.offsetHeight, 1);
   zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fit));
   layout();
   centerView();
@@ -123,14 +129,14 @@ export function zoomToSelection(): void {
   const padding = 96;
   const fit = Math.min(
     (scroll.clientWidth - padding) / Math.max(rect.width, 1),
-    (scroll.clientHeight - padding) / Math.max(rect.height, 1),
+    (scroll.clientHeight - topInset() - padding) / Math.max(rect.height, 1),
     SELECTION_MAX_ZOOM,
   );
   zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fit));
   layout();
   const origin = frameOrigin();
   scroll.scrollLeft = origin.x + (rect.x + rect.width / 2) * zoom - scroll.clientWidth / 2;
-  scroll.scrollTop = origin.y + (rect.y + rect.height / 2) * zoom - scroll.clientHeight / 2;
+  scroll.scrollTop = origin.y + (rect.y + rect.height / 2) * zoom - scroll.clientHeight / 2 - topInset() / 2;
   for (const listener of listeners) listener();
 }
 
