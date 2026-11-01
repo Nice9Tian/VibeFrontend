@@ -28,6 +28,8 @@ import {
 import { focusMenuItemInEditor, initMenuEdit, renderMenuEditPane } from "./menuedit";
 import { initStateEdit, renderStateEditPane } from "./stateedit";
 import { initEventEdit, refreshEventPane, renderEventPane } from "./eventedit";
+import { overflowBar } from "./overflowbar";
+import { initPanels } from "./panels";
 import { initPreviewLauncher, initStandalonePreviewWindow, isStandalonePreview, notifyMainWindowSelect, syncStandalonePreviewTitle } from "./previewwindow";
 import {
   allSceneMenuIds,
@@ -72,6 +74,7 @@ import {
 import {
   componentReference,
   controlReference,
+  controlsReference,
   docSectionRange,
   fileReference,
   lineAt,
@@ -3867,9 +3870,8 @@ function clipboardItems(): MenuItem[] {
   return items;
 }
 
-/** 选中的每个控件一行引用。 */
 function selectionReference(): string {
-  return selectedIds.map((id) => controlReference(project, id)).join("\n");
+  return controlsReference(project, selectedIds);
 }
 
 function showMenu(x: number, y: number, id: string): void {
@@ -4105,9 +4107,19 @@ function renderToolbar(): void {
     distH,
     distV,
   );
+  fitToolbar();
   $("stage").style.setProperty("--grid", snapSettings.grid ? `${snapSettings.grid}px` : "0");
   $("stage").classList.toggle("show-grid", snapSettings.grid > 0);
 }
+
+const fitToolbar = overflowBar($("tool-bar"), {
+  limit: () => {
+    const bar = $("center-bar");
+    const style = getComputedStyle(bar);
+    return bar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  },
+  watch: $("center-bar"),
+});
 
 /** 当前选为画图工具的那个预设，在素材栏里标出来。 */
 function markActivePreset(): void {
@@ -4825,6 +4837,9 @@ let docTarget: { path: string; section: string | null } | null = null;
 let docTimer: number | undefined;
 let yamlTimer: number | undefined;
 
+/** 页签都建好之后才有，放不下时收进“…”。 */
+let fitRightTabs: (() => void) | null = null;
+
 function showRightTab(tab: string): void {
   for (const id of ["doc", "yaml", "layout", "menu", "state", "events"]) {
     const t = document.getElementById(`tab-${id}`);
@@ -4832,6 +4847,7 @@ function showRightTab(tab: string): void {
     if (t) t.setAttribute("aria-selected", String(tab === id));
     if (p) p.hidden = tab !== id;
   }
+  fitRightTabs?.();
   if (tab === "yaml" && selectedId) scrollYamlTo(`  ${selectedId}:`);
 }
 
@@ -5983,6 +5999,16 @@ async function main(): Promise<void> {
     resetState: resetLiveState,
     activateRightTab: showRightTab,
   });
+  const rightTabs = document.querySelector<HTMLElement>("#right .tabs")!;
+  fitRightTabs = overflowBar(rightTabs, {
+    limit: () => {
+      const style = getComputedStyle(rightTabs);
+      return rightTabs.clientWidth - parseFloat(style.paddingRight);
+    },
+    watch: rightTabs,
+    keep: (item) => item.getAttribute("aria-selected") === "true",
+    closeOnPick: true,
+  });
   initPreviewLauncher(
     () => project,
     (id) => {
@@ -5992,6 +6018,9 @@ async function main(): Promise<void> {
       }
     },
   );
+  // “独立预览”按钮是上面才加进顶栏的，“详细信息”要排在它后面，贴着右侧栏
+  $("topbar").append($("toggle-right"));
+  initPanels();
   renderAll();
   renderLog();
   initStandalonePreviewWindow({

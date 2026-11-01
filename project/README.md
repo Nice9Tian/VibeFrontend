@@ -70,6 +70,21 @@ User referenced "control=hintBox; type=Container (unconverted); path=panelWindow
 | `logic` | 它在 YAML 中的条目；`none (...)` 表示还没有条目，括号里写明应该加在哪里 |
 | `doc` | 它的说明小节；`none` 表示还没有说明 |
 
+一次引用多个控件时，第一行是它们共同的信息，后面每个控件一行，只写不同的部分：
+
+```text
+User referenced 2 controls "parent=panelWindow/toolbar; type=Button; scene=ui/scene.json; logic=logic/app.logic.yaml; doc=none; root=C:/.../project; rules=README.md"
+- control=saveBtn; scene=#120-127; logic=#40-44
+- control=openBtn; scene=#128-135; logic=#45-49
+```
+
+读法：
+
+- 每个控件的信息等于第一行加上它自己那一行，同名的键以自己那一行为准。
+- `parent` 是这些控件共同的上级。控件的 `path` 是从 `parent` 往下的层级，没写 `path` 就是 `parent` 的直接子节点。
+- 第一行的 `scene=ui/scene.json` 只写了文件时，控件那一行的 `scene=#120-127` 是这个文件里的行号，`logic`、`doc` 同理。
+- 控件那一行的 `logic=none` 表示它还没有条目，要加在 `objects.<控件 ID>` 下。
+
 其他几种引用：
 
 | 开头的键 | 引用的是 | 其他键 |

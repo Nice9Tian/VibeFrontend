@@ -11,6 +11,8 @@ import { computeSceneLayout, type Scene } from "../src/model.ts";
 import { activePage, hiddenPages, pagesToReveal } from "../src/stackview.ts";
 import { qtRelevantFiles, qtSourceFiles } from "./test-tiers.ts";
 import { eventRowsFor } from "../src/eventedit.ts";
+import { controlReference, controlsReference } from "../src/refs.ts";
+import { clampPanels, DEFAULT_PANELS } from "../src/panels.ts";
 import { nodeIO } from "./node-io.ts";
 import {
   applyAddNodeToScene,
@@ -203,6 +205,102 @@ test("层叠容器：当前页判定、隐藏页集合、切到选中控件所�
   assert.deepEqual(pagesToReveal(scene, "btnD"), [{ stack: "inner", page: "pageD" }, { stack: "outer", page: "pageA" }], "嵌套时每层都要切");
   assert.deepEqual(pagesToReveal(scene, "pageB"), [{ stack: "outer", page: "pageB" }], "选中页本身也要切到它");
   assert.deepEqual(pagesToReveal(scene, "outer"), [], "层叠容器本身不用切");
+});
+
+test("拓展栏尺寸：不能拖过最小值，也不能把画布挤没", () => {
+  const big = { width: 1600, height: 900 };
+  assert.deepEqual(clampPanels(DEFAULT_PANELS, big), DEFAULT_PANELS, "默认尺寸在普通窗口里不用动");
+  assert.equal(clampPanels({ ...DEFAULT_PANELS, left: 10 }, big).left, 140, "左栏有最小宽度");
+  assert.equal(clampPanels({ ...DEFAULT_PANELS, right: 10 }, big).right, 260, "右栏有最小宽度");
+  assert.equal(clampPanels({ ...DEFAULT_PANELS, bottom: 10 }, big).bottom, 72, "底部栏有最小高度");
+
+  const huge = clampPanels({ ...DEFAULT_PANELS, left: 5000 }, big);
+  assert.equal(huge.left + huge.right, 1600 - 320, "两栏加起来也要给画布留出 320");
+  assert.equal(clampPanels({ ...DEFAULT_PANELS, bottom: 5000 }, big).bottom, 900 - 36 - 200, "底部栏要给画布留出 200 高");
+
+  const closed = clampPanels({ ...DEFAULT_PANELS, rightOpen: false, left: 5000 }, big);
+  assert.equal(closed.left, 1600 - 320, "右栏收起后左栏能用它的地方");
+
+  const tiny = clampPanels(DEFAULT_PANELS, { width: 500, height: 300 });
+  assert.deepEqual([tiny.left, tiny.right, tiny.bottom], [140, 260, 72], "窗口太小时各栏停在最小值");
+});
+
+test("多控件引用：共同的信息只写一次，不同的留在各自那一行", () => {
+  const nodes = {
+    win: { type: "Window", width: 400, height: 300, children: ["panel", "other"] },
+    panel: { type: "Container", width: 100, height: 100, children: ["btnA", "btnB", "label", "box"] },
+    btnA: { type: "Button", width: 80, height: 24 },
+    btnB: { type: "Button", width: 80, height: 24 },
+    label: { type: "Label", width: 80, height: 24 },
+    box: { type: "Container", width: 80, height: 24, children: ["deep"] },
+    deep: { type: "Button", width: 80, height: 24 },
+    other: { type: "Button", width: 80, height: 24 },
+  };
+  const logicText = [
+    "version: 1",
+    "objects:",
+    "  btnA:",
+    "    doc: docs/a.md#a",
+    "    props: {}",
+    "  btnB:",
+    "    doc: docs/a.md#b",
+    "    props: {}",
+    "  other:",
+    "    doc: docs/b.md#c",
+    "    props: {}",
+    "",
+  ].join("\n");
+  const section = (name: string) => `<!-- ui-section: ${name} -->\n## ${name}\n<!-- /ui-section -->\n`;
+  const project = {
+    root: "C:\\work\\design\\",
+    scene: { version: 1, root: "win", nodes },
+    sceneText: JSON.stringify({ version: 1, root: "win", nodes }, null, 2),
+    logic: {
+      version: 1,
+      objects: {
+        btnA: { doc: "docs/a.md#a" },
+        btnB: { doc: "docs/a.md#b" },
+        other: { doc: "docs/b.md#c" },
+      },
+    },
+    logicText,
+    docs: new Map([
+      ["docs/a.md", `${section("a")}${section("b")}`],
+      ["docs/b.md", section("c")],
+    ]),
+  } as unknown as Parameters<typeof controlsReference>[0];
+  const tail = "root=C:/work/design; rules=README.md";
+
+  assert.equal(controlsReference(project, ["btnA"]), controlReference(project, "btnA"), "只有一个控件时格式不变");
+
+  const siblings = controlsReference(project, ["btnA", "btnB"]).split("\n");
+  assert.equal(siblings.length, 3);
+  assert.ok(siblings[0].startsWith('User referenced 2 controls "parent=win/panel; type=Button; scene=ui/scene.json; logic=logic/app.logic.yaml; doc=docs/a.md; root='), siblings[0]);
+  assert.ok(siblings[0].endsWith(`${tail}"`), siblings[0]);
+  assert.match(siblings[1], /^- control=btnA; scene=#\d+(-\d+)?; logic=#3-5; doc=#\d+(-\d+)?$/);
+  assert.match(siblings[2], /^- control=btnB; scene=#\d+(-\d+)?; logic=#6-8; doc=#\d+(-\d+)?$/);
+  assert.equal(siblings.slice(1).filter((line) => line.includes("root=")).length, 0, "根目录只写一次");
+
+  const noLogic = controlsReference(project, ["label", "box"]).split("\n");
+  assert.ok(noLogic[0].includes("logic=none (add under objects.<control> in logic/app.logic.yaml)"), noLogic[0]);
+  assert.ok(noLogic[0].includes("doc=none"), noLogic[0]);
+  assert.match(noLogic[1], /^- control=label; type=Label; scene=#\d+(-\d+)?$/, "类型不同就留在各自那一行");
+  assert.match(noLogic[2], /^- control=box; type=Container \(unconverted\); scene=#\d+(-\d+)?$/);
+
+  const mixed = controlsReference(project, ["btnA", "label"]).split("\n");
+  assert.ok(mixed[0].includes("logic=logic/app.logic.yaml"), mixed[0]);
+  assert.match(mixed[2], /logic=none; doc=none$/, "有的有逻辑有的没有：没有的写 none");
+
+  const nested = controlsReference(project, ["btnA", "deep", "other"]).split("\n");
+  assert.ok(nested[0].includes("parent=win; "), nested[0]);
+  assert.match(nested[1], /^- control=btnA; path=panel\/btnA;/, "不是 parent 的直接子节点时写相对路径");
+  assert.match(nested[2], /^- control=deep; path=panel\/box\/deep;/);
+  assert.match(nested[3], /^- control=other; scene=/, "直接子节点不写 path");
+  assert.match(nested[3], /doc=docs\/b\.md#\d+(-\d+)?$/, "doc 不在同一个文件时写全");
+
+  const withChild = controlsReference(project, ["box", "deep"]).split("\n");
+  assert.ok(withChild[0].includes("parent=win/panel; "), "同时选中上级和它的子节点时，parent 是它们共同的上级");
+  assert.match(withChild[2], /^- control=deep; type=Button; path=box\/deep;/);
 });
 
 test("交互事件：列出控件能收到的事件，接了逻辑的在前", () => {

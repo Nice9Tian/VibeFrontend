@@ -94,6 +94,7 @@ export function selectionRange(value: string, selectionStart: number, selectionE
 //
 // 引用是一行英文：User referenced "键=值; 键=值; ..."
 // 只求信息密度，不求好读：路径相对于 root，行号写成 #起始行-结束行（从 1 开始，首尾都包含）。
+// 一次引用多个控件时，第一行放它们共同的信息，后面每个控件一行，只写和别的控件不同的部分。
 
 /** 文件位置：相对路径加行号，例如 ui/scene.json#89-96。 */
 function at(relativePath: string, range?: LineRange | null): string {
@@ -101,16 +102,28 @@ function at(relativePath: string, range?: LineRange | null): string {
   return `${relativePath}#${range.start}${range.end > range.start ? `-${range.end}` : ""}`;
 }
 
+function joinFields(fields: Array<[string, string]>): string {
+  return (
+    fields
+      .map(([key, value]) => `${key}=${value}`)
+      .join("; ")
+      // 整条引用用双引号括起来，内容里的双引号和换行要处理掉
+      .replace(/"/g, "'")
+      .replace(/\s*\n\s*/g, " ")
+  );
+}
+
+/** 项目根目录和规则文件，每条引用都带。 */
+function projectFields(project: Project): Array<[string, string]> {
+  return [
+    ["root", project.root.replace(/\\/g, "/").replace(/\/$/, "")],
+    ["rules", "README.md"],
+  ];
+}
+
 /** 把若干“键=值”拼成一条引用，末尾统一带上项目根目录和规则文件。 */
 function reference(project: Project, fields: Array<[string, string]>): string {
-  const root = project.root.replace(/\\/g, "/").replace(/\/$/, "");
-  const body = [...fields, ["root", root], ["rules", "README.md"]]
-    .map(([key, value]) => `${key}=${value}`)
-    .join("; ")
-    // 整条引用用双引号括起来，内容里的双引号和换行要处理掉
-    .replace(/"/g, "'")
-    .replace(/\s*\n\s*/g, " ");
-  return `User referenced "${body}"`;
+  return `User referenced "${joinFields([...fields, ...projectFields(project)])}"`;
 }
 
 function parentChain(project: Project, id: string): string[] {
@@ -150,6 +163,57 @@ function controlFields(project: Project, id: string): Array<[string, string]> {
 
 export function controlReference(project: Project, id: string): string {
   return reference(project, controlFields(project, id));
+}
+
+/** 多个路径共同的开头。 */
+function sharedPrefix(chains: string[][]): string[] {
+  const [first, ...rest] = chains;
+  let length = first.length;
+  for (const chain of rest) {
+    let same = 0;
+    while (same < length && same < chain.length && chain[same] === first[same]) same++;
+    length = same;
+  }
+  return first.slice(0, length);
+}
+
+/**
+ * 同时引用多个控件。第一行是共同的信息：parent 是共同的上级，scene、logic、doc 全在同一个文件时写文件名；
+ * 后面每个控件一行，只写不同的部分：行号写成 #起始行-结束行，path 只在不是 parent 的直接子节点时才写。
+ */
+export function controlsReference(project: Project, ids: string[]): string {
+  if (ids.length === 1) return controlReference(project, ids[0]);
+  const chains = ids.map((id) => parentChain(project, id));
+  const parent = sharedPrefix(chains.map((chain) => chain.slice(0, -1)));
+  const rows = ids.map((id, index) => {
+    const row = new Map(controlFields(project, id));
+    const below = chains[index].slice(parent.length);
+    if (below.length > 1) row.set("path", below.join("/"));
+    else row.delete("path");
+    // 控件名换掉之后，还没有逻辑条目的控件这一项就相同了
+    row.set("logic", row.get("logic")!.replace(`objects.${id} `, "objects.<control> "));
+    return row;
+  });
+
+  const head: Array<[string, string]> = parent.length > 0 ? [["parent", parent.join("/")]] : [];
+  for (const key of ["type", "scene", "logic", "doc"]) {
+    const values = rows.map((row) => row.get(key)!);
+    if (new Set(values).size === 1) {
+      head.push([key, values[0]]);
+      for (const row of rows) row.delete(key);
+      continue;
+    }
+    const files = new Set(values.filter((value) => value.includes("#")).map((value) => value.split("#")[0]));
+    if (files.size !== 1) continue;
+    head.push([key, [...files][0]]);
+    rows.forEach((row, index) => {
+      const value = values[index];
+      row.set(key, value.includes("#") ? value.slice(value.indexOf("#")) : value.split(" ")[0]);
+    });
+  }
+
+  const lines = rows.map((row) => `- ${joinFields([...row])}`);
+  return [`User referenced ${ids.length} controls "${joinFields([...head, ...projectFields(project)])}"`, ...lines].join("\n");
 }
 
 /** 引用素材栏里的一种控件：它的声明、实现和样式文件。 */

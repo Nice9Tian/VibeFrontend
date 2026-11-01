@@ -26,8 +26,8 @@ body {
 
 body {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr) 360px;
-  grid-template-rows: 36px minmax(0, 1fr) 150px;
+  grid-template-columns: var(--left-width, 200px) minmax(0, 1fr) var(--right-width, 360px);
+  grid-template-rows: 36px minmax(0, 1fr) var(--bottom-height, 150px);
   grid-template-areas:
     "top top top"
     "left center right"
@@ -499,11 +499,17 @@ body.preview .vf-node[data-vf-type="Container"] > .vf-body {
 }
 
 .tabs button {
+  flex: none;
   padding: 6px 12px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
   cursor: pointer;
+}
+
+/* 右栏页签多，收窄一点才都放得下 */
+#right .tabs button {
+  padding: 6px 9px;
 }
 
 .tabs button[aria-selected="true"] {
@@ -726,6 +732,133 @@ body.preview .vf-node[data-vf-type="Container"] > .vf-body {
 
 #tool-bar[hidden] {
   display: none;
+}
+
+#tool-bar > * {
+  flex: none;
+}
+
+/* 顶栏放不下时只缩项目路径，别的不换行 */
+#topbar > :not(.spacer):not(#project-root) {
+  flex: none;
+  white-space: nowrap;
+}
+
+#topbar #project-root {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* 三个拓展栏：收起、拖动边缘改大小 */
+.panel-toggle {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.panel-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+body.left-collapsed #left,
+body.right-collapsed #right {
+  display: none;
+}
+
+body.bottom-collapsed:not(.standalone-preview) .bottom-pane {
+  display: none;
+}
+
+#bottom-toggle {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.panel-resizer {
+  position: fixed;
+  z-index: 100;
+  touch-action: none;
+}
+
+.panel-resizer[hidden] {
+  display: none;
+}
+
+.panel-resizer:hover,
+.panel-resizer:active {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.panel-resizer.vertical {
+  top: 36px;
+  bottom: var(--bottom-offset, 150px);
+  width: 6px;
+  cursor: col-resize;
+}
+
+.panel-resizer.horizontal {
+  left: 0;
+  right: 0;
+  bottom: calc(var(--bottom-offset, 150px) - 3px);
+  height: 6px;
+  cursor: row-resize;
+}
+
+#resize-left {
+  left: calc(var(--left-width, 200px) - 3px);
+}
+
+#resize-right {
+  right: calc(var(--right-width, 360px) - 3px);
+}
+
+body.standalone-preview .panel-resizer,
+body.standalone-preview #bottom-toggle {
+  display: none;
+}
+
+/* 放不下的控件收进“…”弹层 */
+.overflow-more[hidden] {
+  display: none !important;
+}
+
+.overflow-panel {
+  position: fixed;
+  z-index: 4000;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  max-width: 260px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.overflow-panel[hidden] {
+  display: none;
+}
+
+.overflow-panel .tool-sep {
+  display: none;
+}
+
+.tabs .overflow-panel {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.tabs .overflow-panel button {
+  text-align: left;
 }
 
 #tool-bar .tool {
