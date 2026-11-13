@@ -7,7 +7,7 @@
 //
 // 这里只有计算和对画布数据的修改，不碰网页；编辑器、检查、播放页和命令行共用。
 import type { Value } from "./expr.ts";
-import { childrenOfNode, roundInScene, type Scene, type SceneNode } from "./model.ts";
+import { childrenOfNode, roundInScene, unitOf, type Scene, type SceneNode } from "./model.ts";
 import { rotatedRectBounds, unionRectOf } from "./transform.ts";
 
 export const PARTS_DIR = "parts";
@@ -114,11 +114,14 @@ export interface CarveOutResult {
  * 叠放顺序不变；子项目节点放在它们里面最靠下的那一个原来的位置（层次上）。
  *
  * 页面的样式类照抄总项目里这一页的，这样总项目样式表里“某页下面的某个类”这类写法在两边都对得上。
+ *
+ * options.box：编辑器量出来的“实际画出来的范围”（父节点坐标）。描边、::after 画的框常常超出方框一点，
+ * 子项目的页面会把这一圈也包进去，不然在子项目里会被页面边裁掉。只会比方框大，不会小；单个转过的东西不用它。
  */
 export function carveOutPart(
   master: Scene,
   nodeIds: string | string[],
-  options: { part: string; name: string; boardClass?: string; id: string; partNodeId?: string },
+  options: { part: string; name: string; boardClass?: string; id: string; partNodeId?: string; box?: { x: number; y: number; width: number; height: number } },
 ): CarveOutResult {
   const roots = typeof nodeIds === "string" ? [nodeIds] : [...new Set(nodeIds)];
   if (roots.length === 0) throw new Error("没有选中要拆的东西");
@@ -148,16 +151,24 @@ export function carveOutPart(
   const round = (v: number) => roundInScene(master, v);
   // 子项目节点在总项目里的方框
   const first = master.nodes[roots[0]];
-  const box = single
+  // 单个转过的东西：子项目节点照它的方框、带着它的旋转，东西在子项目里摆正
+  const turned = single && Boolean(first.rotation);
+  const box = turned
     ? { x: first.x ?? 0, y: first.y ?? 0, width: first.width, height: first.height }
     : (() => {
-        const union = unionRectOf(roots.map((id) => {
+        const rects = roots.map((id) => {
           const n = master.nodes[id];
           return rotatedRectBounds({ x: n.x ?? 0, y: n.y ?? 0, width: n.width, height: n.height }, n.rotation ?? 0);
-        }))!;
-        const x = round(union.x);
-        const y = round(union.y);
-        return { x, y, width: round(union.x + union.width - x), height: round(union.y + union.height - y) };
+        });
+        if (options.box) rects.push(options.box);
+        const union = unionRectOf(rects)!;
+        // 往外取整到画布的步长（毫米画布是 0.01）：画出来的那一圈不会因为取整又被裁掉一点
+        const step = unitOf(master).step;
+        const x = round(Math.floor(union.x / step + 1e-6) * step);
+        const y = round(Math.floor(union.y / step + 1e-6) * step);
+        const right = round(Math.ceil((union.x + union.width) / step - 1e-6) * step);
+        const bottom = round(Math.ceil((union.y + union.height) / step - 1e-6) * step);
+        return { x, y, width: round(right - x), height: round(bottom - y) };
       })();
   let partNodeId = single ? roots[0] : (options.partNodeId ?? "part1");
   if (!single && (master.nodes[partNodeId] && !inside.has(partNodeId))) throw new Error(`总项目里已经有叫 ${partNodeId} 的东西`);
@@ -170,7 +181,7 @@ export function carveOutPart(
   if (options.boardClass) props.class = options.boardClass;
   nodes[board] = { type: "Page", width: box.width, height: box.height, props, children: [...roots] };
   for (const id of subtree) nodes[id] = JSON.parse(JSON.stringify(master.nodes[id])) as SceneNode;
-  if (single) {
+  if (turned) {
     nodes[partNodeId] = { ...nodes[partNodeId], x: 0, y: 0 };
     delete nodes[partNodeId].rotation;
   } else {
@@ -201,7 +212,7 @@ export function carveOutPart(
     y: box.y,
     width: box.width,
     height: box.height,
-    ...(single && first.rotation ? { rotation: first.rotation } : {}),
+    ...(turned ? { rotation: first.rotation } : {}),
     ...(single && first.locked ? { locked: first.locked } : {}),
     props: { part: options.part, board },
   };

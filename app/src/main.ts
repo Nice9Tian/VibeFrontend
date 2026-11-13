@@ -5332,12 +5332,12 @@ function revealSelection(): void {
   for (let parent = parentOf(selectedId); parent; parent = parentOf(parent)) collapsedLayers.delete(parent);
 }
 
+// 全部折叠：页面（窗口）也收起来，一个页面只剩一行。以前页面不收、还把选中的东西所在的那一层展开，
+// 平面设计里东西大多直接放在页面上，点了看不出任何变化。之后再选中别的东西时，它所在的那一层照旧自动展开
 $("layers-collapse").addEventListener("click", () => {
-  const windows = new Set(allWindowIds(project.scene));
   for (const id of Object.keys(project.scene.nodes)) {
-    if (!windows.has(id) && childrenOf(node(id)).length > 0) collapsedLayers.add(id);
+    if (childrenOf(node(id)).length > 0) collapsedLayers.add(id);
   }
-  revealSelection();
   renderLayers();
 });
 
@@ -6627,6 +6627,90 @@ function carveSelection(): string[] {
   return selectedIds.length > 1 ? topSelection() : selectedId ? [selectedId] : [];
 }
 
+/**
+ * 这几样东西实际画出来的范围（父节点坐标，画布单位）：方框，加上项目样式画在方框外面的描边（outline）
+ * 和 ::before / ::after 画的框；外面有一层裁掉超出部分的（overflow 不是 visible），只算裁剩下的。
+ * 拆成子项目时子项目的页面要把这一圈包进去，不然在子项目里会被页面边裁掉。
+ * 转过的、还没画出来的量不了，返回 null（就按方框算）。编辑器自己加的虚线（.vf-node / .vf-body 上的）不算。
+ */
+function paintedBounds(ids: string[]): { x: number; y: number; width: number; height: number } | null {
+  const doc = stageIframeDoc;
+  const win = doc?.defaultView;
+  const canvas = doc?.getElementById("stage-canvas");
+  const root = node(stageRootId());
+  if (!doc || !win || !canvas || !root || ids.some((id) => worldRotation(id) !== 0)) return null;
+  const board = canvas.getBoundingClientRect();
+  if (!board.width) return null;
+  type Box = { x1: number; y1: number; x2: number; y2: number };
+  let box: Box | null = null;
+  const grow = (b: Box) => {
+    box = box ? { x1: Math.min(box.x1, b.x1), y1: Math.min(box.y1, b.y1), x2: Math.max(box.x2, b.x2), y2: Math.max(box.y2, b.y2) } : b;
+  };
+  for (const id of ids) {
+    const wrapper = mounted.get(id)?.wrapper;
+    if (!wrapper) return null;
+    for (const el of [wrapper, ...wrapper.querySelectorAll<Element>("*")]) {
+      const r = el.getBoundingClientRect();
+      if (!r.width && !r.height) continue;
+      let clip: Box | null = null;
+      for (let up = el.parentElement; up && wrapper.contains(up); up = up.parentElement) {
+        const ucs = win.getComputedStyle(up);
+        if (ucs.overflowX === "visible" && ucs.overflowY === "visible") continue;
+        const ur = up.getBoundingClientRect();
+        clip = clip
+          ? { x1: Math.max(clip.x1, ur.left), y1: Math.max(clip.y1, ur.top), x2: Math.min(clip.x2, ur.right), y2: Math.min(clip.y2, ur.bottom) }
+          : { x1: ur.left, y1: ur.top, x2: ur.right, y2: ur.bottom };
+      }
+      const add = (b: Box) => {
+        const c = clip ? { x1: Math.max(b.x1, clip.x1), y1: Math.max(b.y1, clip.y1), x2: Math.min(b.x2, clip.x2), y2: Math.min(b.y2, clip.y2) } : b;
+        if (c.x2 > c.x1 || c.y2 > c.y1) grow(c);
+      };
+      add({ x1: r.left, y1: r.top, x2: r.right, y2: r.bottom });
+      const chrome = el.classList.contains("vf-node") || el.classList.contains("vf-body");
+      const cs = win.getComputedStyle(el);
+      // 设计窗口的缩放：样式里的 px 换成屏幕上的 px。节点外框是编辑器窗口建好再放进设计窗口的，
+      // 不是设计窗口那边的 HTMLElement（instanceof 不认），所以按有没有 offsetWidth 认
+      const html = typeof (el as HTMLElement).offsetWidth === "number" ? (el as HTMLElement) : null;
+      const k = html?.offsetWidth ? r.width / html.offsetWidth : 1;
+      if (!chrome && cs.outlineStyle !== "none") {
+        const o = Math.max(0, (parseFloat(cs.outlineWidth) || 0) + (parseFloat(cs.outlineOffset) || 0)) * k;
+        add({ x1: r.left - o, y1: r.top - o, x2: r.right + o, y2: r.bottom + o });
+      }
+      if (cs.position === "static" || !html) continue;
+      for (const pseudo of ["::before", "::after"]) {
+        const ps = win.getComputedStyle(el, pseudo);
+        if (ps.content === "none" || ps.display === "none" || (ps.position !== "absolute" && ps.position !== "fixed")) continue;
+        const left = r.left + (html.clientLeft + (parseFloat(ps.left) || 0)) * k;
+        const top = r.top + (html.clientTop + (parseFloat(ps.top) || 0)) * k;
+        const w = (parseFloat(ps.width) || 0) * k;
+        const h = (parseFloat(ps.height) || 0) * k;
+        const o = ps.outlineStyle !== "none" ? Math.max(0, (parseFloat(ps.outlineWidth) || 0) + (parseFloat(ps.outlineOffset) || 0)) * k : 0;
+        add({ x1: left - o, y1: top - o, x2: left + w + o, y2: top + h + o });
+      }
+    }
+  }
+  if (!box) return null;
+  // 只量“出头多少像素”，再加到场景数据里的方框上：方框本身照数据，不从屏幕坐标换算回来（那样会带进取整的零头）。
+  // 不到半个像素的出头也是排版的零头，不算。
+  const zoom = canvas.offsetWidth ? board.width / canvas.offsetWidth : 1;
+  const tol = 0.5 * zoom;
+  const rects = ids.map((id) => mounted.get(id)!.wrapper.getBoundingClientRect());
+  const shown = { x1: Math.min(...rects.map((r) => r.left)), y1: Math.min(...rects.map((r) => r.top)), x2: Math.max(...rects.map((r) => r.right)), y2: Math.max(...rects.map((r) => r.bottom)) };
+  const b = box as Box;
+  const over = (d: number) => (d > tol ? d : 0);
+  const scale = root.width / board.width;
+  const left = over(shown.x1 - b.x1) * scale;
+  const top = over(shown.y1 - b.y1) * scale;
+  const right = over(b.x2 - shown.x2) * scale;
+  const bottom = over(b.y2 - shown.y2) * scale;
+  const boxes = ids.map((id) => node(id)!);
+  const x = Math.min(...boxes.map((n) => n.x ?? 0));
+  const y = Math.min(...boxes.map((n) => n.y ?? 0));
+  const x2 = Math.max(...boxes.map((n) => (n.x ?? 0) + n.width));
+  const y2 = Math.max(...boxes.map((n) => (n.y ?? 0) + n.height));
+  return { x: x - left, y: y - top, width: x2 - x + left + right, height: y2 - y + top + bottom };
+}
+
 /** 名字 → 总项目里子项目节点的 ID（几样东西一起拆时才要新 ID）：times-23 → times23，重名往后编号 */
 function partNodeIdFor(folder: string): string {
   const camel = folder.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase());
@@ -6670,7 +6754,7 @@ async function carvePart(ids: string[]): Promise<void> {
   const scene = structuredClone(project.scene);
   let result: ReturnType<typeof carveOutPart>;
   try {
-    result = carveOutPart(scene, ids, { part, name, boardClass, id: crypto.randomUUID(), partNodeId });
+    result = carveOutPart(scene, ids, { part, name, boardClass, id: crypto.randomUUID(), partNodeId, box: paintedBounds(ids) ?? undefined });
   } catch (e) {
     return toast((e as Error).message);
   }

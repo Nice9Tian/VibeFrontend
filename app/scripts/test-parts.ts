@@ -175,6 +175,29 @@ async function pureTests(): Promise<void> {
     assert.throws(() => carveOutPart(master, ["bg", "mid"], { part: "parts/x", name: "x", id: "i", partNodeId: "g" }), /已经有叫 g 的/);
   });
 
+  await test("拆成子项目：画出来的比方框大（描边、::after 画的框），子项目的页面把这一圈包进去，往外取整", () => {
+    const master: Scene = {
+      version: 1,
+      unit: "mm",
+      root: "p",
+      boards: ["p"],
+      nodes: {
+        p: { type: "Page", width: 420, height: 297, children: ["g"] },
+        g: { type: "Group", x: 20, y: 166, width: 176, height: 34.08, children: ["t"] },
+        t: { type: "Text", x: 0, y: 0, width: 10, height: 10 },
+      },
+    };
+    // 量出来上面多画了 0.865 毫米（红框的 inset -0.6mm 加描边）
+    const { partScene } = carveOutPart(master, "g", { part: "parts/g", name: "g", id: "i", box: { x: 20, y: 165.135, width: 176, height: 34.945 } });
+    assert.deepEqual(master.nodes.g, { type: "Part", x: 20, y: 165.13, width: 176, height: 34.95, props: { part: "parts/g", board: "part" } });
+    assert.equal(partScene.nodes.part.height, 34.95);
+    assert.deepEqual([partScene.nodes.g.x, partScene.nodes.g.y], [0, 0.87], "原来的东西在子项目里往下挪，总项目里看位置不变");
+    // 量出来的比方框小：照方框
+    const small: Scene = { version: 1, unit: "mm", root: "p", boards: ["p"], nodes: { p: { type: "Page", width: 100, height: 100, children: ["a"] }, a: { type: "Text", x: 10, y: 10, width: 20, height: 20 } } };
+    carveOutPart(small, "a", { part: "parts/a", name: "a", id: "i", box: { x: 12, y: 12, width: 5, height: 5 } });
+    assert.deepEqual([small.nodes.a.x, small.nodes.a.y, small.nodes.a.width, small.nodes.a.height], [10, 10, 20, 20]);
+  });
+
   await test("拆成子项目：拆出来的东西里有叫 part 的，子项目的页面换个名字；跨出去的连线挂接拿掉", () => {
     const make = (): Scene => ({
       version: 1,
@@ -430,6 +453,24 @@ async function editorTests(): Promise<void> {
       await cdp.evaluate(SETTLE);
     });
 
+    await test("图层：全部折叠后一个页面只剩一行（选中的东西所在的页也收起来），全部展开回来", async () => {
+      // 先选中页面上的一样东西：以前折叠后会把它所在的那一层又展开，看起来像没反应
+      const p = await center('[data-vf-id="coverTitle"]');
+      await mouse("mouseMoved", p.x, p.y);
+      await mouse("mousePressed", p.x, p.y);
+      await mouse("mouseReleased", p.x, p.y);
+      await cdp.evaluate(SETTLE);
+      const rows = () => cdp.evaluate<string[]>(`[...document.querySelectorAll("#layers .layer")].map((r) => r.dataset.id)`);
+      const all = await rows();
+      assert.ok(all.length > 4, all.join(","));
+      await cdp.evaluate(`document.getElementById("layers-collapse").click()`);
+      await cdp.evaluate(SETTLE);
+      assert.deepEqual(await rows(), ["spread1", "page3"], "只剩两个页面");
+      await cdp.evaluate(`document.getElementById("layers-expand").click()`);
+      await cdp.evaluate(SETTLE);
+      assert.deepEqual(await rows(), all);
+    });
+
     await test("素材面板：搜索只留下有结果的组，点组卡片进去看全部，‹ 全部回到总览", async () => {
       const state = () =>
         cdp.evaluate<{ cards: string[]; detail: string[]; chips: string[] }>(`(() => ({
@@ -559,6 +600,39 @@ async function editorTests(): Promise<void> {
       assert.deepEqual([part.nodes.rightBody.x, part.nodes.rightBody.y], [0, 20]);
       await waitFor("总项目里画出两个文本框", () => stageHas('[data-vf-id="rightColumn"][data-vf-type="Part"] > .vf-part [data-vf-id="rightBody"] .vf-text'));
       assert.equal(await cdp.evaluate<string>(`document.getElementById("problems").innerText.trim()`), "没有问题。");
+    });
+
+    await test("样式在方框外面画了一圈框（::after），拆成子项目时子项目的页面把它包进去，在子项目里不被裁掉", async () => {
+      // 一个组，样式表给它画一个比方框大 2 毫米的框
+      fs.appendFileSync(path.join(dir, "styles/text.css"), "\n.framed::after { content: \"\"; position: absolute; inset: -2mm; outline: 0.5mm solid #c00; }\n");
+      const scene = masterScene();
+      scene.nodes.framedBox = { type: "Group", x: 240, y: 240, width: 50, height: 20, props: { class: "framed" } };
+      scene.nodes.spread1.children = [...(scene.nodes.spread1.children ?? []), "framedBox"];
+      writeJson(path.join(dir, "ui/scene.json"), scene);
+      await waitFor("组画出来了、框的样式也到了", () =>
+        cdp.evaluate<boolean>(`(() => { const doc = document.getElementById("stage-iframe").contentDocument; const el = doc.querySelector('[data-vf-id="framedBox"].framed'); return Boolean(el) && doc.defaultView.getComputedStyle(el, "::after").outlineStyle === "solid"; })()`).catch(() => false),
+      );
+      await cdp.evaluate(SETTLE);
+      const p = await center('[data-vf-id="framedBox"]');
+      await mouse("mouseMoved", p.x, p.y);
+      await mouse("mousePressed", p.x, p.y, "right");
+      await mouse("mouseReleased", p.x, p.y, "right");
+      await cdp.evaluate(SETTLE);
+      const clicked = await cdp.evaluate<boolean>(`(() => { const item = [...document.querySelectorAll("#menu *")].find((e) => e.children.length === 0 && e.textContent.trim() === "拆成子项目……"); item?.click(); return Boolean(item); })()`);
+      assert.ok(clicked);
+      await waitFor("对话框", () => cdp.evaluate<boolean>(`Boolean(document.querySelector("#vf-ask-dialog input"))`));
+      await key("Enter", "Enter", 13);
+      await waitFor("拆好了", async () => masterScene().nodes.framedBox?.type === "Part");
+      const part = masterScene().nodes.framedBox;
+      // 框比方框大 2 毫米，再加描边（0.5 毫米，浏览器可能按整像素画）
+      assert.ok(part.x! <= 238 && part.x! >= 237.4, `左边包住了框：${part.x}`);
+      assert.ok(part.y! <= 238 && part.y! >= 237.4, `上边包住了框：${part.y}`);
+      assert.ok(part.x! + part.width >= 292 && part.x! + part.width <= 292.6, `右边：${part.x! + part.width}`);
+      assert.ok(part.y! + part.height >= 262 && part.y! + part.height <= 262.6, `下边：${part.y! + part.height}`);
+      const inner = readJson<Scene>(path.join(dir, "parts/framedbox/ui/scene.json"));
+      assert.equal(inner.nodes.part.width, part.width, "子项目的页面和总项目里的方框一样大");
+      assert.equal(inner.nodes.part.height, part.height);
+      assert.ok(Math.abs(part.x! + inner.nodes.framedBox.x! - 240) < 1e-6 && Math.abs(part.y! + inner.nodes.framedBox.y! - 240) < 1e-6, "组在总项目里看还在原来的位置");
     });
   } finally {
     await page.close();
