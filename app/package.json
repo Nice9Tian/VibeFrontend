@@ -23,7 +23,8 @@
     "test:graphic": "node scripts/test-graphic.ts",
     "test:workspace": "node scripts/test-workspace.ts",
     "test:parts": "node scripts/test-parts.ts",
-    "test:preview-logic": "node scripts/test-preview-logic.ts"
+    "test:preview-logic": "node scripts/test-preview-logic.ts",
+    "test:preview": "node scripts/test-preview.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

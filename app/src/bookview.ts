@@ -1,7 +1,9 @@
-// 预览模式下的翻书分屏：把每个页面里的每张纸按书的页码配成左右两页一屏，像拿着装订好的书一页一页翻。
+// 预览时像翻书一样一屏一屏看：哪几面纸在同一屏、谁在左谁在右。
+// 跨页（两张纸拼成的页面）按设计的样子一屏看完；单页按页码配对，奇数页在右、偶数页在左，像装订好的书；
+// 包封（scene.cover = "wrap"）的封面单独在第一屏的右边，封底单独在最后一屏的左边。
 // 纯数据计算，不碰网页和文件系统，预览界面和命令行测试共用。
 import type { Scene } from "./model.ts";
-import { coverWrapId, sheetPageNumbers } from "./pages.ts";
+import { coverWrapId, pageIds, sheetPageNumbers } from "./pages.ts";
 
 export interface BookLeaf {
   /** 所在的页面 ID */
@@ -18,69 +20,71 @@ export interface BookView {
   label: string;
 }
 
-export type BookDirection = "ltr" | "rtl";
-
-function viewLabel(left: BookLeaf | null, right: BookLeaf | null, wrap: boolean, maxPage: number): string {
-  if (left && right) {
-    return `第 ${left.page}–${right.page} 页`;
-  }
+function viewLabel(left: BookLeaf | null, right: BookLeaf | null, wrap: boolean, lastPage: number): string {
+  if (left && right) return `第 ${left.page}–${right.page} 页`;
   const single = (left ?? right)!;
   if (wrap && single.page === 1) return "封面";
-  if (wrap && single.page === maxPage) return "封底";
+  if (wrap && single.page === lastPage) return "封底";
   return `第 ${single.page} 页`;
 }
 
-/** 按页码把画布里的全部纸排成一屏一屏的翻书视图；没有页面时返回空数组。 */
-export function bookViews(scene: Scene, options?: { direction?: BookDirection }): BookView[] {
-  const pageMap = sheetPageNumbers(scene);
-  if (pageMap.size === 0) return [];
-
-  const byPage = new Map<number, BookLeaf>();
-  let maxPage = 0;
-  for (const [board, pages] of pageMap) {
-    for (let sheet = 0; sheet < pages.length; sheet++) {
-      const page = pages[sheet];
-      if (typeof page === "number" && Number.isFinite(page) && page >= 1) {
-        byPage.set(page, { board, sheet, page });
-        if (page > maxPage) maxPage = page;
-      }
-    }
-  }
-  if (maxPage <= 0) return [];
-
-  const rtl = options?.direction === "rtl";
-  // 和页码一样按 pages.ts 认包封：写了 cover: "wrap" 而且第一个页面真是两张纸拼的，才叫封面、封底
-  const wrap = coverWrapId(scene) !== null;
+/**
+ * 全部页面排成一屏一屏的翻书视图；没有页面（界面设计）时返回空数组。
+ * - 包封：第一屏只有封面（包封的右半），最后一屏只有封底（包封的左半）。
+ * - 拼了两张以上纸的页面：按设计的样子，两张两张一屏（第 0、1 张一屏，第 2、3 张一屏……），落单的最后一张单独在左边。
+ * - 单页：奇数页是右手页，和前面等着的偶数页凑成一屏（没有就单独一屏在右边）；偶数页先等着下一页，下一页不是单页就单独一屏在左边。
+ */
+export function bookViews(scene: Scene): BookView[] {
+  const numbers = sheetPageNumbers(scene);
+  const boards = pageIds(scene);
+  if (boards.length === 0) return [];
+  const wrapId = coverWrapId(scene);
+  const lastPage = Math.max(0, ...[...numbers.values()].flat());
   const views: BookView[] = [];
-
-  const pushSpread = (ltrLeft: BookLeaf | null, ltrRight: BookLeaf | null) => {
-    const left = rtl ? ltrRight : ltrLeft;
-    const right = rtl ? ltrLeft : ltrRight;
-    if (!left && !right) return;
-    views.push({
-      left,
-      right,
-      label: viewLabel(left, right, wrap, maxPage),
-    });
+  const push = (left: BookLeaf | null, right: BookLeaf | null) => {
+    if (left || right) views.push({ left, right, label: viewLabel(left, right, wrapId !== null, lastPage) });
+  };
+  let waiting: BookLeaf | null = null; // 等着右手页的左手单页
+  const flush = () => {
+    if (waiting) push(waiting, null);
+    waiting = null;
   };
 
-  pushSpread(null, byPage.get(1) ?? null);
-  for (let even = 2; even <= maxPage; even += 2) {
-    const evenLeaf = byPage.get(even) ?? null;
-    const oddLeaf = even + 1 <= maxPage ? (byPage.get(even + 1) ?? null) : null;
-    pushSpread(evenLeaf, oddLeaf);
+  if (wrapId) push(null, { board: wrapId, sheet: 1, page: numbers.get(wrapId)?.[1] ?? 1 });
+  for (const board of boards) {
+    if (board === wrapId) continue;
+    const pages = numbers.get(board) ?? [];
+    if (pages.length >= 2) {
+      flush();
+      for (let s = 0; s < pages.length; s += 2) {
+        const left = { board, sheet: s, page: pages[s] };
+        const right = s + 1 < pages.length ? { board, sheet: s + 1, page: pages[s + 1] } : null;
+        push(left, right);
+      }
+      continue;
+    }
+    if (pages.length === 0) continue;
+    const leaf = { board, sheet: 0, page: pages[0] };
+    if (leaf.page % 2 === 1) {
+      push(waiting, leaf);
+      waiting = null;
+    } else {
+      flush();
+      waiting = leaf;
+    }
   }
-
+  flush();
+  if (wrapId) push({ board: wrapId, sheet: 0, page: numbers.get(wrapId)?.[0] ?? lastPage }, null);
   return views;
 }
 
-/** 找到第一个含有指定页面的翻书视图下标；找不到时返回 0。 */
+/** 第一个含有这个页面的视图；找不到返回 0。 */
 export function bookViewIndexOfBoard(views: BookView[], boardId: string): number {
   const index = views.findIndex((v) => v.left?.board === boardId || v.right?.board === boardId);
   return index >= 0 ? index : 0;
 }
 
-/** 找到含有指定页码的翻书视图下标；找不到时返回 0。 */
+/** 含有这个页码的视图；找不到返回 0。 */
 export function bookViewIndexOfPage(views: BookView[], page: number): number {
   const index = views.findIndex((v) => v.left?.page === page || v.right?.page === page);
   return index >= 0 ? index : 0;

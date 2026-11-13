@@ -1078,7 +1078,8 @@ async function saveUserLibrary(items: LibraryItem[], removedIds: string[] = []):
 export interface LibraryHost {
   getProject(): Project;
   getMode(): "edit" | "preview";
-  getZoom(): number;
+  /** 屏幕上的一点 → 设计窗口里的坐标（画布单位）。用编辑器自己的换算：平面设计摊开时画布从负坐标开始，不能只除以缩放 */
+  clientToStage(clientX: number, clientY: number): { x: number; y: number };
   readText(path: string): Promise<string | null>;
   writeText(path: string, content: string): Promise<void>;
   removeFile?(path: string): Promise<void>;
@@ -1728,9 +1729,7 @@ function startLibraryDrag(down: PointerEvent, fav: LibraryItem, matchedLocalType
     const rect = stage.getBoundingClientRect();
     const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
     if (!inside) return;
-    const zoom = host.getZoom();
-    const px = (e.clientX - rect.left) / zoom;
-    const py = (e.clientY - rect.top) / zoom;
+    const { x: px, y: py } = host.clientToStage(e.clientX, e.clientY);
     const localType = await ensureFavoriteInProject(fav);
     if (localType) await host.addNodeAt(localType, px, py);
   };
@@ -2055,8 +2054,9 @@ export async function renderLibraryPalette(): Promise<void> {
         if (!stage) return;
         const rect = stage.getBoundingClientRect();
         const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
-        const zoom = host.getZoom();
-        if (inside) void host.addNodeAt(type, (e.clientX - rect.left) / zoom, (e.clientY - rect.top) / zoom);
+        if (!inside) return;
+        const pt = host.clientToStage(e.clientX, e.clientY);
+        void host.addNodeAt(type, pt.x, pt.y);
       };
       document.addEventListener("pointermove", place);
       document.addEventListener("pointerup", up);

@@ -132,6 +132,9 @@ async function main(): Promise<void> {
   // 复制一份，这样测试不依赖工作区里没提交的设计文件
   const designDir = path.join(workDir, "design");
   fs.cpSync(path.resolve(appRoot, "../examples/animean/design"), designDir, { recursive: true });
+  // 预览默认套电脑的外框，窗口会挪到桌面中间：这里比的是“原样”预览（不套外框、1:1）里位置变没变
+  fs.mkdirSync(path.join(designDir, ".designer"), { recursive: true });
+  fs.writeFileSync(path.join(designDir, ".designer/preview.json"), JSON.stringify({ device: "plain" }) + "\n");
   process.env.VF_PROJECT = designDir;
 
   const { createServer } = await import("vite");

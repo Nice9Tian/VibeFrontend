@@ -18,6 +18,7 @@ import {
 } from "./dock.ts";
 import type { Value } from "./expr.ts";
 import { fromPx } from "./kinds.ts";
+import { absRectInScene } from "./transform.ts";
 import {
   canNodeHoldChildren,
   childrenOfNode,
@@ -173,9 +174,10 @@ export function placeNewNodeInScene(
     scene.nodes[id] = created;
     parent.children.splice(clampedIdx, 0, id);
   } else {
-    const pBox = layoutBoxes.get(targetParentId);
-    const originX = targetParentId === scene.root ? 0 : (pBox?.absX ?? parent.x ?? 0);
-    const originY = targetParentId === scene.root ? 0 : (pBox?.absY ?? parent.y ?? 0);
+    // 父节点在画布上的左上角：平面设计摊开时页面各有位置（boardlayout.ts），排版算出的 absX/absY 只是相对画板的
+    const parentAbs = absRectInScene(scene, targetParentId, layoutBoxes);
+    const originX = targetParentId === scene.root ? 0 : parentAbs.x;
+    const originY = targetParentId === scene.root ? 0 : parentAbs.y;
     if (options.exactTopLeft) {
       created.x = roundInScene(scene, options.exactTopLeft.x - originX);
       created.y = roundInScene(scene, options.exactTopLeft.y - originY);

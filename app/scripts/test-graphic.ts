@@ -165,6 +165,15 @@ async function pureTests(): Promise<void> {
     assert.deepEqual([px.nodes.c.width, px.nodes.c.height], [51, 8]);
   });
 
+  await test("改第 2 页以后的页面尺寸：只改宽高，不写 x、y（页面在画布上的位置是自动排的）", () => {
+    const scene: Scene = { version: 1, unit: "mm", root: "p1", boards: ["p1", "p2"], nodes: { p1: { type: "Page", width: 210, height: 297 }, p2: { type: "Page", width: 210, height: 297 } } };
+    const se = applyResizeToScene(scene, "p2", "se", 10, 5).nodes.p2;
+    assert.deepEqual([se.x, se.y, se.width, se.height], [undefined, undefined, 220, 302]);
+    // 拖左上角：宽高变小，页面不会因此被钉在画布上的某个位置
+    const nw = applyResizeToScene(scene, "p2", "nw", 10, 5).nodes.p2;
+    assert.deepEqual([nw.x, nw.y, nw.width, nw.height], [undefined, undefined, 200, 292]);
+  });
+
   await test("样式类清单：标了 @style 的只列这些，没标就列单独成规则的类", () => {
     const declared = [{ path: "a.css", text: "/* @style 正文 */\n.body { font-size: 9pt; }\n.helper { color: red; }\n/* @style 图注 */ .cap { }" }];
     assert.deepEqual(classStylesOf(declared).map((s) => [s.name, s.label]), [["body", "正文"], ["cap", "图注"]]);
@@ -390,6 +399,97 @@ async function editorTests(): Promise<void> {
       await wait(800);
       assert.deepEqual(readScene().nodes.spread1.children, before.nodes.spread1.children);
       assert.equal(readScene().nodes.coverLead.x, before.nodes.coverLead.x);
+    });
+
+    /** 设计窗口里 [data-vf-id] / [data-vf-board] 的元素在屏幕上的位置（设计窗口里量到的要乘上视角的缩放） */
+    const screenRect = (selector: string) => cdp.evaluate<{ left: number; top: number; width: number; height: number }>(`(() => {
+      const iframe = document.getElementById("stage-iframe"), f = iframe.getBoundingClientRect(), k = f.width / iframe.offsetWidth;
+      const r = iframe.contentDocument.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+      return { left: f.left + r.left * k, top: f.top + r.top * k, width: r.width * k, height: r.height * k };
+    })()`);
+
+    await test("从素材栏把文字拖到第 3 页上：放进第 3 页，中心就在松手的地方；撤销回去", async () => {
+      await cdp.evaluate(`[...document.querySelectorAll("#zoom-bar button")].find((b) => b.textContent.trim() === "适应").click()`);
+      await wait(300);
+      const before = readScene();
+      await cdp.evaluate(`(() => {
+        const item = document.querySelector('.palette-item[data-type="Text"]:not(.asset-preview-item)');
+        const group = item?.closest("[data-asset-group]")?.dataset.assetGroup;
+        if (group && !item.closest(".asset-detail")) document.querySelector('.asset-chip.back')?.click();
+        if (group && !item.closest(".asset-detail")) document.querySelector('.asset-group[data-group="' + group + '"]')?.click();
+      })()`);
+      await wait(200);
+      const from = await cdp.evaluate<{ x: number; y: number } | null>(`(() => {
+        const el = document.querySelector('.asset-detail .palette-item[data-type="Text"]') ?? document.querySelector('.palette-item[data-type="Text"]:not(.asset-preview-item)');
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      })()`);
+      assert.ok(from, "素材栏里找不到文字");
+      const board = await screenRect('[data-vf-board="page3"]');
+      const to = { x: board.left + board.width * 0.5, y: board.top + board.height * 0.6 };
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", buttons: 1, clickCount: 1 });
+      for (let k = 1; k <= 8; k++) {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x + ((to.x - from.x) * k) / 8, y: from.y + ((to.y - from.y) * k) / 8, button: "left", buttons: 1 });
+        await wait(10);
+      }
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", clickCount: 1 });
+      await wait(800);
+      const after = readScene();
+      const added = Object.keys(after.nodes).filter((id) => !before.nodes[id]);
+      assert.equal(added.length, 1, `新加了 ${added.join(", ")}`);
+      const id = added[0];
+      assert.ok(after.nodes.page3.children!.includes(id), "放进了第 3 页");
+      // 页面局部坐标：中心在第 3 页宽的一半、高的 60% 处（松手的点换算到毫米最多差一两个像素）
+      const n = after.nodes[id];
+      const pxPerMm = board.width / 210;
+      const tolerance = 2 / pxPerMm + 0.05;
+      assert.ok(Math.abs(n.x! + n.width! / 2 - 105) <= tolerance, `x 是 ${n.x}（宽 ${n.width}）`);
+      assert.ok(Math.abs(n.y! + n.height! / 2 - 297 * 0.6) <= tolerance, `y 是 ${n.y}（高 ${n.height}）`);
+      await cdp.evaluate(`document.querySelector('[data-action="undo"]').click()`);
+      await wait(800);
+      assert.equal(readScene().nodes[id], undefined);
+    });
+
+    await test("选中形状：样式条贴在它上方、左边对齐（画布从负坐标开始时也一样）", async () => {
+      await cdp.evaluate(`[...document.querySelectorAll(".layer")].find((r) => r.dataset.id === "coverRule").click()`);
+      await wait(400);
+      const rule = await screenRect('[data-vf-id="coverRule"]');
+      const bar = await cdp.evaluate<{ left: number; bottom: number; hidden: boolean }>(`(() => {
+        const el = document.getElementById("shape-bar"), r = el.getBoundingClientRect();
+        return { left: r.left, bottom: r.bottom, hidden: el.hidden || getComputedStyle(el).visibility === "hidden" };
+      })()`);
+      assert.ok(!bar.hidden, "选中形状时样式条要出来");
+      assert.ok(Math.abs(bar.left - rule.left) < 2, `样式条左边 ${bar.left}，形状左边 ${rule.left}`);
+      // 样式条底边和形状顶边之间留 12 像素
+      assert.ok(Math.abs(rule.top - bar.bottom - 12) < 2, `样式条底边 ${bar.bottom}，形状顶边 ${rule.top}`);
+    });
+
+    await test("同时选中两页上的东西按 Ctrl+D：每一份都留在自己那一页，错开的距离一样；撤销回去", async () => {
+      const before = readScene();
+      await cdp.evaluate(`(() => {
+        const row = (id) => [...document.querySelectorAll(".layer")].find((r) => r.dataset.id === id);
+        row("coverLead").click();
+        row("page3Title").dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
+      })()`);
+      await wait(200);
+      assert.deepEqual((await cdp.evaluate<string[]>(`[...document.querySelectorAll(".layer.selected")].map((r) => r.dataset.id)`)).sort(), ["coverLead", "page3Title"]);
+      await cdp.evaluate(`document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "d", ctrlKey: true, bubbles: true }))`);
+      await wait(800);
+      const after = readScene();
+      const added = Object.keys(after.nodes).filter((id) => !before.nodes[id]);
+      assert.equal(added.length, 2, `新加了 ${added.join(", ")}`);
+      const copyIn = (pageId: string) => added.find((id) => after.nodes[pageId].children!.includes(id));
+      const leadCopy = copyIn("spread1"), titleCopy = copyIn("page3");
+      assert.ok(leadCopy && titleCopy, `两页各一份：${added.map((id) => `${id}→${Object.keys(after.nodes).find((p) => after.nodes[p].children?.includes(id))}`).join(", ")}`);
+      const shift = (copy: string, orig: string) => [after.nodes[copy].x! - before.nodes[orig].x!, after.nodes[copy].y! - before.nodes[orig].y!].map((v) => Math.round(v * 100) / 100);
+      const leadShift = shift(leadCopy, "coverLead"), titleShift = shift(titleCopy, "page3Title");
+      assert.deepEqual(titleShift, leadShift, "两份往右下错开的距离一样");
+      assert.ok(leadShift[0] > 0 && leadShift[0] < 20, `错开了 ${leadShift}`);
+      await cdp.evaluate(`document.querySelector('[data-action="undo"]').click()`);
+      await wait(800);
+      assert.deepEqual(Object.keys(readScene().nodes).sort(), Object.keys(before.nodes).sort());
     });
 
     /** 用真的鼠标按下、停一下、松开（工具的点击只有几毫秒，按住期间界面重画丢掉点击的毛病测不出来） */

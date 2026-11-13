@@ -59,6 +59,7 @@ type ProjectConfig = {
   boards?: Array<{ id?: string; doc?: string }>;
   styles?: unknown;
   export?: { qt?: string; web?: string };
+  icon?: unknown;
 };
 
 /**
@@ -193,6 +194,7 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
   let webExportDir: string | null = null;
   let kind: KindId = DEFAULT_KIND;
   let stylePaths: string[] = [];
+  let icon: string | undefined;
   const extraWindowDocs: string[] = [];
   const boardDocs: Record<string, string> = {};
   const configText = (await io.readText("project.json")) ?? "{}";
@@ -213,6 +215,7 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
       if (config.kind === undefined && master.kind !== undefined) config.kind = master.kind;
       if (config.styles === undefined && master.styles !== undefined) config.styles = master.styles;
       if (config.export === undefined && master.export !== undefined) config.export = master.export;
+      if (config.icon === undefined && master.icon !== undefined) config.icon = master.icon;
     }
     name = config.name ?? name;
     if (config.kind !== undefined) {
@@ -228,6 +231,8 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
     }
     if (Array.isArray(config.styles)) stylePaths = config.styles.filter((item): item is string => typeof item === "string" && item !== "");
     else if (config.styles !== undefined) problems.push({ level: "error", message: "project.json 的 styles 要写成样式表路径的数组，例如 [\"styles/text.css\"]" });
+    if (typeof config.icon === "string" && config.icon.trim()) icon = config.icon.trim();
+    else if (config.icon !== undefined) problems.push({ level: "error", message: "project.json 的 icon 要写成项目里一张图片的路径，例如 \"assets/icon.svg\"" });
     qtExportDir = config.export?.qt ?? null;
     webExportDir = config.export?.web ?? null;
   } catch (e) {
@@ -362,6 +367,7 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
     partOf,
     parts,
     partList,
+    ...(icon ? { icon } : {}),
     presets,
     scene,
     sceneText: sceneText ?? "",

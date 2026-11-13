@@ -120,6 +120,22 @@ export function setSelectionRectSource(source: () => Rect | null): void {
   selectionRect = source;
 }
 
+/** 现在的视角（缩放和滚动位置）：切到预览再切回来时，编辑的视角原样回来 */
+export function viewState(): { zoom: number; left: number; top: number } {
+  const { scroll } = elements();
+  return { zoom, left: scroll.scrollLeft, top: scroll.scrollTop };
+}
+
+export function restoreViewState(state: { zoom: number; left: number; top: number }): void {
+  const { scroll } = elements();
+  userMoved = true;
+  zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, state.zoom));
+  layout();
+  scroll.scrollLeft = state.left;
+  scroll.scrollTop = state.top;
+  for (const listener of listeners) listener();
+}
+
 /** 缩放到刚好装下选中的东西，并把它放在视口正中。没有选中时不动。 */
 export function zoomToSelection(): void {
   const rect = selectionRect();

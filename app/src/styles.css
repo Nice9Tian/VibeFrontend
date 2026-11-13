@@ -3814,3 +3814,53 @@ body.standalone-preview.standalone-show-log #workspace > #log {
 body.preview #page-labels {
   display: none;
 }
+
+/* ---------- 预览的设备外框（src/deviceframe.ts）：设计窗口本身不画框，外框自己是书、电脑或手机 ---------- */
+
+#stage-frame.device,
+body.preview:not(.standalone-preview) #stage-frame.device {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+#stage-frame.device #stage {
+  overflow: visible;
+  border-radius: 0;
+}
+
+#board-bar .device-switch button {
+  padding: 3px 10px;
+}
+
+#board-bar .preview-page-label {
+  min-width: 6.5em;
+  padding: 0 6px;
+  color: var(--text);
+  font-size: 12px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* 预览栏放不下时换到第二行，不把按钮挤成竖排 */
+body.preview:not(.standalone-preview) #bar-left {
+  flex-wrap: wrap;
+}
+
+#bar-left > *,
+#restart,
+#reset-state {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* 条件开关多的时候换行，不压到右边的缩放和详细信息上 */
+body.preview:not(.standalone-preview) #preview-bar {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+body.preview:not(.standalone-preview) #conditions {
+  flex-wrap: wrap;
+  min-width: 0;
+}

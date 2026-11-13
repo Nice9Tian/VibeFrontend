@@ -618,6 +618,8 @@ export interface Project extends RuntimeProject {
   webExportDir?: string | null;
   /** 项目级的样式表（project.json 的 styles）：路径和原文，按顺序挂进设计窗口 */
   styles?: Array<{ path: string; text: string }>;
+  /** 软件的图标（project.json 的 icon，项目里一张图片的路径）：预览成电脑时窗口标题栏和任务栏上用它，没写就用名字的第一个字 */
+  icon?: string;
   /** 打开的是子项目时（它的 project.json 里写了 part）：它属于哪个总项目 */
   partOf?: { name: string; part: string | null } | null;
   /** 画布里的子项目节点用到的子项目（连同它们里面又用到的）：文件夹 parts/<名字> → 画布和名字 */
@@ -1242,7 +1244,7 @@ export function isLayoutPositionedNode(scene: Scene, id: string): boolean {
   if (id === scene.root) return true;
   const n = scene.nodes[id];
   if (!n) return false;
-  if ((n.type === "Dialog" || n.type === "Window") && !parentOfNode(scene, id)) return true;
+  if ((n.type === "Dialog" || n.type === "Window" || n.type === "Page") && !parentOfNode(scene, id)) return true;
   return isPartitionNode(scene, id) || isLayoutChildNode(scene, id);
 }
 

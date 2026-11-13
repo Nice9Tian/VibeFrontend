@@ -9,7 +9,7 @@ import {
   syncSceneNodesFromDockLayout,
   type DockPreviewCallbacks,
 } from "./dock";
-import { currentRootId, listDir, localWriteCount, projectBaseUrl, projectPageUrl, readText, removeFile, watchProject, writeText, writesSettled } from "./fs";
+import { currentRootId, listDir, localWriteCount, projectBaseUrl, projectPageUrl, projectUrl, readText, removeFile, watchProject, writeText, writesSettled } from "./fs";
 import { askFields } from "./dialogs";
 import { carveOutPart, partFolderName, partRefOf, PARTS_DIR, ROOT_PREFIX } from "./parts";
 import { initProjectPanel } from "./projectpanel";
@@ -34,7 +34,7 @@ import {
 import { focusMenuItemInEditor, initMenuEdit, renderMenuEditPane } from "./menuedit";
 import { initStateEdit, renderStateEditPane } from "./stateedit";
 import { initEventEdit, refreshEventPane, renderEventPane } from "./eventedit";
-import { addPage, movePage, pageGeometry, pageGuideRects, pageIds, pageLabel, removePage, subtreeIds } from "./pages";
+import { addPage, coverWrapId, movePage, pageGeometry, pageGuideRects, pageIds, pageLabel, removePage, sheetPageNumbers, subtreeIds } from "./pages";
 import { openGraphicExportModal } from "./graphicexport";
 import { initPropsEdit, invalidatePropsAssets, renderPropsPane } from "./propsedit";
 import { serializeEdited } from "./richtext";
@@ -181,7 +181,10 @@ import {
 } from "./transform";
 import { snapMove, snapPoint, snapResize, type Guide, type SnapOptions } from "./snap";
 import { activePage, hiddenPages, pagesToReveal } from "./stackview";
-import { centerView, onZoomChange, panToSelection, setSelectionRectSource, setZoom, viewZoom, zoomToFit, zoomToRect, zoomToSelection } from "./viewport";
+import { centerView, onZoomChange, panToSelection, restoreViewState, setSelectionRectSource, setZoom, viewState, viewZoom, zoomToFit, zoomToRect, zoomToSelection } from "./viewport";
+import { bookViewIndexOfBoard, bookViews } from "./bookview";
+import { DEVICE_LABELS, defaultDevice, isDeviceId, PHONE_MODELS, phoneModel, type DeviceId } from "./devices";
+import { iconColorFor, mountBook, mountDesktop, mountPhone, playSlide, playTurn, turnSnapshot, type DeviceStage, type SheetPiece } from "./deviceframe";
 import { boardGap, boardWorldBounds } from "./boardlayout";
 import { presetsPath } from "./loader";
 import type { Value } from "./expr";
@@ -999,7 +1002,8 @@ function applyViews(): void {
   const hidden = hiddenPages(project.scene, shownPage);
   const rootId = stageRootId();
   const rootNode = node(rootId);
-  const stageEl = ensureStageIframe();
+  // 主画板放在哪：平时是设计窗口的画布，预览成电脑、手机时是外框里的“屏幕”
+  const stageEl = boardHost ?? ensureStageIframe();
 
   let dockInfoMap:
     | Map<string, { groupTabs: string[]; activeTab: string; isFloating: boolean; area?: "left" | "right" | "top" | "bottom" }>
@@ -1240,9 +1244,14 @@ function flattenMenuSpecsToPopupItems(specs: MenuItemSpec[], prefix = ""): MenuI
   return out;
 }
 
+/** x、y 是设计窗口（iframe）里的坐标：换成编辑器窗口里的（设计窗口有缩放和偏移，套了设备外框更明显） */
 function showPreviewPopupMenu(x: number, y: number, specs: MenuItemSpec[]): void {
   const items = flattenMenuSpecsToPopupItems(specs);
-  if (items.length > 0) openMenu(x, y, items);
+  if (items.length === 0) return;
+  const iframe = document.getElementById("stage-iframe") as HTMLIFrameElement | null;
+  const frame = iframe?.getBoundingClientRect();
+  const k = frame && iframe!.offsetWidth ? frame.width / iframe!.offsetWidth : 1;
+  openMenu((frame?.left ?? 0) + x * k, (frame?.top ?? 0) + y * k, items);
 }
 
 const STAGE_IFRAME_BASE_CSS = `
@@ -1638,6 +1647,9 @@ function renderStage(): void {
   }
   mounted.clear();
 
+  deviceStage?.destroy();
+  deviceStage = null;
+  boardHost = null;
   const rootId = stageRootId();
   const root = node(rootId);
   const stage = $("stage");
@@ -1645,9 +1657,15 @@ function renderStage(): void {
   stageCanvas.innerHTML = "";
   overlay.remove();
   if (!root) return;
-  sizeStageTo(stageWorld());
   boardEls.clear();
+  const device = mode === "preview" ? previewDevice() : "plain";
   $("stage-frame").classList.toggle("spread", spreadOut());
+  $("stage-frame").classList.toggle("device", device !== "plain");
+  if (device !== "plain") {
+    renderDeviceStage(stageCanvas, device);
+    return;
+  }
+  sizeStageTo(stageWorld());
   if (spreadOut()) {
     // 平面设计编辑：每一页一个画板元素，按排好的位置摆在画布上；页面的样式类（纸色、纸纹）加在各自的画板元素上
     stageCanvas.removeAttribute("class");
@@ -1684,6 +1702,27 @@ function renderStage(): void {
   $("window-size").textContent =
     unit().css === "px" ? `${kind().board.noun} ${root.width}×${root.height}` : `${kind().board.noun} ${formatLength(unit(), root.width)}×${formatLength(unit(), root.height)} ${unit().css}`;
 
+  boardHost = stageCanvas;
+  if (spreadOut()) {
+    for (const [pageId, el] of boardEls) for (const child of childrenOf(node(pageId))) buildNode(child, el);
+  } else {
+    buildRootBoard(stageCanvas, rootId);
+  }
+  applyViews();
+  if (mode === "edit") {
+    stage.append(overlay);
+    syncOverlayScale();
+    renderPageGuides();
+    renderPageLabels();
+    updateSelectionBox();
+  }
+}
+
+
+/** 主画板（界面设计的主窗口连同菜单栏和叠在上面的对话框；平面设计的一页）里的东西建进 host */
+function buildRootBoard(host: HTMLElement, rootId: string): void {
+  const root = node(rootId);
+  if (!root) return;
   if (root.menuBar) {
     const bar = document.createElement("div");
     const mh = root.menuBar.height ?? 28;
@@ -1728,28 +1767,371 @@ function renderStage(): void {
       group.append(titleSpan, hiddenItems);
       bar.append(group);
     }
-    stageCanvas.append(bar);
+    host.append(bar);
   }
 
-  if (spreadOut()) {
-    for (const [pageId, el] of boardEls) for (const child of childrenOf(node(pageId))) buildNode(child, el);
-  } else {
-    for (const child of childrenOf(root)) buildNode(child, stageCanvas);
-  }
+  for (const child of childrenOf(root)) buildNode(child, host);
   // 界面设计：对话框叠在主窗口上；平面设计预览时别的页面不建
   if (kind().board.arrange === "overlay") {
     for (const winId of allWindowIds(project.scene)) {
-      if (winId !== rootId) buildNode(winId, stageCanvas);
+      if (winId !== rootId) buildNode(winId, host);
     }
   }
-  applyViews();
-  if (mode === "edit") {
-    stage.append(overlay);
-    syncOverlayScale();
-    renderPageGuides();
-    renderPageLabels();
-    updateSelectionBox();
+}
+
+// ---------- 预览的设备：书、电脑、手机，或者原样 ----------
+
+/** 网页的文档类型（这个文件里的 Document 是 YAML 库的） */
+type DomDocument = typeof document;
+
+/** 预览时用的设备和它的选项。存在 .designer/preview.json（这台机器上的预览设置，不进项目的设计） */
+interface PreviewSettings {
+  device?: DeviceId | "plain";
+  phone?: string;
+  landscape?: boolean;
+}
+const PREVIEW_SETTINGS_PATH = ".designer/preview.json";
+let previewSettings: PreviewSettings = {};
+
+async function loadPreviewSettings(): Promise<void> {
+  try {
+    const text = await readText(PREVIEW_SETTINGS_PATH);
+    previewSettings = text ? (JSON.parse(text) as PreviewSettings) : {};
+  } catch {
+    previewSettings = {};
   }
+}
+
+async function savePreviewSettings(patch: PreviewSettings): Promise<void> {
+  previewSettings = { ...previewSettings, ...patch };
+  try {
+    await writeText(PREVIEW_SETTINGS_PATH, JSON.stringify(previewSettings, null, 2) + "\n");
+  } catch (e) {
+    toast(`预览设置没存上：${(e as Error).message}`);
+  }
+}
+
+/** 预览用哪种设备：平面设计默认是书，界面设计默认是电脑；“原样”是不套外框、1:1 */
+function previewDevice(): DeviceId | "plain" {
+  // 独立预览窗口本身就是“软件的窗口”，不再套外框
+  if (isStandalonePreview()) return "plain";
+  const chosen = previewSettings.device;
+  return chosen === "plain" || isDeviceId(chosen) ? chosen : defaultDevice(project.kind === "graphic" ? "graphic" : "ui");
+}
+
+/** 预览里的一屏：书和电脑是一屏两页（跨页）、手机是一页、原样是一个画板 */
+interface PreviewView {
+  label: string;
+  left: SheetPiece | null;
+  right: SheetPiece | null;
+  /** 这一屏主要是哪个画板（切回编辑时“在看”它） */
+  board: string;
+  /** 这一屏的页码（平面设计），换设备时按它停在同一页 */
+  pages: number[];
+}
+
+function sheetPiece(board: string, sheet: number): SheetPiece | null {
+  const n = node(board);
+  if (!n) return null;
+  const sheets = n.type === "Page" ? pageGeometry(n).sheets : 1;
+  return { board, sheet, width: toPx(unit(), n.width / sheets), height: toPx(unit(), n.height) };
+}
+
+function previewViews(device: DeviceId | "plain"): PreviewView[] {
+  if (kind().board.arrange !== "spread") {
+    const root = project.scene.root;
+    const piece = sheetPiece(root, 0);
+    return [{ label: boardTitle(root), left: null, right: piece, board: root, pages: [] }];
+  }
+  const numbers = sheetPageNumbers(project.scene);
+  if (device === "plain") return pageIds(project.scene).map((id) => ({ label: boardTitle(id), left: null, right: null, board: id, pages: numbers.get(id) ?? [] }));
+  const book = bookViews(project.scene).map((v) => ({
+    label: v.label,
+    left: v.left ? sheetPiece(v.left.board, v.left.sheet) : null,
+    right: v.right ? sheetPiece(v.right.board, v.right.sheet) : null,
+    board: (v.left ?? v.right)!.board,
+    pages: [v.left?.page, v.right?.page].filter((n): n is number => n !== undefined),
+  }));
+  if (device !== "phone") return book;
+  // 手机一次看一页
+  return book.flatMap((v) =>
+    [v.left, v.right]
+      .filter((piece): piece is SheetPiece => piece !== null)
+      .map((piece, i) => ({ label: v.left && v.right ? `第 ${v.pages[i]} 页` : v.label, left: null, right: piece, board: piece.board, pages: [v.pages[i]] })),
+  );
+}
+
+/** 预览看到第几屏 */
+let previewIndex = 0;
+/** 现在的设备外框 */
+let deviceStage: DeviceStage | null = null;
+/** 主画板放在哪个元素里（设计窗口的画布，或外框里的屏幕） */
+let boardHost: HTMLElement | null = null;
+/** 电脑预览里窗口的状态 */
+const desktopState = { maximized: false, minimized: false };
+/** 上一次按哪种设备摆的视角：换设备、换手机型号、横竖切换时重新缩放到装下整个设备 */
+let fittedDevice = "";
+
+/** 预览到这一屏时，回到编辑“在看”它的页面 */
+function syncFocusFromPreview(): void {
+  const view = previewViews(previewDevice())[previewIndex];
+  if (view && kind().board.arrange === "spread") currentBoardId = view.board;
+}
+
+/** 换设备时停在同一页：先按页码找，找不到再按画板找 */
+function previewIndexForAnchor(device: DeviceId | "plain", anchor: PreviewView): number {
+  const views = previewViews(device);
+  const page = anchor.pages[0];
+  if (page !== undefined) {
+    const byPage = views.findIndex((v) => v.pages.includes(page));
+    if (byPage >= 0) return byPage;
+  }
+  const byBoard = views.findIndex((v) => v.board === anchor.board || v.left?.board === anchor.board || v.right?.board === anchor.board);
+  return byBoard >= 0 ? byBoard : 0;
+}
+
+/** 预览从“在看”的页面所在的那一屏开始 */
+function previewIndexForFocus(device: DeviceId | "plain"): number {
+  const views = previewViews(device);
+  const focus = stageRootId();
+  const index = views.findIndex((v) => v.board === focus || v.left?.board === focus || v.right?.board === focus);
+  if (index >= 0) return index;
+  return device === "plain" ? 0 : bookViewIndexOfBoard(bookViews(project.scene), focus);
+}
+
+/** 软件的名字和图标（电脑预览的窗口和任务栏用） */
+function appIdentity(): { title: string; icon: { src?: string; letter: string; color: string } } {
+  const rootNode = node(project.scene.root);
+  const title = kind().board.arrange === "overlay" ? (rootNode?.title || project.name) : project.name;
+  const letter = [...(project.name.trim() || "?")][0].toUpperCase();
+  return { title, icon: { src: project.icon ? projectUrl(project.icon) : undefined, letter, color: iconColorFor(project.name) } };
+}
+
+/** 一个画板的元素：页面的样式类（纸色、纸纹）加在它上面，里面的东西建进去 */
+function buildBoardElement(doc: DomDocument, boardId: string): HTMLElement {
+  const n = node(boardId)!;
+  const el = doc.createElement("div");
+  applyBoard(el, boardId, n, unit());
+  el.style.position = "absolute";
+  el.style.left = "0";
+  el.style.top = "0";
+  for (const child of childrenOf(n)) buildNode(child, el);
+  return el;
+}
+
+/** 一屏里的几面纸并排放进 parent：同一个画板的相邻两面合成一块（跨过中缝的东西连着） */
+function placeSheets(doc: DomDocument, parent: HTMLElement, view: PreviewView): void {
+  const leftW = view.left?.width ?? 0;
+  const pieces: Array<{ piece: SheetPiece; x: number; width: number }> = [];
+  if (view.left && view.right && view.left.board === view.right.board && view.right.sheet === view.left.sheet + 1) {
+    pieces.push({ piece: view.left, x: 0, width: view.left.width + view.right.width });
+  } else {
+    if (view.left) pieces.push({ piece: view.left, x: 0, width: view.left.width });
+    if (view.right) pieces.push({ piece: view.right, x: leftW, width: view.right.width });
+  }
+  for (const { piece, x, width } of pieces) {
+    const clip = doc.createElement("div");
+    clip.style.cssText = `position:absolute;left:${x}px;top:0;width:${width}px;height:${piece.height}px;overflow:hidden;`;
+    const board = buildBoardElement(doc, piece.board);
+    board.style.left = `${-piece.sheet * piece.width}px`;
+    clip.append(board);
+    parent.append(clip);
+  }
+}
+
+/** 预览：设计窗口里画设备外框，画板放进外框的屏幕（书是翻开的两页） */
+function renderDeviceStage(canvas: HTMLElement, device: DeviceId): void {
+  const doc = canvas.ownerDocument;
+  canvas.removeAttribute("class");
+  delete canvas.dataset.vfBoard;
+  delete canvas.dataset.vfType;
+  canvas.classList.add("vf-device-canvas");
+  const views = previewViews(device);
+  previewIndex = Math.max(0, Math.min(views.length - 1, previewIndex));
+  const view = views[previewIndex];
+  if (!view) return;
+  const graphic = kind().board.arrange === "spread";
+  const identity = appIdentity();
+  const contentOf = (v: PreviewView) => ({ width: (v.left?.width ?? 0) + (v.right?.width ?? 0), height: Math.max(v.left?.height ?? 0, v.right?.height ?? 0) });
+  let frame: DeviceStage;
+  if (device === "book") {
+    // 读过几页、还剩几页：书两边纸的厚度
+    const before = graphic ? views.slice(0, previewIndex).reduce((n, v) => n + (v.left ? 1 : 0) + (v.right ? 1 : 0), 0) : 0;
+    const after = graphic ? views.slice(previewIndex + 1).reduce((n, v) => n + (v.left ? 1 : 0) + (v.right ? 1 : 0), 0) : 0;
+    // 合着的书只在最前面（只有封面）和最后面（只有封底）；中间少一面的是翻开的书、那面空白
+    // 只有一屏（一张三折页、界面设计）就是翻开的；没有包封的册子最后单独一个左手页，右边是空白的纸
+    const closed =
+      views.length > 1 && previewIndex === 0 && !view.left
+        ? "front"
+        : views.length > 1 && previewIndex === views.length - 1 && !view.right && coverWrapId(project.scene)
+          ? "back"
+          : null;
+    frame = mountBook(doc, { left: view.left, right: view.right }, { before, after }, closed);
+    if (graphic) {
+      for (const [board, slot] of frame.slots) {
+        const el = buildBoardElement(doc, board);
+        slot.append(el);
+        boardEls.set(board, el);
+      }
+    } else {
+      const slot = frame.slots.get(project.scene.root)!;
+      const host = doc.createElement("div");
+      host.style.cssText = `position:relative;width:${view.right!.width}px;height:${view.right!.height}px;`;
+      slot.append(host);
+      buildRootBoard(host, project.scene.root);
+      boardHost = host;
+    }
+  } else {
+    const content = contentOf(view);
+    frame =
+      device === "desktop"
+        ? mountDesktop(doc, {
+            app: { title: graphic ? `${identity.title} — ${view.label}` : identity.title, icon: identity.icon },
+            content,
+            maximized: desktopState.maximized,
+            minimized: desktopState.minimized,
+            onMinimize: () => {
+              desktopState.minimized = true;
+              renderStage();
+            },
+            onMaximize: () => {
+              desktopState.maximized = !desktopState.maximized;
+              renderStage();
+            },
+            onRestore: () => {
+              desktopState.minimized = false;
+              renderStage();
+            },
+          })
+        : mountPhone(doc, phoneModel(previewSettings.phone), { content, landscape: Boolean(previewSettings.landscape) });
+    const screen = frame.slots.get("screen")!;
+    if (graphic) {
+      screen.style.background = "#fff";
+      placeSheets(doc, screen, view);
+    } else {
+      const host = doc.createElement("div");
+      host.style.cssText = `position:relative;width:${content.width}px;height:${content.height}px;`;
+      screen.append(host);
+      buildRootBoard(host, project.scene.root);
+      boardHost = host;
+    }
+  }
+  canvas.append(frame.root);
+  canvas.style.width = `${frame.size.width}px`;
+  canvas.style.height = `${frame.size.height}px`;
+  const stage = $("stage");
+  stage.style.width = `${frame.size.width}px`;
+  stage.style.height = `${frame.size.height}px`;
+  syncOverlayScale();
+  deviceStage = frame;
+  $("stage-title").hidden = true;
+  applyViews();
+  // 换了设备（或型号、横竖）：缩放到装下整个设备
+  const key = `${device}:${device === "phone" ? `${previewSettings.phone ?? ""}:${previewSettings.landscape ? 1 : 0}` : ""}`;
+  if (key !== fittedDevice) {
+    fittedDevice = key;
+    requestAnimationFrame(() => zoomToFit());
+  }
+}
+
+/** 翻到下一屏（delta 为 1）或上一屏（-1）：书是纸从书脊翻过去，电脑和手机是新的一屏滑进来 */
+function flipPreview(delta: number): void {
+  if (mode !== "preview") return;
+  const device = previewDevice();
+  const views = previewViews(device);
+  const next = previewIndex + delta;
+  if (next < 0 || next >= views.length) return;
+  const snapshot = device === "book" ? turnSnapshot(deviceStage) : null;
+  previewIndex = next;
+  syncFocusFromPreview();
+  renderStage();
+  renderBoardBar();
+  if (!deviceStage) return;
+  if (device === "book" && snapshot) playTurn(deviceStage.root.ownerDocument, deviceStage, snapshot, delta > 0);
+  else if (device !== "plain") playSlide(deviceStage, delta > 0);
+}
+
+/** 预览时翻页条换成：设备（书、电脑、手机、原样）、设备的选项、翻页 */
+function renderPreviewBar(bar: HTMLElement): void {
+  const device = previewDevice();
+  const views = previewViews(device);
+  const segmented = document.createElement("div");
+  segmented.className = "segmented device-switch";
+  segmented.setAttribute("role", "group");
+  segmented.setAttribute("aria-label", "预览的设备");
+  const choices: Array<[DeviceId | "plain", string, string]> = [
+    ["book", DEVICE_LABELS.book, "翻开的书，一屏两页，像翻书一样翻页"],
+    ["desktop", DEVICE_LABELS.desktop, "16:9 的电脑桌面：软件的窗口、底部任务栏（图标停一下看缩略图）"],
+    ["phone", DEVICE_LABELS.phone, "手机：软件在屏幕里，按屏幕宽度缩放"],
+    ["plain", "原样", "不套外框，按设计的尺寸 1:1 看"],
+  ];
+  for (const [id, label, title] of choices) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.title = title;
+    b.dataset.device = id;
+    b.setAttribute("aria-pressed", String(device === id));
+    b.addEventListener("click", () => {
+      if (previewDevice() === id) return;
+      const anchor = previewViews(previewDevice())[previewIndex];
+      void savePreviewSettings({ device: id });
+      previewIndex = anchor ? previewIndexForAnchor(id, anchor) : previewIndexForFocus(id);
+      desktopState.minimized = false;
+      renderStage();
+      renderBoardBar();
+    });
+    segmented.append(b);
+  }
+  const parts: HTMLElement[] = [segmented];
+  if (device === "phone") {
+    const select = document.createElement("select");
+    select.className = "tool-select";
+    select.title = "手机型号";
+    select.dataset.board = "phone-model";
+    for (const model of PHONE_MODELS) select.append(new Option(`${model.label}（${model.width}×${model.height}）`, model.id));
+    select.value = phoneModel(previewSettings.phone).id;
+    select.addEventListener("change", () => {
+      void savePreviewSettings({ phone: select.value });
+      renderStage();
+    });
+    const rotate = document.createElement("button");
+    rotate.type = "button";
+    rotate.className = "tool";
+    rotate.textContent = previewSettings.landscape ? "竖放" : "横放";
+    rotate.title = "横过来看 / 竖过来看";
+    rotate.dataset.board = "rotate";
+    rotate.addEventListener("click", () => {
+      void savePreviewSettings({ landscape: !previewSettings.landscape });
+      renderStage();
+      renderBoardBar();
+    });
+    parts.push(select, rotate);
+  }
+  if (views.length > 1) {
+    const button = (text: string, title: string, enabled: boolean, onClick: () => void, action: string) => {
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = "tool";
+      el.textContent = text;
+      el.title = title;
+      el.disabled = !enabled;
+      el.dataset.board = action;
+      el.addEventListener("click", onClick);
+      return el;
+    };
+    const label = document.createElement("span");
+    label.className = "preview-page-label";
+    label.dataset.board = "label";
+    label.textContent = `${views[previewIndex]?.label ?? ""}`;
+    label.title = `共 ${views.length} 屏`;
+    parts.push(
+      button("◀", "上一屏（← 或 PageUp）", previewIndex > 0, () => flipPreview(-1), "prev"),
+      label,
+      button("▶", "下一屏（→ 或 PageDown）", previewIndex < views.length - 1, () => flipPreview(1), "next"),
+    );
+  }
+  bar.replaceChildren(...parts);
 }
 
 /** 摊开时每一页的画板元素（在设计窗口里） */
@@ -2516,7 +2898,7 @@ function updateSelectionBox(): void {
   }
   selectionBox.classList.remove("multi");
   const r = absRect(selectedId);
-  const isRoot = selectedId === stageRootId();
+  const isRoot = isBoardRoot(selectedId);
   const locked = isNodeLocked(project.scene, selectedId);
   const rot = worldRotation(selectedId);
   const nodeRot = n.rotation ?? 0;
@@ -2829,6 +3211,7 @@ overlay.addEventListener("pointerdown", (e) => {
       toast("目标容器已锁定，无法放入控件");
       return;
     }
+    if (spreadOut()) focusBoard(boardOf(parentId));
     if (preset.type === "Line") {
       gesture = { kind: "line", preset, start: anchorAt(pt, e, null, null), end: null, parentId, rawStart: pt, rawEnd: null };
     } else {
@@ -2845,6 +3228,7 @@ overlay.addEventListener("pointerdown", (e) => {
       toast("目标容器已锁定，无法放入控件");
       return;
     }
+    if (spreadOut() && parentId) focusBoard(boardOf(parentId));
     const snapped = snapPoint(pt.x, pt.y, snapTargets(null), snapOptions(e));
     gesture = { kind: "draw", preset: null, nodeType: tool.type, start: { x: snapped.x, y: snapped.y }, rect: null, parentId, targets: snapTargets(null) };
     capturePointer(e);
@@ -3020,14 +3404,16 @@ function movePagesOnDrop(ids: string[]): void {
   for (const id of ids) {
     const n = node(id);
     const from = parentOf(id);
-    if (!n || !from || node(from)?.type !== "Page" || n.type === "Line") continue;
+    if (!n || !from || node(from)?.type !== "Page") continue;
     const r = visualRect(id);
     const to = boardAt(r.x + r.width / 2, r.y + r.height / 2);
     if (!to || to === from || isNodeLocked(project.scene, to)) continue;
     const at = absRect(id);
+    const source = absRect(from);
     const target = absRect(to);
     node(from)!.children = childrenOf(node(from)).filter((child) => child !== id);
     node(to)!.children = [...childrenOf(node(to)), id];
+    if (n.type === "Line") n.props = shiftLineAll(n.props ?? {}, R(source.x - target.x), R(source.y - target.y));
     n.x = R(at.x - target.x);
     n.y = R(at.y - target.y);
     moved = true;
@@ -3719,6 +4105,11 @@ async function moveCurrentPage(delta: number): Promise<void> {
 function renderBoardBar(): void {
   const bar = document.getElementById("board-bar");
   if (!bar) return;
+  if (mode === "preview" && !isStandalonePreview()) {
+    bar.hidden = false;
+    renderPreviewBar(bar);
+    return;
+  }
   const boards = kind().board.arrange === "spread" ? allWindowIds(project.scene) : [];
   bar.hidden = boards.length === 0;
   if (bar.hidden) {
@@ -3783,9 +4174,19 @@ function openPageSettings(): void {
 
 // PageUp / PageDown 翻页
 document.addEventListener("keydown", (e) => {
-  if (!project || kind().board.arrange !== "spread" || (e.key !== "PageUp" && e.key !== "PageDown")) return;
+  if (!project) return;
   const target = e.target as HTMLElement | null;
   if (target && (target.matches("input, textarea, select") || target.isContentEditable)) return;
+  // 预览时：← → 和 PageUp / PageDown 翻一屏（按键落在设计窗口里时是给软件自己的，到不了这里）
+  if (mode === "preview") {
+    const delta = e.key === "PageDown" || e.key === "ArrowRight" ? 1 : e.key === "PageUp" || e.key === "ArrowLeft" ? -1 : 0;
+    if (delta !== 0 && previewViews(previewDevice()).length > 1) {
+      e.preventDefault();
+      flipPreview(delta);
+    }
+    return;
+  }
+  if (kind().board.arrange !== "spread" || (e.key !== "PageUp" && e.key !== "PageDown")) return;
   const boards = allWindowIds(project.scene);
   const next = boards[boards.indexOf(stageRootId()) + (e.key === "PageDown" ? 1 : -1)];
   if (next) {
@@ -4085,8 +4486,8 @@ interface Clip {
   version: 1;
   roots: string[];
   nodes: Record<string, SceneNode>;
-  /** 复制时它们在哪一页（平面设计）：粘到别的页时按页面里的位置放，不按画布上的位置 */
-  board?: string;
+  /** 复制时每个最外层的东西所在那一页在画布上的左上角（平面设计）：粘到哪一页都按在页面里的位置放 */
+  boardOrigins?: Record<string, { x: number; y: number }>;
 }
 
 /** 本窗口里最近一次复制的内容。系统剪贴板读不到时（例如右键菜单里点“粘贴”）用它。 */
@@ -4142,7 +4543,9 @@ function copyNodes(ids: string[]): Clip {
     copy.x = r.x;
     copy.y = r.y;
   }
-  return { kind: "vibefrontend/nodes", version: 1, roots, nodes, ...(roots[0] && kind().board.arrange === "spread" ? { board: boardOf(roots[0]) } : {}) };
+  const boardOrigins =
+    kind().board.arrange === "spread" ? Object.fromEntries(roots.map((id) => [id, { x: absRect(boardOf(id)).x, y: absRect(boardOf(id)).y }])) : undefined;
+  return { kind: "vibefrontend/nodes", version: 1, roots, nodes, ...(boardOrigins ? { boardOrigins } : {}) };
 }
 
 /**
@@ -4192,9 +4595,10 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
     }
     const parent = node(parentId) ?? node(stageRootId())!;
     const origin = absRect(parentId);
-    // 复制来的东西换了页：在新页上的位置和在原来那一页上一样（包里存的是画布坐标）
+    // 包里存的是复制时的画布坐标：换算到要放进的那一页，在页面里的位置和原来一样
+    const from = clip.boardOrigins?.[root];
     const targetBoard = kind().board.arrange === "spread" ? boardOf(parentId) : null;
-    const shift = targetBoard && clip.board && clip.board !== targetBoard && node(clip.board) ? { x: absRect(targetBoard).x - absRect(clip.board).x, y: absRect(targetBoard).y - absRect(clip.board).y } : { x: 0, y: 0 };
+    const shift = from && targetBoard ? { x: absRect(targetBoard).x - from.x, y: absRect(targetBoard).y - from.y } : { x: 0, y: 0 };
     const copy = node(fresh)!;
     const isDockInPartition = copy.type === "Dock" && parentId === project.scene.root && isPartitionedWindow(parent);
     if (copy.type === "Line") copy.props = shiftLineAll(copy.props ?? {}, offset + shift.x - origin.x, offset + shift.y - origin.y);
@@ -5221,11 +5625,13 @@ function positionShapeBar(): void {
   const barHeight = (shapeBar.offsetHeight || 34) / zoom;
   const gap = 12 / zoom;
   // 样式条在设计窗口的外框里，按像素摆；选中框是画布单位，换成像素
-  const ry = toPx(unit(), r.y);
+  // 画布坐标 → 设计窗口里的位置（摊开时画布从 world 的左上角开始）
+  const world = stageWorld();
+  const ry = toPx(unit(), r.y - world.y);
   let top = stage.offsetTop + ry - barHeight - gap;
   if (top < 0) top = stage.offsetTop + ry + toPx(unit(), r.height) + gap;
   shapeBar.style.top = `${top}px`;
-  shapeBar.style.left = `${Math.max(0, stage.offsetLeft + toPx(unit(), r.x))}px`;
+  shapeBar.style.left = `${Math.max(0, stage.offsetLeft + toPx(unit(), r.x - world.x))}px`;
 }
 
 /** 交换线的起点和终点（端头跟着位置走，所以箭头方向反过来）。 */
@@ -5615,7 +6021,19 @@ function topSelection(): string[] {
 function followSelectionToBoard(): boolean {
   if (kind().board.arrange !== "spread" || !selectedId) return false;
   const board = boardOfNode(project.scene, selectedId);
-  if (!board || board === stageRootId()) return false;
+  if (!board) return false;
+  // 预览套着设备外框时：已经在这一屏上就只换“在看”的页，不在就翻到它那一屏
+  if (mode === "preview" && previewDevice() !== "plain") {
+    const views = previewViews(previewDevice());
+    const here = views[previewIndex];
+    currentBoardId = board;
+    if (here && (here.board === board || here.left?.board === board || here.right?.board === board)) return false;
+    const index = views.findIndex((v) => v.board === board || v.left?.board === board || v.right?.board === board);
+    if (index < 0) return false;
+    previewIndex = index;
+    return true;
+  }
+  if (board === stageRootId()) return false;
   // 摊开时全部页面都在画布上，不用翻页重画：只换“在看”的页
   if (spreadOut()) {
     focusBoard(board);
@@ -6415,6 +6833,9 @@ function fireEvent(id: string, event: string, value?: Value): void {
   showBottomTab("log");
 }
 
+/** 进预览前编辑的视角 */
+let editView: { zoom: number; left: number; top: number } | null = null;
+
 function setMode(next: "edit" | "preview"): void {
   if (next === mode) return;
   flushEditors();
@@ -6423,6 +6844,12 @@ function setMode(next: "edit" | "preview"): void {
   if (tool.kind !== "select") {
     tool = { kind: "select" };
     overlay.classList.remove("drawing");
+  }
+  // 编辑的视角记下来，切回编辑时原样回来；预览从“在看”的页面所在的那一屏开始
+  if (next === "preview") {
+    editView = viewState();
+    previewIndex = previewIndexForFocus(previewDevice());
+    fittedDevice = "";
   }
   mode = next;
   document.body.classList.toggle("preview", mode === "preview");
@@ -6440,10 +6867,16 @@ function setMode(next: "edit" | "preview"): void {
   }
   renderToolbar();
   renderStage();
+  renderBoardBar();
   renderShapeBar();
   renderConditions();
   renderEventPane();
   syncResetButton();
+  if (mode === "edit" && editView) {
+    const saved = editView;
+    editView = null;
+    requestAnimationFrame(() => restoreViewState(saved));
+  }
   if (mode === "edit" && selectedId && isOnHiddenPage(selectedId)) select(null);
 }
 
@@ -7155,6 +7588,7 @@ async function main(): Promise<void> {
   initWorkspaceShell();
   ensureStageIframe();
   project = await loadProject(null);
+  await loadPreviewSettings();
   if (workspace) {
     projectPanel = initProjectPanel($("project-panel"), {
       getProject: () => project,
@@ -7172,7 +7606,7 @@ async function main(): Promise<void> {
   initLibrary({
     getProject: () => project,
     getMode: () => mode,
-    getZoom: () => unitZoom(),
+    clientToStage,
     readText,
     writeText,
     removeFile,

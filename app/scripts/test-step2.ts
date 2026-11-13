@@ -136,7 +136,7 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
       initLibrary({
         getProject: () => fakeProject,
         getMode: () => "edit",
-        getZoom: () => 1,
+        clientToStage: (x, y) => ({ x, y }),
         readText: async () => null,
         writeText: async () => {},
         listDir: async () => [],

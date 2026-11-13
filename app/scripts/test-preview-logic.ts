@@ -170,6 +170,22 @@ async function boardLayoutTests(): Promise<void> {
     assert.equal(boardGap(graphicScene), 24); // max(200, 100) * 0.12 = 24
     assert.deepEqual(boardWorldOrigin(graphicScene, "p2"), { x: 0, y: 224 }); // 200 + 24
   });
+
+  await test("boardlayout：root 不是第一页时整体平移，root 始终在原点（坐标换算假设根画板在原点）", () => {
+    const scene: Scene = {
+      version: 1,
+      unit: "mm",
+      root: "p2",
+      boards: ["p1", "p2"],
+      nodes: {
+        p1: { type: "Page", width: 210, height: 100, props: { sheets: 2 } },
+        p2: { type: "Page", width: 210, height: 100, props: { sheets: 2 } },
+      },
+    };
+    assert.deepEqual(boardWorldOrigin(scene, "p2"), { x: 0, y: 0 });
+    assert.deepEqual(boardWorldOrigin(scene, "p1"), { x: 0, y: -112 });
+    assert.deepEqual(boardWorldBounds(scene), { x: 0, y: -112, width: 210, height: 212 });
+  });
 }
 
 async function bookViewTests(): Promise<void> {
@@ -238,74 +254,33 @@ async function bookViewTests(): Promise<void> {
     });
   });
 
-  await test("bookview：从右往左翻（rtl）时左右对调；中间缺页时单侧为 null 且整屏空的跳过；界面设计返回 []", () => {
-    const scene: Scene = {
-      version: 1,
-      unit: "mm",
-      cover: "wrap",
-      root: "s1",
-      boards: ["s1", "s2"],
-      nodes: {
-        s1: { type: "Page", width: 420, height: 297, props: { sheets: 2 } },
-        s2: { type: "Page", width: 420, height: 297, props: { sheets: 2 } },
-      },
-    };
-    const rtlViews = bookViews(scene, { direction: "rtl" });
-    assert.deepEqual(rtlViews, [
-      { left: { board: "s1", sheet: 1, page: 1 }, right: null, label: "封面" },
-      {
-        left: { board: "s2", sheet: 1, page: 3 },
-        right: { board: "s2", sheet: 0, page: 2 },
-        label: "第 3–2 页",
-      },
-      { left: null, right: { board: "s1", sheet: 0, page: 4 }, label: "封底" },
+  await test("bookview：设计好的跨页按设计一屏看完；单页按奇偶配对；三张纸的折页两张一屏、落单的在左；界面设计返回 []", () => {
+    const P = (width: number, sheets: number) => ({ type: "Page", width, height: 297, props: { sheets } });
+    // 第一个页面是跨页（第 1–2 页）、后面一个单页（第 3 页）：跨页一屏，第 3 页单独在右
+    const example: Scene = { version: 1, unit: "mm", root: "spread1", boards: ["spread1", "page3"], nodes: { spread1: P(420, 2), page3: P(210, 1) } };
+    assert.deepEqual(bookViews(example), [
+      { left: { board: "spread1", sheet: 0, page: 1 }, right: { board: "spread1", sheet: 1, page: 2 }, label: "第 1–2 页" },
+      { left: null, right: { board: "page3", sheet: 0, page: 3 }, label: "第 3 页" },
     ]);
-
-    // 两个单页（共 2 页）：最后一屏只有左边第 2 页，右边为 null
-    const twoSingles: Scene = {
-      version: 1,
-      unit: "mm",
-      root: "a",
-      boards: ["a", "b"],
-      nodes: {
-        a: { type: "Page", width: 210, height: 297, props: { sheets: 1 } },
-        b: { type: "Page", width: 210, height: 297, props: { sheets: 1 } },
-      },
-    };
+    // 两个单页（共 2 页）：第 1 页单独在右，第 2 页单独在左
+    const twoSingles: Scene = { version: 1, unit: "mm", root: "a", boards: ["a", "b"], nodes: { a: P(210, 1), b: P(210, 1) } };
     assert.deepEqual(bookViews(twoSingles), [
       { left: null, right: { board: "a", sheet: 0, page: 1 }, label: "第 1 页" },
       { left: { board: "b", sheet: 0, page: 2 }, right: null, label: "第 2 页" },
     ]);
-
-    // 中间缺页（第 3 页缺 → 右侧为 null；第 4–5 页整屏缺 → 整屏跳过）
-    let calls = 0;
-    const gapProps: Record<string, number> = {};
-    Object.defineProperty(gapProps, "sheets", {
-      get: () => (++calls === 1 ? 4 : 1),
-      enumerable: true,
-    });
-    const gapScene: Scene = {
-      version: 1,
-      unit: "mm",
-      cover: "wrap",
-      root: "s1",
-      boards: ["s1", "s2"],
-      nodes: {
-        s1: { type: "Page", width: 420, height: 297, props: { sheets: 2 } },
-        s2: { type: "Page", width: 210, height: 297, props: gapProps },
-      },
-    };
-    assert.deepEqual(bookViews(gapScene), [
-      { left: null, right: { board: "s1", sheet: 1, page: 1 }, label: "封面" },
-      { left: { board: "s2", sheet: 0, page: 2 }, right: null, label: "第 2 页" },
-      { left: { board: "s1", sheet: 0, page: 6 }, right: null, label: "封底" },
+    // 单页第 2 页后面跟着跨页 3–4：第 2 页等不到单页，单独在左；跨页照设计一屏
+    const mixed: Scene = { version: 1, unit: "mm", root: "a", boards: ["a", "b", "c"], nodes: { a: P(210, 1), b: P(210, 1), c: P(420, 2) } };
+    assert.deepEqual(bookViews(mixed).map((v) => v.label), ["第 1 页", "第 2 页", "第 3–4 页"]);
+    // 三张纸的折页：第 0、1 张一屏，第 2 张单独在左
+    const fold: Scene = { version: 1, unit: "mm", root: "a", boards: ["a"], nodes: { a: P(630, 3) } };
+    assert.deepEqual(bookViews(fold), [
+      { left: { board: "a", sheet: 0, page: 1 }, right: { board: "a", sheet: 1, page: 2 }, label: "第 1–2 页" },
+      { left: { board: "a", sheet: 2, page: 3 }, right: null, label: "第 3 页" },
     ]);
-
-    const uiScene: Scene = {
-      version: 1,
-      root: "main",
-      nodes: { main: { type: "Window", width: 1024, height: 768 } },
-    };
+    // 写了 cover: "wrap" 但第一个页面是单页（不算包封）：不叫封面封底，照单页排
+    const notWrap: Scene = { version: 1, unit: "mm", cover: "wrap", root: "a", boards: ["a", "b"], nodes: { a: P(210, 1), b: P(420, 2) } };
+    assert.deepEqual(bookViews(notWrap).map((v) => v.label), ["第 1 页", "第 2–3 页"]);
+    const uiScene: Scene = { version: 1, root: "main", nodes: { main: { type: "Window", width: 1024, height: 768 } } };
     assert.deepEqual(bookViews(uiScene), []);
   });
 }

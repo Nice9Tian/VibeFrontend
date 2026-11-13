@@ -122,6 +122,16 @@ function ensureLayout(scene: Scene): CachedLayout {
     }
   }
 
+  // 坐标换算层（transform.ts）把根画板固定在原点：根页面不是页序第一页时（手改的 scene.json），整体挪到以它为原点
+  const anchor = places.get(scene.root);
+  if (anchor && (anchor.x !== 0 || anchor.y !== 0)) {
+    for (const place of list) {
+      place.x = roundInScene(scene, place.x - anchor.x);
+      place.y = roundInScene(scene, place.y - anchor.y);
+      place.spine = roundInScene(scene, place.spine - anchor.x);
+      places.set(place.id, { x: place.x, y: place.y });
+    }
+  }
   const entry: CachedLayout = { key, list, places };
   layoutCache.set(scene, entry);
   return entry;
