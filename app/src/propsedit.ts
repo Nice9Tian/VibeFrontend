@@ -4,7 +4,7 @@ import { classStylesOf, splitClasses, toggleClass } from "./classstyles.ts";
 import type { Value } from "./expr.ts";
 import { formatLength } from "./kinds.ts";
 import { declFor, roundInScene, unitOf, type ComponentDecl, type Project, type PropDecl, type SceneNode } from "./model.ts";
-import { PAPER_SIZES, pageLabel, sheetCount } from "./pages.ts";
+import { PAPER_SIZES, pageIds, pageLabel, sheetCount } from "./pages.ts";
 
 export interface PropsEditDeps {
   getProject(): Project;
@@ -20,6 +20,8 @@ export interface PropsEditDeps {
   activateRightTab(tab: string): void;
   /** 列出项目里可以当素材用的文件（图片等），相对于项目文件夹 */
   listAssets(): Promise<string[]>;
+  /** 控件现在实际用的属性值（见 ComponentInstance.effective），没写的属性拿来灰着显示 */
+  effectiveProps(id: string): Record<string, Value> | null;
 }
 
 let deps: PropsEditDeps | null = null;
@@ -175,7 +177,7 @@ function geometrySection(project: Project, id: string, node: SceneNode, isBoard:
   return box;
 }
 
-function paperSection(project: Project, node: SceneNode, locked: boolean): HTMLElement | null {
+function paperSection(project: Project, id: string, node: SceneNode, locked: boolean): HTMLElement | null {
   if (unitOf(project.scene).css !== "mm") return null;
   const box = section("纸张");
   const sheets = sheetCount(node);
@@ -223,6 +225,29 @@ function paperSection(project: Project, node: SceneNode, locked: boolean): HTMLE
     commit("纸张横竖互换");
   });
   box.append(row("方向", turn));
+
+  // 成册：只在第一个页面上问。打开以后第一个页面是包封（左封底、右封面），翻开封面看到的是第 2–3 页
+  const scene = project.scene;
+  if (pageIds(scene)[0] === id) {
+    const wrap = document.createElement("input");
+    wrap.type = "checkbox";
+    wrap.checked = scene.cover === "wrap";
+    wrap.disabled = locked || (sheets !== 2 && !wrap.checked);
+    wrap.addEventListener("change", () => {
+      if (wrap.checked) scene.cover = "wrap";
+      else delete scene.cover;
+      commit(wrap.checked ? "第一个页面改成包封" : "第一个页面不再是包封");
+    });
+    box.append(
+      row(
+        "封底 + 封面",
+        wrap,
+        sheets === 2
+          ? "成册印刷：这一页左半是封底（最后一页），右半是封面（第 1 页），翻开后从第 2 页起两页一版"
+          : "要先把拼页数改成 2，左半是封底、右半是封面",
+      ),
+    );
+  }
   return box;
 }
 
@@ -260,7 +285,85 @@ function classEditor(project: Project, node: SceneNode, decl: ComponentDecl | nu
   return wrap;
 }
 
-function propControl(project: Project, node: SceneNode, decl: ComponentDecl, key: string, spec: PropDecl, locked: boolean): HTMLElement {
+/**
+ * 声明里的数值属性。带单位、步长和范围；没有默认值的可以不写，这时输入框是空的，
+ * 灰字显示画面上实际的值（例如样式类给的字号），旁边没有“恢复”按钮。
+ */
+function specNumberInput(
+  spec: PropDecl,
+  raw: Value | undefined,
+  now: Value | undefined,
+  disabled: boolean,
+  apply: (value: number | undefined) => void,
+): HTMLElement {
+  const optional = spec.default === undefined;
+  const wrap = document.createElement("span");
+  wrap.className = "props-number";
+  const input = document.createElement("input");
+  input.type = "number";
+  input.step = spec.step !== undefined ? String(spec.step) : "any";
+  if (spec.min !== undefined) input.min = String(spec.min);
+  if (spec.max !== undefined) input.max = String(spec.max);
+  const shown = typeof raw === "number" && Number.isFinite(raw) ? String(raw) : "";
+  input.value = shown;
+  input.disabled = disabled;
+  if (optional && typeof now === "number") {
+    input.placeholder = String(now);
+    input.title = `没有单独设置，现在是 ${now}${spec.unit ? ` ${spec.unit}` : ""}（来自样式）。填一个值只改这一个`;
+  }
+  input.addEventListener("change", () => {
+    const text = input.value.trim();
+    if (text === "") {
+      if (optional) apply(undefined);
+      else input.value = shown;
+      return;
+    }
+    let next = Number(text);
+    if (!Number.isFinite(next)) {
+      input.value = shown;
+      return;
+    }
+    if (spec.min !== undefined) next = Math.max(spec.min, next);
+    if (spec.max !== undefined) next = Math.min(spec.max, next);
+    apply(next);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") input.blur();
+  });
+  wrap.append(input);
+  if (spec.unit) {
+    const unit = document.createElement("span");
+    unit.className = "props-unit";
+    unit.textContent = spec.unit;
+    wrap.append(unit);
+  }
+  if (optional && shown !== "") {
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "props-reset";
+    reset.textContent = "↺";
+    reset.title = "不单独设置，回到样式给的值";
+    reset.disabled = disabled;
+    // 按下时不抢焦点：输入框失焦会先提交一次、重画属性页签，这个按钮就没了，点击会落空
+    reset.addEventListener("mousedown", (e) => e.preventDefault());
+    reset.addEventListener("click", (e) => {
+      e.preventDefault();
+      apply(undefined);
+    });
+    wrap.append(reset);
+  }
+  return wrap;
+}
+
+function propControl(
+  project: Project,
+  node: SceneNode,
+  decl: ComponentDecl,
+  key: string,
+  spec: PropDecl,
+  locked: boolean,
+  effective: Record<string, Value> | null,
+): HTMLElement {
   const raw = node.props?.[key] ?? spec.default;
   const label = spec.label ?? key;
   const apply = (value: Value | undefined) => {
@@ -276,20 +379,28 @@ function propControl(project: Project, node: SceneNode, decl: ComponentDecl, key
     input.addEventListener("change", () => apply(input.checked));
     return input;
   }
-  if (spec.type === "number") {
-    return numberInput(typeof raw === "number" ? raw : 0, 1, locked, (value) => apply(value));
-  }
+  if (spec.type === "number") return specNumberInput(spec, raw, effective?.[key], locked, apply);
   if (spec.type === "string" && spec.options?.length) {
     const select = document.createElement("select");
     select.disabled = locked;
+    const name = (value: string) => spec.optionLabels?.[value] ?? value;
+    // 没有默认值的属性可以不写：第一项是“不单独设置”，后面注明现在实际是哪个
+    if (spec.default === undefined) {
+      const option = document.createElement("option");
+      option.value = "";
+      const now = effective?.[key];
+      option.textContent = typeof now === "string" && now ? `跟随样式（${name(now)}）` : "跟随样式";
+      option.selected = raw === undefined || raw === "";
+      select.append(option);
+    }
     for (const value of spec.options) {
       const option = document.createElement("option");
       option.value = value;
-      option.textContent = value;
+      option.textContent = name(value);
       option.selected = raw === value;
       select.append(option);
     }
-    select.addEventListener("change", () => apply(select.value));
+    select.addEventListener("change", () => apply(select.value === "" ? undefined : select.value));
     return select;
   }
   if (spec.type === "string" && spec.multiline) {
@@ -352,18 +463,27 @@ async function assetList(): Promise<string[]> {
   return assetCache;
 }
 
-function declaredPropsSection(project: Project, node: SceneNode, decl: ComponentDecl | null, locked: boolean): HTMLElement | null {
+/** 控件声明里的属性，按 group 分组，每组一个分区；没写 group 的在“属性”组。 */
+function declaredPropsSections(project: Project, id: string, node: SceneNode, decl: ComponentDecl | null, locked: boolean): HTMLElement[] {
   const entries = Object.entries(decl?.props ?? {});
-  if (!decl || entries.length === 0) return null;
-  const box = section("属性");
+  if (!decl || entries.length === 0) return [];
+  const effective = deps?.effectiveProps(id) ?? null;
+  const groups = new Map<string, HTMLElement>();
   for (const [key, spec] of entries) {
-    const control = propControl(project, node, decl, key, spec, locked);
+    const title = spec.group ?? "属性";
+    let box = groups.get(title);
+    if (!box) {
+      box = section(title);
+      groups.set(title, box);
+    }
+    const control = propControl(project, node, decl, key, spec, locked, effective);
     const wide = control instanceof HTMLTextAreaElement || control.classList.contains("props-classes");
     const line = row(spec.label ?? key, control, spec.label ? key : undefined);
+    line.dataset.prop = key;
     if (wide) line.classList.add("wide");
     box.append(line);
   }
-  return box;
+  return [...groups.values()];
 }
 
 // ---------- 整个页签 ----------
@@ -393,7 +513,7 @@ export function renderPropsPane(): void {
 
   pane.append(geometrySection(project, id, node, isBoard, locked));
   if (node.type === "Page") {
-    const paper = paperSection(project, node, locked);
+    const paper = paperSection(project, id, node, locked);
     if (paper) pane.append(paper);
     const title = section("名字");
     title.append(
@@ -409,6 +529,5 @@ export function renderPropsPane(): void {
     );
     pane.append(title);
   }
-  const props = declaredPropsSection(project, node, decl, locked);
-  if (props) pane.append(props);
+  pane.append(...declaredPropsSections(project, id, node, decl, locked));
 }

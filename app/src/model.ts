@@ -163,6 +163,11 @@ export interface Scene {
   windows?: string[];
   /** 平面设计的页面 ID，按页序排列。和 windows 是同一个概念（顶层画板），只是页面有先后顺序，必须写出来 */
   boards?: string[];
+  /**
+   * 成册时封面怎么排。"wrap"：第一个页面是包封，左半是封底（最后一页）、右半是封面（第 1 页），
+   * 翻开后从第 2 页起两页一版。不写就按页面顺序从第 1 页数下去。见 pages.ts 的 sheetPageNumbers
+   */
+  cover?: "wrap";
   nodes: Record<string, SceneNode>;
 }
 
@@ -190,6 +195,16 @@ export interface PropDecl {
   multiline?: boolean;
   /** 值是项目里一个文件的路径（图片等） */
   asset?: boolean;
+  /** 选项在界面上显示的名字（值 → 名字），没写的显示值本身 */
+  optionLabels?: Record<string, string>;
+  /** 数值的单位，只用来显示，例如 "pt" */
+  unit?: string;
+  /** 数值输入框每按一下上下键变多少 */
+  step?: number;
+  min?: number;
+  max?: number;
+  /** 在“属性”页签里归在哪一组下面，不写就在“属性”组 */
+  group?: string;
 }
 
 /** 控件在 Qt 里对应什么。没有这一项的控件，导出后是一个占位框。 */
@@ -253,6 +268,11 @@ export interface ComponentDecl {
 export interface ComponentInstance {
   update(props: Record<string, Value>): void;
   destroy(): void;
+  /**
+   * 控件现在实际用的属性值。场景里没写的属性（例如字号由样式类决定），“属性”页签拿这里的值灰着显示，
+   * 用户才知道不改的时候是多少。只读，不改任何东西；不提供就不显示。
+   */
+  effective?(): Record<string, Value>;
 }
 
 /**

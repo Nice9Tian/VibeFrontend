@@ -6616,6 +6616,7 @@ async function main(): Promise<void> {
     toast,
     activateRightTab: showRightTab,
     listAssets: listProjectAssets,
+    effectiveProps: (id) => mounted.get(id)?.instance?.effective?.() ?? null,
   });
   initEventEdit({
     getProject: () => project,

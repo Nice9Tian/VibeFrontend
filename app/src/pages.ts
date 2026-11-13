@@ -81,22 +81,53 @@ export function pageIds(scene: Scene): string[] {
   return allWindowIds(scene).filter((id) => scene.nodes[id]?.type === "Page");
 }
 
-/** 这个页面是第几页到第几页（从 1 数起）。跨页占两个页码。 */
-export function pageNumbers(scene: Scene, boardId: string): { first: number; last: number } | null {
-  let next = 1;
-  for (const id of pageIds(scene)) {
-    const count = sheetCount(scene.nodes[id]);
-    if (id === boardId) return { first: next, last: next + count - 1 };
-    next += count;
-  }
-  return null;
+/**
+ * 包封页面的 ID：scene.cover 是 "wrap"，而且第一个页面正好由两张纸拼成（左封底、右封面）。
+ * 写了 wrap 但第一个页面不是两张纸时不算，页码照顺序排，检查里会提示。
+ */
+export function coverWrapId(scene: Scene): string | null {
+  if (scene.cover !== "wrap") return null;
+  const first = pageIds(scene)[0];
+  return first && sheetCount(scene.nodes[first]) === 2 ? first : null;
 }
 
-/** 页面在翻页条和标题上的名字，例如“第 3–4 页”。 */
+/**
+ * 每个页面里每张纸是第几页（从 1 数起），从左到右。
+ * 平常按页面顺序数下去；有包封时，包封的左半是最后一页、右半是第 1 页，后面的页面从第 2 页数起，
+ * 这样翻开封面看到的是第 2–3 页这一版。
+ */
+export function sheetPageNumbers(scene: Scene): Map<string, number[]> {
+  const ids = pageIds(scene);
+  const wrap = coverWrapId(scene);
+  const total = ids.reduce((sum, id) => sum + sheetCount(scene.nodes[id]), 0);
+  const result = new Map<string, number[]>();
+  let next = 1;
+  for (const id of ids) {
+    if (id === wrap) {
+      result.set(id, [total, 1]);
+      next = 2;
+      continue;
+    }
+    const count = sheetCount(scene.nodes[id]);
+    result.set(id, Array.from({ length: count }, (_, i) => next + i));
+    next += count;
+  }
+  return result;
+}
+
+/** 这个页面的每张纸是第几页，从左到右；不是页面时为 null。 */
+export function pageNumbers(scene: Scene, boardId: string): number[] | null {
+  return sheetPageNumbers(scene).get(boardId) ?? null;
+}
+
+/** 页面在翻页条和标题上的名字，例如“第 3–4 页”；包封是“封底 + 封面”。 */
 export function pageLabel(scene: Scene, boardId: string): string {
-  const range = pageNumbers(scene, boardId);
-  if (!range) return boardId;
-  return range.first === range.last ? `第 ${range.first} 页` : `第 ${range.first}–${range.last} 页`;
+  const numbers = pageNumbers(scene, boardId);
+  if (!numbers || numbers.length === 0) return boardId;
+  if (boardId === coverWrapId(scene)) return "封底 + 封面";
+  const first = numbers[0];
+  const last = numbers[numbers.length - 1];
+  return first === last ? `第 ${first} 页` : `第 ${first}–${last} 页`;
 }
 
 /** 一个节点下面的全部节点（含它自己）。 */

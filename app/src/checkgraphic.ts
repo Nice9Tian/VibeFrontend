@@ -3,7 +3,7 @@
 import { classNamesIn, splitClasses } from "./classstyles.ts";
 import { formatLength } from "./kinds.ts";
 import { allWindowIds, childrenOfNode, LAYOUT_TYPE_KINDS, unitOf, type Problem, type Project } from "./model.ts";
-import { pageGeometry, pageLabel, sheetCount } from "./pages.ts";
+import { coverWrapId, pageGeometry, pageLabel, sheetCount } from "./pages.ts";
 
 /** 只有界面设计才有的节点类型，放进平面设计里没有意义。 */
 const UI_ONLY_TYPES = new Set(["Window", "Dialog", "Dock", "External", ...Object.keys(LAYOUT_TYPE_KINDS)]);
@@ -28,6 +28,15 @@ export function checkGraphic(project: Project): Problem[] {
   }
   for (const id of pages) {
     if (scene.boards && !scene.boards.includes(id)) hint(`页面 ${id} 没有列在 ui/scene.json 的 boards 里，页序按它在文件里出现的先后排`, id);
+  }
+  const cover: unknown = scene.cover;
+  if (cover !== undefined && cover !== "wrap") {
+    error(`ui/scene.json 的 cover 写的是 ${JSON.stringify(cover)}，只能是 "wrap"（第一个页面是包封）或者不写`);
+  } else if (cover === "wrap" && pages.length > 0 && !coverWrapId(scene)) {
+    hint(
+      `ui/scene.json 写了 cover: "wrap"，但第一个页面 ${pages[0]} 不是两张纸拼成的跨页（左封底、右封面），页码现在照顺序排`,
+      pages[0],
+    );
   }
 
   const knownClasses = classNamesIn(project.styles ?? []);

@@ -4,9 +4,10 @@
 //
 // 输出（默认在项目旁边的 print/ 里）：
 //   boards.pdf         每个页面一页，尺寸就是页面的尺寸；文字和矢量图形保持矢量
-//   sheets.pdf         有跨页时才有：把每个跨页按纸拆开，一张纸一页（--no-split 时不出）
+//   sheets.pdf         有跨页时才有：把每个跨页按纸拆开，一张纸一页，按页码排（--no-split 时不出）。
+//                      成册有包封时（scene.cover = "wrap"），封面是第 1 页，封底是最后一页
 //   board-01.png …     每个页面一张图，--scale 是每个 CSS 像素出几个像素（2 约合 192 dpi）
-//   sheet-01.png …     有跨页时才有：每张纸一张图
+//   sheet-01.png …     有跨页时才有：每张纸一张图，编号是页码
 //   report.json        页面清单、加载时报的错
 //
 // 做法：先导出成网页放进临时文件夹，起一个只听本机的服务，用无头浏览器以 ?print=1 打开播放页，
@@ -84,10 +85,11 @@ async function printPdf(cdp: Cdp, file: string): Promise<void> {
   fs.writeFileSync(file, Buffer.from(data, "base64"));
 }
 
-/** 每个页面框在文档里的位置（CSS 像素）和它由几张纸拼成。 */
+/** 每个页面框在文档里的位置（CSS 像素）、它由几张纸拼成、每张纸是第几页。 */
 const FRAME_RECTS = `[...document.querySelectorAll(".vf-board-frame")].map((frame) => {
   const r = frame.getBoundingClientRect();
-  return { x: r.left + scrollX, y: r.top + scrollY, width: r.width, height: r.height, sheets: Number(frame.dataset.vfSheets || 1) };
+  const pages = (frame.dataset.vfPages || "").split(",").map(Number).filter((n) => n > 0);
+  return { x: r.left + scrollX, y: r.top + scrollY, width: r.width, height: r.height, sheets: Number(frame.dataset.vfSheets || 1), pages };
 })`;
 
 async function capture(cdp: Cdp, clip: { x: number; y: number; width: number; height: number }, file: string): Promise<void> {
@@ -125,10 +127,11 @@ export async function exportPrint(projectDir: string, outDir?: string, options: 
     await printPdf(cdp, path.join(out, "boards.pdf"));
     files.push("boards.pdf");
 
-    const frames = await cdp.evaluate<Array<{ x: number; y: number; width: number; height: number; sheets: number }>>(FRAME_RECTS);
+    const frames = await cdp.evaluate<Array<{ x: number; y: number; width: number; height: number; sheets: number; pages: number[] }>>(FRAME_RECTS);
     const hasSpreads = frames.some((frame) => frame.sheets > 1);
     if (wantPng) {
       let sheetNo = 0;
+      const sheetFiles: string[] = [];
       for (let i = 0; i < frames.length; i++) {
         const frame = frames[i];
         await capture(cdp, frame, path.join(out, `board-${pad(i + 1)}.png`));
@@ -137,10 +140,13 @@ export async function exportPrint(projectDir: string, outDir?: string, options: 
         const sheetWidth = frame.width / frame.sheets;
         for (let s = 0; s < frame.sheets; s++) {
           sheetNo++;
-          await capture(cdp, { x: frame.x + s * sheetWidth, y: frame.y, width: sheetWidth, height: frame.height }, path.join(out, `sheet-${pad(sheetNo)}.png`));
-          files.push(`sheet-${pad(sheetNo)}.png`);
+          // 按页码起名，包封的左半（封底）是最后一页
+          const name = `sheet-${pad(frame.pages[s] ?? sheetNo)}.png`;
+          await capture(cdp, { x: frame.x + s * sheetWidth, y: frame.y, width: sheetWidth, height: frame.height }, path.join(out, name));
+          sheetFiles.push(name);
         }
       }
+      files.push(...sheetFiles.sort());
     }
 
     const errors = [...state.errors];

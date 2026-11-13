@@ -61,6 +61,7 @@ design/
 - `unit` 是 `"mm"`：所有 `x`、`y`、`width`、`height` 都是毫米，小数最多两位。
 - `boards` 是页面的先后顺序；`root` 是第一页。
 - 页面（`Page`）可以由几张纸左右拼成（`sheets: 2` 是跨页）。`margin*` 是版心的边距（外、内、上、下），工具据此画参考线、做吸附，**不**改变内容的位置。导出 PDF 时每个页面一页；有跨页时另出一份按纸拆开的。
+- 成册印刷时写 `"cover": "wrap"`：第一个页面是包封，两张纸拼成，左半是封底（最后一页）、右半是封面（第 1 页），翻开后从第 2 页起两页一版（第 2–3 页、第 4–5 页……）。翻页条、页面的名字和导出都按这个页码，按纸拆开的 `sheets.pdf` 按页码排，封面在第一页。骑马钉装订时总页数要是 4 的倍数。
 - 节点的位置相对于它的父节点：页面里的节点相对于页面左上角，组里的节点相对于组的左上角。
 
 能用的节点类型：
@@ -68,7 +69,7 @@ design/
 | 类型 | 是什么 | `props` |
 | --- | --- | --- |
 | `Page` | 页面 | `sheets`、`marginTop`、`marginBottom`、`marginOuter`、`marginInner`、`class` |
-| `Text` | 文本框：一段 HTML | `html`、`class` |
+| `Text` | 文本框：一段 HTML | `html`、`class`；只改这一个文本框的 `fontSize`（pt）、`lineHeight`（倍）、`letterSpacing`（em）、`textAlign`（left / center / right / justify），不写就照样式类 |
 | `Image` | 图片 | `src`（项目里的路径）、`fit`（contain / cover / fill / none）、`position`、`alt`、`class` |
 | `Group` | 组：把几样东西归在一起，一起移动 | `class` |
 | `Shape` | 基础图形（矩形、圆、多边形……） | 同界面设计，见工具里的样式条 |
@@ -91,7 +92,7 @@ design/
 ## 4. 文字和样式类
 
 - 文本框的内容是一段 HTML（`props.html`），可以带行内标签（`<b>`、`<i>`、`<span class='…'>`、`<br>`）、几个段落或者一张表。属性用**单引号**，JSON 里才不用转义。
-- 文字长什么样**只由样式类决定**：`props.class` 写类名，类写在 `styles/*.css` 里。不要在 HTML 里写 `style="…"` 调字号和颜色。
+- 文字长什么样**由样式类决定**：`props.class` 写类名，类写在 `styles/*.css` 里。个别文本框要另调字号、行距、字距、对齐时，用上面那几个属性（右侧“属性”页签的“文字”一栏，没填时灰字是样式类给的值），它们盖在样式类上；几处共用的写成样式类。不要在 HTML 里写 `style="…"`。
 - 样式表里用 `/* @style 名字 */` 标出给人选的样式，右侧“属性”页签只列这些；一个都没标时列出所有单独成规则的类。
 
   ```css
@@ -109,6 +110,7 @@ design/
 写法和界面设计的控件一样（`component.json` + `index.js` + 可选 `style.css`），另外：
 
 - `defaultSize` 按**毫米**写。
+- 属性声明里，数值可以写 `unit`（显示的单位）、`step`、`min`、`max`；选项可以写 `optionLabels`（选项在界面上的名字）；`group` 把属性归到“属性”页签里的一组。没有默认值的属性可以不写，这时界面上灰着显示控件实际用的值（控件的实例提供 `effective()` 时）。
 - `index.js` 可以用相对路径 `import` 项目里的别的脚本（例如 `../../lib/wave.js`），几个控件共用的计算放 `lib/`。同一个页面里一个模块只有一份，几个控件可以靠它共享状态。
 - 元素用 `el.ownerDocument` 建，不要用全局的 `document` 去找别的控件的元素：控件只管自己方框里的东西。
 - 根元素铺满节点的方框：给它加上 `vf-fill` 这个类，再加上 `props.class`。根元素是 `<svg>` 也可以。

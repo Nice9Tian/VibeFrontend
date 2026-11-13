@@ -13,7 +13,7 @@ import { formatLength, fromPx, roundUnit, UNITS } from "../src/kinds.ts";
 import { applyResizeToScene } from "../src/history.ts";
 import { loadProjectFiles } from "../src/loader.ts";
 import { syncResizedNodeDimensions, type Scene } from "../src/model.ts";
-import { addPage, movePage, pageGeometry, pageGuideRects, pageIds, pageLabel, removePage } from "../src/pages.ts";
+import { addPage, coverWrapId, movePage, pageGeometry, pageGuideRects, pageIds, pageLabel, removePage, sheetPageNumbers } from "../src/pages.ts";
 import { exportPrint } from "./export-print.ts";
 import { exportWeb } from "./export-web.ts";
 import { freePort, openHeadless, serveFolder } from "./headless.ts";
@@ -115,6 +115,33 @@ async function pureTests(): Promise<void> {
     assert.equal(removePage(scene, "b"), false, "只剩一页不能删");
   });
 
+  await test("成册：包封的左半是最后一页、右半是第 1 页，翻开从第 2 页数起", () => {
+    const scene: Scene = {
+      version: 1,
+      unit: "mm",
+      root: "c",
+      boards: ["c", "s", "p"],
+      cover: "wrap",
+      nodes: {
+        c: { type: "Page", width: 420, height: 297, props: { sheets: 2 }, children: [] },
+        s: { type: "Page", width: 420, height: 297, props: { sheets: 2 }, children: [] },
+        p: { type: "Page", width: 210, height: 297, children: [] },
+      },
+    };
+    assert.equal(coverWrapId(scene), "c");
+    assert.deepEqual([...sheetPageNumbers(scene)], [["c", [5, 1]], ["s", [2, 3]], ["p", [4]]]);
+    assert.equal(pageLabel(scene, "c"), "封底 + 封面");
+    assert.equal(pageLabel(scene, "s"), "第 2–3 页");
+    delete scene.cover;
+    assert.deepEqual(sheetPageNumbers(scene).get("c"), [1, 2], "不成册时照顺序数");
+    assert.equal(pageLabel(scene, "c"), "第 1–2 页");
+    // 第一个页面不是两张纸拼成的：不算包封，照顺序数
+    scene.cover = "wrap";
+    scene.boards = ["p", "c", "s"];
+    assert.equal(coverWrapId(scene), null);
+    assert.deepEqual(sheetPageNumbers(scene).get("p"), [1]);
+  });
+
   await test("吸附参考：每张纸的边和版心", () => {
     const scene: Scene = { version: 1, unit: "mm", root: "a", nodes: { a: { type: "Page", width: 420, height: 297, props: { sheets: 2, marginOuter: 14, marginInner: 20, marginTop: 14, marginBottom: 16 } } } };
     const rects = pageGuideRects(scene, "a");
@@ -173,6 +200,14 @@ async function checkTests(): Promise<void> {
       assert.ok(problems.some((m) => m.includes("coverTitle") && m.includes("中缝")), "压中缝要提示");
       assert.ok(problems.some((m) => m.includes("nosuch")), "找不到的样式类要提示");
       assert.ok(problems.some((m) => m.includes("badDock") && m.includes("只在界面设计里有")), "界面设计专用的类型要报错");
+
+      // 成册的写法：第一个页面不是跨页时提示，写了别的值报错
+      const wrap = JSON.parse(fs.readFileSync(scenePath, "utf8")) as Scene;
+      fs.writeFileSync(scenePath, JSON.stringify({ ...wrap, cover: "wrap", boards: ["page3", "spread1"] }));
+      assert.ok((await loadProjectFiles(nodeIO(dir), null)).problems.some((p) => p.level === "hint" && p.message.includes("cover") && p.message.includes("page3")));
+      fs.writeFileSync(scenePath, JSON.stringify({ ...wrap, cover: "jacket" }));
+      assert.ok((await loadProjectFiles(nodeIO(dir), null)).problems.some((p) => p.level === "error" && p.message.includes("jacket")));
+      fs.writeFileSync(scenePath, JSON.stringify(wrap));
 
       const config = JSON.parse(fs.readFileSync(path.join(dir, "project.json"), "utf8"));
       fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ ...config, kind: "poster" }));
@@ -298,6 +333,78 @@ async function editorTests(): Promise<void> {
       assert.ok(state.size.includes("A4"), "属性页签认出 A4");
       await cdp.evaluate(`document.querySelector('[data-board="prev"]').click()`);
       await wait(600);
+    });
+
+    /** 用真的鼠标按下、停一下、松开（工具的点击只有几毫秒，按住期间界面重画丢掉点击的毛病测不出来） */
+    const press = async (selector: string, holdMs = 120) => {
+      const p = await cdp.evaluate<{ x: number; y: number } | null>(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      })()`);
+      assert.ok(p, `找不到 ${selector}`);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: p.x, y: p.y, button: "left", clickCount: 1 });
+      await wait(holdMs);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: p.x, y: p.y, button: "left", clickCount: 1 });
+    };
+
+    await test("画布上方浮着的按钮条：每个按钮都点得到，按住鼠标再松开也能翻页", async () => {
+      // 浮在画布上的那一栏本身不拦鼠标，只有按钮拦；新加的按钮忘了打开就会点到下面的画布上
+      const missed = await cdp.evaluate<string[]>(`[...document.querySelectorAll("#center-bar button, #center-bar select, #center-bar input")]
+        .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !el.closest("[hidden], .overflow-panel"); })
+        .filter((el) => { const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !(hit === el || el.contains(hit)); })
+        .map((el) => el.id || el.dataset.board || el.title || el.textContent.trim())`);
+      assert.deepEqual(missed, [], "这些按钮被画布挡住了");
+      const title = () => cdp.evaluate<string>(`document.getElementById("stage-title").textContent`);
+      assert.equal(await title(), "第 1–2 页");
+      await press('[data-board="next"]');
+      await wait(600);
+      assert.equal(await title(), "第 3 页");
+      await press('[data-board="prev"]');
+      await wait(600);
+      assert.equal(await title(), "第 1–2 页");
+    });
+
+    await test("文本框的字号、行距、字距、对齐：没填时灰字是样式给的值，填了只改这一个，↺ 回到样式", async () => {
+      await cdp.evaluate(`[...document.querySelectorAll(".layer")].find((r) => r.dataset.id === "coverTitle").click()`);
+      await wait(200);
+      await cdp.evaluate(`document.getElementById("tab-props").click()`);
+      await wait(300);
+      const fontPx = () => cdp.evaluate<string>(`getComputedStyle(document.getElementById("stage-iframe").contentDocument.querySelector('[data-vf-id="coverTitle"] .vf-text')).fontSize`);
+      const pane = await cdp.evaluate<{ sections: string[]; placeholder: string; value: string; unit: string; align: string }>(`(() => {
+        const row = (key) => document.querySelector('#pane-props [data-prop="' + key + '"]');
+        return {
+          sections: [...document.querySelectorAll("#pane-props .props-section h4")].map((h) => h.textContent),
+          placeholder: row("fontSize").querySelector("input").placeholder,
+          value: row("fontSize").querySelector("input").value,
+          unit: row("fontSize").querySelector(".props-unit").textContent,
+          align: row("textAlign").querySelector("option").textContent,
+        };
+      })()`);
+      assert.ok(pane.sections.includes("属性") && pane.sections.includes("文字"), pane.sections.join("、"));
+      assert.equal(pane.placeholder, "54", "灰字是样式类 .title 给的 54pt");
+      assert.equal(pane.value, "");
+      assert.equal(pane.unit, "pt");
+      assert.equal(pane.align, "跟随样式（左对齐）");
+      assert.equal(await fontPx(), "72px");
+
+      await cdp.evaluate(`(() => { const i = document.querySelector('#pane-props [data-prop="fontSize"] input'); i.value = "30"; i.dispatchEvent(new Event("change")); })()`);
+      await wait(700);
+      assert.equal(readScene().nodes.coverTitle.props?.fontSize, 30);
+      assert.equal(await fontPx(), "40px", "30pt = 40px");
+      await cdp.evaluate(`(() => { const s = document.querySelector('#pane-props [data-prop="textAlign"] select'); s.value = "center"; s.dispatchEvent(new Event("change")); })()`);
+      await wait(700);
+      assert.equal(readScene().nodes.coverTitle.props?.textAlign, "center");
+
+      await press('#pane-props [data-prop="fontSize"] .props-reset');
+      await wait(700);
+      assert.equal(readScene().nodes.coverTitle.props?.fontSize, undefined, "↺ 之后文件里不留字号");
+      assert.equal(await fontPx(), "72px");
+      await cdp.evaluate(`(() => { const s = document.querySelector('#pane-props [data-prop="textAlign"] select'); s.value = ""; s.dispatchEvent(new Event("change")); })()`);
+      await wait(700);
+      assert.equal(readScene().nodes.coverTitle.props?.textAlign, undefined);
     });
 
     await test("双击文本框直接改字，存成单引号的 HTML", async () => {
@@ -433,6 +540,31 @@ async function exportTests(): Promise<void> {
       assert.ok(Math.abs(w1 - 1587) <= 1 && Math.abs(h1 - 1123) <= 1, `board-01.png 是 ${w1}×${h1}`);
       const [w2] = pngSize(path.join(out, "print/sheet-02.png"));
       assert.ok(Math.abs(w2 - 794) <= 1, `sheet-02.png 宽 ${w2}`);
+    });
+
+    await test("成册：一页一页地出时按页码排，包封的右半（封面）是第 1 页", async () => {
+      const scenePath = path.join(dir, "ui/scene.json");
+      fs.writeFileSync(scenePath, JSON.stringify({ ...JSON.parse(fs.readFileSync(scenePath, "utf8")), cover: "wrap" }));
+      const report = await exportPrint(dir, path.join(out, "print-wrap"), { scale: 1 });
+      assert.deepEqual(report.errors, []);
+      assert.deepEqual(report.boards.map((b) => b.label), ["封底 + 封面", "第 2 页"]);
+      assert.deepEqual(report.files.filter((f) => f.startsWith("sheet-")), ["sheet-01.png", "sheet-02.png", "sheet-03.png"]);
+      assert.equal(pdfPages(path.join(out, "print-wrap/sheets.pdf")).length, 3);
+      await exportWeb(dir, path.join(out, "web-wrap"));
+      const server = await serveFolder(path.join(out, "web-wrap"));
+      const page = await openHeadless(`${server.url}index.html?print=1&split=1`);
+      try {
+        for (let k = 0; k < 200; k++) {
+          if (await page.cdp.evaluate<boolean>("Boolean(window.__vfPlayer && window.__vfPlayer.isReady)").catch(() => false)) break;
+          await wait(100);
+        }
+        const frames = await page.cdp.evaluate<Array<[string, string]>>(`[...document.querySelectorAll(".vf-board-frame")].map((f) => [f.dataset.vfPages, f.firstElementChild.style.marginLeft])`);
+        assert.deepEqual(frames.map((f) => f[0]), ["1", "2", "3"], "按页码排");
+        assert.equal(frames[0][1], "-210mm", "第 1 页是包封的右半");
+      } finally {
+        await page.close();
+        await server.close();
+      }
     });
   } finally {
     cleanup(dir);

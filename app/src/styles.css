@@ -319,6 +319,7 @@ body:not(.standalone-preview) #center-bar #reset-state,
 body:not(.standalone-preview) #center-bar #restart,
 body:not(.standalone-preview) #center-bar #conditions > *,
 body:not(.standalone-preview) #center-bar #tool-bar,
+body:not(.standalone-preview) #center-bar #board-bar,
 body:not(.standalone-preview) #center-bar #zoom-bar {
   pointer-events: auto;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
@@ -986,7 +987,8 @@ body.standalone-preview #bottom-toggle {
   background: var(--line);
 }
 
-#tool-bar .tool-select {
+#tool-bar .tool-select,
+#board-bar .tool-select {
   height: 26px;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -2768,11 +2770,15 @@ body.standalone-preview #stage {
 
 /* ---------- 设计类型与单位 ---------- */
 
-/* 翻页条：一次只看一个画板的设计类型（平面设计）才有 */
+/* 翻页条：一次只看一个画板的设计类型（平面设计）才有。和工具栏一样是一块浮在画布上的按钮条 */
 #board-bar {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
 }
 
 #board-bar[hidden] {
@@ -2949,6 +2955,38 @@ body.preview #page-guides {
 .props-pane select:disabled,
 .props-pane textarea:disabled {
   opacity: 0.55;
+}
+
+/* 带单位的数值：输入框、单位、恢复按钮排成一行 */
+.props-number {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.props-number > input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}
+
+.props-unit {
+  flex: none;
+  min-width: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.props-reset {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
 }
 
 .props-note {

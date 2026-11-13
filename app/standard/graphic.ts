@@ -12,10 +12,19 @@ export interface GraphicStandardComponent extends LoadedComponent {
 
 const text = (value: Value | undefined): string => (typeof value === "string" ? value : value === undefined || value === null ? "" : String(value));
 
+const finite = (value: Value | undefined): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
+const roundTo = (value: number, step: number): number => Math.round(value / step) * step;
+/** 1 CSS 像素合多少点（pt）：1pt = 1/72 英寸，1px = 1/96 英寸 */
+const PT_PER_PX = 72 / 96;
+const TEXT_ALIGNS = ["left", "center", "right", "justify"];
+
 /**
  * 文本框。内容是一段 HTML（props.html），长什么样由样式类（props.class）决定，
  * 样式类写在项目的样式表里（project.json 的 styles）。
  * 一段话可以只有文字，也可以带行内标签（<b>、<i>、<span class>、<br>），或者是几个段落、一张表。
+ *
+ * 字号、行距、字距、对齐可以只给这一个文本框改（props.fontSize 等），盖在样式类上面；不写就照样式类。
+ * 改的是文本框本身的字，里面另外设了字号的部分（例如样式类给英文小字单独设的字号）照样式类不变。
  */
 const createText: ComponentCreate = (el, { props }) => {
   const box = el.ownerDocument.createElement("div");
@@ -24,6 +33,14 @@ const createText: ComponentCreate = (el, { props }) => {
   const update = (next: Record<string, Value>) => {
     const cls = text(next.class).trim();
     box.className = cls ? `vf-text vf-fill ${cls}` : "vf-text vf-fill";
+    const size = finite(next.fontSize);
+    const leading = finite(next.lineHeight);
+    const tracking = finite(next.letterSpacing);
+    const align = text(next.textAlign);
+    box.style.fontSize = size !== null && size > 0 ? `${size}pt` : "";
+    box.style.lineHeight = leading !== null && leading > 0 ? String(leading) : "";
+    box.style.letterSpacing = tracking !== null ? `${tracking}em` : "";
+    box.style.textAlign = TEXT_ALIGNS.includes(align) ? align : "";
     const html = text(next.html);
     // 正在画布上直接改字时不重写内容，光标才不会跳
     if (html !== shown && !box.isContentEditable) {
@@ -32,7 +49,25 @@ const createText: ComponentCreate = (el, { props }) => {
     }
   };
   update(props);
-  return { update, destroy: () => box.remove() };
+  /** 画面上实际的字号、行距、字距、对齐，单位和属性一样（pt、倍、em） */
+  const effective = (): Record<string, Value> => {
+    const view = box.ownerDocument.defaultView;
+    if (!view || !box.isConnected) return {};
+    const style = view.getComputedStyle(box);
+    const px = parseFloat(style.fontSize);
+    if (!(px > 0)) return {};
+    const out: Record<string, Value> = { fontSize: roundTo(px * PT_PER_PX, 0.1) };
+    const leading = parseFloat(style.lineHeight);
+    if (Number.isFinite(leading)) out.lineHeight = roundTo(leading / px, 0.01);
+    const tracking = style.letterSpacing === "normal" ? 0 : parseFloat(style.letterSpacing);
+    if (Number.isFinite(tracking)) out.letterSpacing = roundTo(tracking / px, 0.001);
+    const align = style.textAlign === "start" ? "left" : style.textAlign === "end" ? "right" : style.textAlign;
+    if (TEXT_ALIGNS.includes(align)) out.textAlign = align;
+    // 浮点误差（0.30000000000000004）不往界面上带
+    for (const [key, value] of Object.entries(out)) if (typeof value === "number") out[key] = Number(value.toFixed(3));
+    return out;
+  };
+  return { update, effective, destroy: () => box.remove() };
 };
 
 const TEXT_DECL: ComponentDecl = {
@@ -43,6 +78,17 @@ const TEXT_DECL: ComponentDecl = {
   props: {
     html: { type: "string", default: "文字", label: "内容（HTML）", multiline: true },
     class: { type: "string", default: "", label: "样式类" },
+    // 下面几项不写就照样式类；写了只改这一个文本框
+    fontSize: { type: "number", label: "字号", unit: "pt", step: 0.5, min: 1, max: 1000, group: "文字" },
+    lineHeight: { type: "number", label: "行距", unit: "倍", step: 0.05, min: 0.3, max: 10, group: "文字" },
+    letterSpacing: { type: "number", label: "字距", unit: "em", step: 0.01, min: -1, max: 5, group: "文字" },
+    textAlign: {
+      type: "string",
+      label: "对齐",
+      options: TEXT_ALIGNS,
+      optionLabels: { left: "左对齐", center: "居中", right: "右对齐", justify: "两端对齐" },
+      group: "文字",
+    },
   },
   children: false,
 };

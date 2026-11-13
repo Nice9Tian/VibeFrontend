@@ -26,7 +26,7 @@ import {
   type SceneNode,
   type StageServices,
 } from "../model.ts";
-import { pageLabel, sheetCount } from "../pages.ts";
+import { pageLabel, sheetCount, sheetPageNumbers } from "../pages.ts";
 import { paintShape } from "../paint.ts";
 import { applyBoard, applyGroupClass, applyNodeBox, createStageServices, createWaitTracker, GRAPHIC_STAGE_CSS } from "../stage.ts";
 
@@ -444,20 +444,21 @@ async function start(state: PlayerState): Promise<void> {
   const book = document.createElement("main");
   book.id = "vf-book";
   document.body.append(book);
-  const frames: HTMLElement[] = [];
-  const frameSizes: Array<{ width: string; height: string }> = [];
   const instances: ComponentInstance[] = [];
+  const numbers = sheetPageNumbers(scene);
+  // 平时一个页面一个框；按纸拆开时，跨页的每张纸各一个框，框里是整个跨页，只露出这张纸
+  const views: Array<{ frame: HTMLElement; size: { width: string; height: string }; order: number }> = [];
   for (const id of boards) {
     const node = scene.nodes[id];
     const sheets = sheetCount(node);
     const sheetWidth = node.width / sheets;
-    // 平时一个页面一个框；按纸拆开时，跨页的每张纸各一个框，框里是整个跨页，只露出这张纸
-    const views = split ? sheets : 1;
-    for (let s = 0; s < views; s++) {
+    const pages = numbers.get(id) ?? [];
+    for (let s = 0; s < (split ? sheets : 1); s++) {
       const frame = document.createElement("div");
       frame.className = "vf-board-frame";
-      frame.dataset.vfIndex = String(frames.length);
       frame.dataset.vfSheets = String(split ? 1 : sheets);
+      // 每张纸是第几页，导出图片时按它起名
+      frame.dataset.vfPages = (split ? [pages[s]] : pages).join(",");
       const board = document.createElement("div");
       applyBoard(board, id, node, unit);
       if (split && sheets > 1) {
@@ -467,14 +468,23 @@ async function start(state: PlayerState): Promise<void> {
         board.style.marginLeft = cssLength(unit, -s * sheetWidth);
       }
       frame.append(board);
-      book.append(frame);
-      frames.push(frame);
-      frameSizes.push({ width: cssLength(unit, split ? sheetWidth : node.width), height: cssLength(unit, node.height) });
+      views.push({
+        frame,
+        size: { width: cssLength(unit, split ? sheetWidth : node.width), height: cssLength(unit, node.height) },
+        // 一页一页地出时按页码排：有包封时，封面（包封的右半）是第一页，封底是最后一页
+        order: split ? (pages[s] ?? views.length + 1) : views.length,
+      });
       for (const child of childrenOfNode(node)) buildNode(scene, child, board, types, services, instances);
     }
     state.boards.push({ id, label: pageLabel(scene, id), width: node.width, height: node.height, unit: unit.css });
   }
-  addStyle("vf-page-rules", pageRules(frameSizes));
+  views.sort((a, b) => a.order - b.order);
+  const frames = views.map((view, index) => {
+    view.frame.dataset.vfIndex = String(index);
+    book.append(view.frame);
+    return view.frame;
+  });
+  addStyle("vf-page-rules", pageRules(views.map((view) => view.size)));
 
   if (!printMode) setupScreen(scene, boards, frames);
 
