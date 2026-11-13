@@ -123,14 +123,21 @@ export function setSelectionRectSource(source: () => Rect | null): void {
 /** 缩放到刚好装下选中的东西，并把它放在视口正中。没有选中时不动。 */
 export function zoomToSelection(): void {
   const rect = selectionRect();
-  if (!rect) return;
+  if (rect) zoomToRect(rect, { padding: 96, max: SELECTION_MAX_ZOOM });
+}
+
+/**
+ * 缩放到刚好装下设计窗口里的这一块（设计窗口坐标，CSS 像素），放在视口正中。
+ * 平面设计的无限画布上“跳到某一页”用它；max 是最多放大到多少（默认 100%）。
+ */
+export function zoomToRect(rect: Rect, options: { padding?: number; max?: number } = {}): void {
   const { scroll } = elements();
   userMoved = true;
-  const padding = 96;
+  const padding = options.padding ?? 64;
   const fit = Math.min(
     (scroll.clientWidth - padding) / Math.max(rect.width, 1),
     (scroll.clientHeight - topInset() - padding) / Math.max(rect.height, 1),
-    SELECTION_MAX_ZOOM,
+    options.max ?? 1,
   );
   zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fit));
   layout();
@@ -140,10 +147,8 @@ export function zoomToSelection(): void {
   for (const listener of listeners) listener();
 }
 
-/** 选中的东西跑到视口外面时，把视角挪过去，缩放不变。本来就看得见就不动。 */
-export function panToSelection(): void {
-  const rect = selectionRect();
-  if (!rect) return;
+/** 设计窗口里的这一块不在视口里时，把视角挪过去，缩放不变。 */
+export function panToRect(rect: Rect): void {
   const { scroll } = elements();
   const origin = frameOrigin();
   const margin = 40;
@@ -154,6 +159,12 @@ export function panToSelection(): void {
   if (dx === 0 && dy === 0) return;
   userMoved = true;
   scroll.scrollBy(dx, dy);
+}
+
+/** 选中的东西跑到视口外面时，把视角挪过去，缩放不变。本来就看得见就不动。 */
+export function panToSelection(): void {
+  const rect = selectionRect();
+  if (rect) panToRect(rect);
 }
 
 function stepZoom(direction: 1 | -1): void {

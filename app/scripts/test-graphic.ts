@@ -268,23 +268,27 @@ async function editorTests(): Promise<void> {
     }
 
     await test("编辑器：页签、素材栏和画布都按平面设计来", async () => {
-      const state = await cdp.evaluate<{ tabs: string[]; basics: string[]; stage: string; std: string[]; problems: string }>(`(() => ({
+      const state = await cdp.evaluate<{ tabs: string[]; basics: string[]; boards: Array<{ id: string; w: string; h: string; top: number }>; labels: string[]; std: string[]; problems: string }>(`(() => ({
         tabs: [...document.querySelectorAll("#right .tabs [role=tab]")].filter((t) => !t.hidden).map((t) => t.id),
         basics: [...document.querySelectorAll("#palette-basic .palette-item")].map((e) => e.dataset.type),
         std: [...document.querySelectorAll("#palette-project .palette-item")].map((e) => e.dataset.type),
-        stage: document.getElementById("stage").style.width + " " + document.getElementById("stage").style.height,
+        boards: [...document.getElementById("stage-iframe").contentDocument.querySelectorAll(".vf-spread > .vf-board")].map((b) => ({ id: b.dataset.vfBoard, w: b.style.width, h: b.style.height, top: b.getBoundingClientRect().top })),
+        labels: [...document.querySelectorAll("#page-labels .page-label")].map((l) => l.textContent),
         problems: document.getElementById("problems").innerText,
       }))()`);
       assert.deepEqual(state.tabs, ["tab-props", "tab-doc"]);
       assert.deepEqual(state.basics, ["Container", "Group"]);
       assert.ok(state.std.includes("Text") && state.std.includes("Image") && state.std.includes("Wave"));
       assert.ok(!state.std.includes("Button"), "界面设计的标准控件不出现在平面设计里");
-      assert.equal(state.stage, "420mm 297mm");
+      // 编辑时全部页面摊开在画布上，一页接一页往下排，每一页上面写着它是第几页
+      assert.deepEqual(state.boards.map((b) => [b.id, b.w, b.h]), [["spread1", "420mm", "297mm"], ["page3", "210mm", "297mm"]]);
+      assert.ok(state.boards[1].top > state.boards[0].top, "第 3 页在第 1–2 页下面");
+      assert.deepEqual(state.labels, ["第 1–2 页", "第 3 页"]);
       assert.equal(state.problems.trim(), "没有问题。");
     });
 
     await test("拖动：按毫米写回，最多两位小数，挪的距离和鼠标一致", async () => {
-      await cdp.evaluate(`[...document.querySelectorAll("#zoom-bar button")].find((b) => b.textContent === "100%").click()`);
+      await cdp.evaluate(`document.getElementById("zoom-level").click()`);
       await cdp.evaluate(SETTLE);
       const before = readScene().nodes.coverTitle;
       const at = await cdp.evaluate<{ x: number; y: number; pxPerMm: number }>(`(() => {
@@ -292,7 +296,7 @@ async function editorTests(): Promise<void> {
         const el = iframe.contentDocument.querySelector('[data-vf-id="coverTitle"]');
         el.scrollIntoView({ block: "center", inline: "center" });
         const r = el.getBoundingClientRect(), f = iframe.getBoundingClientRect();
-        return { x: f.left + r.left + 20, y: f.top + r.top + 10, pxPerMm: f.width / 420 };
+        return { x: f.left + r.left + 20, y: f.top + r.top + 10, pxPerMm: el.closest(".vf-board").getBoundingClientRect().width / 420 };
       })()`);
       await cdp.evaluate(SETTLE);
       const p = await cdp.evaluate<{ x: number; y: number }>(`(() => {
@@ -321,19 +325,71 @@ async function editorTests(): Promise<void> {
       assert.equal(readScene().nodes.coverTitle.x, before.x);
     });
 
-    await test("翻页：第二页只画它自己的东西，属性页签显示这一页的纸张", async () => {
+    await test("跳到第 3 页：画布不重画、两页都还在，第 3 页的名字变成当前，属性页签显示这一页的纸张", async () => {
       await cdp.evaluate(`(() => { const s = document.querySelector('[data-board="select"]'); s.value = "page3"; s.dispatchEvent(new Event("change")); })()`);
       await wait(600);
-      const state = await cdp.evaluate<{ ids: string[]; title: string; size: string }>(`(() => ({
+      const state = await cdp.evaluate<{ ids: string[]; current: string; size: string; prevNext: number }>(`(() => ({
         ids: [...document.getElementById("stage-iframe").contentDocument.querySelectorAll(".vf-node")].map((n) => n.dataset.vfId),
-        title: document.getElementById("stage-title").textContent,
+        current: document.querySelector("#page-labels .page-label.current")?.textContent ?? "",
         size: document.getElementById("pane-props").innerText,
+        prevNext: document.querySelectorAll('[data-board="prev"], [data-board="next"]').length,
       }))()`);
-      assert.deepEqual(state.ids.sort(), ["page3Body", "page3Title"]);
-      assert.equal(state.title, "第 3 页");
+      assert.ok(state.ids.includes("page3Title") && state.ids.includes("coverTitle"), "两页的东西都在画布上");
+      assert.equal(state.current, "第 3 页");
       assert.ok(state.size.includes("A4"), "属性页签认出 A4");
-      await cdp.evaluate(`document.querySelector('[data-board="prev"]').click()`);
-      await wait(600);
+      assert.equal(state.prevNext, 0, "编辑时不用一页页翻，没有 ◀ ▶");
+      // 第 3 页在画布上的位置换算对了：点它上面的字能选中它
+      const p = await cdp.evaluate<{ x: number; y: number }>(`(() => {
+        const iframe = document.getElementById("stage-iframe");
+        const el = iframe.contentDocument.querySelector('[data-vf-id="page3Title"]');
+        el.scrollIntoView({ block: "center", inline: "center" });
+        // 设计窗口里量到的是没缩放的坐标，乘上视角的缩放才是屏幕上的
+        const r = el.getBoundingClientRect(), f = iframe.getBoundingClientRect(), k = f.width / iframe.offsetWidth;
+        return { x: f.left + (r.left + r.width / 2) * k, y: f.top + (r.top + r.height / 2) * k };
+      })()`);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: p.x, y: p.y, button: "left", clickCount: 1 });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: p.x, y: p.y, button: "left", clickCount: 1 });
+      await wait(300);
+      assert.equal(await cdp.evaluate<string>(`document.querySelector(".layer.selected")?.dataset.id ?? ""`), "page3Title");
+      // 选中框正好框在它上面（编辑层和画布的坐标对得上）
+      const offset = await cdp.evaluate<number>(`(() => {
+        const iframe = document.getElementById("stage-iframe");
+        const r = iframe.contentDocument.querySelector('[data-vf-id="page3Title"]').getBoundingClientRect(), f = iframe.getBoundingClientRect(), k = f.width / iframe.offsetWidth;
+        const sel = document.getElementById("selection").getBoundingClientRect();
+        return Math.max(Math.abs(sel.left - (f.left + r.left * k)), Math.abs(sel.top - (f.top + r.top * k)));
+      })()`);
+      assert.ok(offset < 2, `选中框偏了 ${offset} 像素`);
+      await cdp.evaluate(`document.querySelector('#page-labels .page-label[data-page="spread1"]').click()`);
+      await wait(300);
+    });
+
+    await test("把文字从第 1–2 页拖到第 3 页上：松手后它就在第 3 页里，画布上的位置不变；撤销回去", async () => {
+      await cdp.evaluate(`[...document.querySelectorAll("#zoom-bar button")].find((b) => b.textContent.trim() === "适应").click()`);
+      await wait(300);
+      const before = readScene();
+      const where = await cdp.evaluate<{ from: { x: number; y: number }; to: { x: number; y: number } }>(`(() => {
+        const iframe = document.getElementById("stage-iframe"), f = iframe.getBoundingClientRect(), doc = iframe.contentDocument, k = f.width / iframe.offsetWidth;
+        const a = doc.querySelector('[data-vf-id="coverLead"]').getBoundingClientRect();
+        const b = doc.querySelector('[data-vf-board="page3"]').getBoundingClientRect();
+        return { from: { x: f.left + (a.left + a.width / 2) * k, y: f.top + (a.top + a.height / 2) * k }, to: { x: f.left + (b.left + b.width / 2) * k, y: f.top + (b.top + b.height * 0.6) * k } };
+      })()`);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: where.from.x, y: where.from.y });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: where.from.x, y: where.from.y, button: "left", clickCount: 1 });
+      for (let k = 1; k <= 10; k++) {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: where.from.x + ((where.to.x - where.from.x) * k) / 10, y: where.from.y + ((where.to.y - where.from.y) * k) / 10, button: "left", buttons: 1 });
+      }
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: where.to.x, y: where.to.y, button: "left", clickCount: 1 });
+      await wait(800);
+      const after = readScene();
+      assert.ok(after.nodes.page3.children!.includes("coverLead"), "到了第 3 页里");
+      assert.ok(!after.nodes.spread1.children!.includes("coverLead"), "第 1–2 页里没有了");
+      assert.ok(after.nodes.coverLead.x! >= 0 && after.nodes.coverLead.x! < 210 && after.nodes.coverLead.y! > 0 && after.nodes.coverLead.y! < 297, `在第 3 页里的坐标：${after.nodes.coverLead.x}, ${after.nodes.coverLead.y}`);
+      assert.equal(await cdp.evaluate<string>(`document.querySelector("#page-labels .page-label.current")?.textContent ?? ""`), "第 3 页");
+      await cdp.evaluate(`document.querySelector('[data-action="undo"]').click()`);
+      await wait(800);
+      assert.deepEqual(readScene().nodes.spread1.children, before.nodes.spread1.children);
+      assert.equal(readScene().nodes.coverLead.x, before.nodes.coverLead.x);
     });
 
     /** 用真的鼠标按下、停一下、松开（工具的点击只有几毫秒，按住期间界面重画丢掉点击的毛病测不出来） */
@@ -351,21 +407,21 @@ async function editorTests(): Promise<void> {
       await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: p.x, y: p.y, button: "left", clickCount: 1 });
     };
 
-    await test("画布上方浮着的按钮条：每个按钮都点得到，按住鼠标再松开也能翻页", async () => {
+    await test("画布上方浮着的按钮条：每个按钮都点得到；页面名字按住再松开也能换页", async () => {
       // 浮在画布上的那一栏本身不拦鼠标，只有按钮拦；新加的按钮忘了打开就会点到下面的画布上
       const missed = await cdp.evaluate<string[]>(`[...document.querySelectorAll("#center-bar button, #center-bar select, #center-bar input")]
         .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !el.closest("[hidden], .overflow-panel"); })
         .filter((el) => { const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !(hit === el || el.contains(hit)); })
         .map((el) => el.id || el.dataset.board || el.title || el.textContent.trim())`);
       assert.deepEqual(missed, [], "这些按钮被画布挡住了");
-      const title = () => cdp.evaluate<string>(`document.getElementById("stage-title").textContent`);
-      assert.equal(await title(), "第 1–2 页");
-      await press('[data-board="next"]');
-      await wait(600);
-      assert.equal(await title(), "第 3 页");
-      await press('[data-board="prev"]');
-      await wait(600);
-      assert.equal(await title(), "第 1–2 页");
+      // 页面上方的名字也是按住再松开就换页
+      const current = () => cdp.evaluate<string>(`document.querySelector("#page-labels .page-label.current")?.textContent ?? ""`);
+      await press('#page-labels .page-label[data-page="page3"]');
+      await wait(300);
+      assert.equal(await current(), "第 3 页");
+      await press('#page-labels .page-label[data-page="spread1"]');
+      await wait(300);
+      assert.equal(await current(), "第 1–2 页");
     });
 
     await test("文本框的字号、行距、字距、对齐：没填时灰字是样式给的值，填了只改这一个，↺ 回到样式", async () => {
@@ -409,7 +465,7 @@ async function editorTests(): Promise<void> {
     });
 
     await test("双击文本框直接改字，存成单引号的 HTML", async () => {
-      await cdp.evaluate(`[...document.querySelectorAll("#zoom-bar button")].find((b) => b.textContent === "100%").click()`);
+      await cdp.evaluate(`document.getElementById("zoom-level").click()`);
       await cdp.evaluate(SETTLE);
       const p = await cdp.evaluate<{ x: number; y: number }>(`(() => {
         const iframe = document.getElementById("stage-iframe");

@@ -45,8 +45,11 @@ export interface DesignKind {
     types: string[];
     /** 界面上怎么称呼它 */
     noun: string;
-    /** 一次只看一个画板（平面设计翻页看），还是主画板上叠着别的画板（界面设计的对话框） */
-    oneAtATime: boolean;
+    /**
+     * 画板怎么摆：spread 是编辑时全部画板一页页摊开在一张无限画布上、预览时像翻书一样一屏一屏看（平面设计的页面）；
+     * overlay 是主画板上叠着别的画板（界面设计的对话框，位置写在它们自己的 x、y 上）
+     */
+    arrange: "spread" | "overlay";
   };
   /** 素材栏“基础素材”里列出的内置类型 */
   paletteBasics: string[];
@@ -81,7 +84,7 @@ export const KINDS: Record<KindId, DesignKind> = {
     id: "ui",
     label: "界面设计",
     defaultUnit: "px",
-    board: { types: ["Window", "Dialog"], noun: "窗口", oneAtATime: false },
+    board: { types: ["Window", "Dialog"], noun: "窗口", arrange: "overlay" },
     paletteBasics: ["Container", "External", "VBox", "HBox", "Flow", "Grid", "Form", "Stack", "Dock", "Dialog"],
     palette: { shapes: true, flow: true, lines: true },
     // 和原来一样的顺序：各页签模块依次插在“文档”前面
@@ -94,7 +97,7 @@ export const KINDS: Record<KindId, DesignKind> = {
     id: "graphic",
     label: "平面设计",
     defaultUnit: "mm",
-    board: { types: ["Page"], noun: "页面", oneAtATime: true },
+    board: { types: ["Page"], noun: "页面", arrange: "spread" },
     paletteBasics: ["Container", "Group"],
     // 线条（连接线、箭头）的走线和挂接是编辑器里按像素算的，平面设计里还没有；细线用很扁的矩形画
     palette: { shapes: true, flow: false, lines: false },

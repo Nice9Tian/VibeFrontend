@@ -1,6 +1,7 @@
 // 几何变换与编排操作：锁定判断、旋转、单选与多选整体缩放、对齐与等距分布、线条拐点操作。
 // 纯数据计算，不依赖浏览器 DOM，可在编辑器界面和命令行测试中共用。
 import type { Value } from "./expr.ts";
+import { boardWorldOrigin } from "./boardlayout.ts";
 import {
   childrenOfNode,
   computeSceneLayout,
@@ -220,6 +221,11 @@ function localBoxInParent(scene: Scene, curr: string, boxes?: Map<string, Comput
     const box = boxes?.get(curr);
     const w = box ? box.width : n.width;
     const h = box ? box.height : n.height;
+    // 平面设计的页面在无限画布上一页页排开（boardlayout.ts）：根页面在原点，别的页面按排好的位置
+    if (n.type === "Page") {
+      const origin = boardWorldOrigin(scene, curr);
+      if (origin) return { x: origin.x, y: origin.y, width: w, height: h };
+    }
     const rootNode = scene.nodes[scene.root];
     const cx = n.x ?? (rootNode ? Math.round((rootNode.width - w) / 2) : 0);
     const cy = n.y ?? (rootNode ? Math.round((rootNode.height - h) / 2) : 0);

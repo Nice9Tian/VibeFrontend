@@ -384,8 +384,9 @@ async function editorTests(): Promise<void> {
       const iframe = document.getElementById("stage-iframe");
       const el = iframe.contentDocument.querySelector(${JSON.stringify(selector)});
       el.scrollIntoView({ block: "center", inline: "center" });
-      const r = el.getBoundingClientRect(), f = iframe.getBoundingClientRect();
-      return { x: f.left + r.left + r.width / 2, y: f.top + r.top + r.height / 2 };
+      // 设计窗口里量到的是没缩放的坐标，乘上视角的缩放才是屏幕上的
+      const r = el.getBoundingClientRect(), f = iframe.getBoundingClientRect(), k = f.width / iframe.offsetWidth;
+      return { x: f.left + (r.left + r.width / 2) * k, y: f.top + (r.top + r.height / 2) * k };
     })()`);
   const mouse = async (type: "mousePressed" | "mouseReleased" | "mouseMoved", x: number, y: number, button: "left" | "right" = "left", clickCount = 1) =>
     cdp.send("Input.dispatchMouseEvent", { type, x, y, button, clickCount, buttons: type === "mousePressed" ? (button === "left" ? 1 : 2) : 0 });
@@ -540,8 +541,8 @@ async function editorTests(): Promise<void> {
       await waitReady('[data-vf-id="waveFigure"][data-vf-type="Wave"]');
       const crumb = await cdp.evaluate<string>(`document.getElementById("project-name").innerText.replace(/\\s+/g, " ")`);
       assert.equal(crumb, "平面设计示例 › waveFigure");
-      const stage = await cdp.evaluate<string>(`document.getElementById("stage").style.width + " " + document.getElementById("stage").style.height`);
-      assert.equal(stage, "176mm 90mm", "子项目的页面就是这一块的大小");
+      const pageSize = await cdp.evaluate<string>(`(() => { const b = document.getElementById("stage-iframe").contentDocument.querySelector('[data-vf-board="part"]'); return b.style.width + " " + b.style.height; })()`);
+      assert.equal(pageSize, "176mm 90mm", "子项目的页面就是这一块的大小");
       assert.ok(await stageHas('[data-vf-board="part"].paper'), "页面带着总项目那一页的样式类");
       const masterBefore = fs.readFileSync(path.join(dir, "ui/scene.json"), "utf8");
       // 选中波形图，往右挪 1 毫米左右（方向键一次挪一格）
