@@ -4494,6 +4494,7 @@ function showMenu(x: number, y: number, id: string): void {
         { label: "垂直等距分布", action: () => void distributeSelected("vertical") },
       );
     }
+    if (canCarvePart(ids)) items.push("separator", { label: `把这 ${ids.length} 个拆成子项目……`, action: () => void carvePart(ids) });
     items.push(
       "separator",
       { label: "复制一份（Ctrl+D）", action: () => void duplicateNodes(ids) },
@@ -4527,7 +4528,7 @@ function showMenu(x: number, y: number, id: string): void {
     } else if (node(id)?.type !== "Container") {
       items.push({ label: "还原为容器", action: () => void revertToContainer(id) });
     }
-    if (canCarvePart(id)) items.push({ label: "拆成子项目……", action: () => void carvePart(id) });
+    if (canCarvePart([id])) items.push({ label: "拆成子项目……", action: () => void carvePart([id]) });
     if (node(id)?.type === "Shape" && linesAvailable(kind(), unit())) items.push({ label: "快速新建并连线（Ctrl+Enter）", action: () => void quickCreate(id) });
     items.push(...clipboardItems());
     items.push(
@@ -6608,27 +6609,51 @@ async function openPart(id: string, newTab: boolean): Promise<void> {
   await leaveTo(projectPageUrl(currentRootId(), ref.part), newTab);
 }
 
-/** 平面设计里，页面上的一样东西（不是页面本身、不是子项目）可以拆成子项目 */
-function canCarvePart(id: string): boolean {
-  const n = node(id);
-  return kind().id === "graphic" && !!n && !isBoardRoot(id) && n.type !== "Part" && n.type !== "Line" && !isNodeLocked(project.scene, id);
+/**
+ * 平面设计里，页面上的一样或几样东西（不是页面本身、不是子项目、没锁）可以拆成子项目；
+ * 几样东西要在同一个页面或同一个组里。
+ */
+function canCarvePart(ids: string[]): boolean {
+  if (kind().id !== "graphic" || ids.length === 0) return false;
+  const ok = ids.every((id) => {
+    const n = node(id);
+    return !!n && !isBoardRoot(id) && n.type !== "Part" && n.type !== "Line" && !isNodeLocked(project.scene, id);
+  });
+  return ok && ids.every((id) => parentOf(id) === parentOf(ids[0]));
+}
+
+/** 现在选中的、可以一起拆的东西（多选时去掉被选中的组里面又选中的） */
+function carveSelection(): string[] {
+  return selectedIds.length > 1 ? topSelection() : selectedId ? [selectedId] : [];
+}
+
+/** 名字 → 总项目里子项目节点的 ID（几样东西一起拆时才要新 ID）：times-23 → times23，重名往后编号 */
+function partNodeIdFor(folder: string): string {
+  const camel = folder.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+  const base = /^[A-Za-z]/.test(camel) && isValidIdentifier(camel) ? camel : "part";
+  const taken = new Set(Object.keys(project.scene.nodes));
+  if (!taken.has(base)) return base;
+  for (let i = 2; ; i++) if (!taken.has(`${base}${i}`)) return `${base}${i}`;
 }
 
 /**
- * 把一样东西（连同它里面的）拆成子项目：parts/<名字>/ 下写好子项目的文件，画布里原地换成子项目节点。
+ * 把一样或几样东西（连同它们里面的）拆成子项目：parts/<名字>/ 下写好子项目的文件，画布里原地换成子项目节点。
  * 撤销只把画布换回去，子项目的文件夹留着（项目面板里还看得到，可以再放回来或者删掉）。
  */
-async function carvePart(id: string): Promise<void> {
-  if (!canCarvePart(id) || !(await flushEditors())) return;
+async function carvePart(ids: string[]): Promise<void> {
+  if (!canCarvePart(ids) || !(await flushEditors())) return;
+  const single = ids.length === 1;
   const values = await askFields({
     title: "拆成子项目",
-    message: `把“${id}”连同它里面的东西拆出去单独做。拆完这里显示子项目的内容，在子项目里改，这里跟着变。样式表、控件和素材两边共用。`,
-    fields: [{ key: "name", label: "子项目的名字", value: id }],
+    message: single
+      ? `把“${ids[0]}”连同它里面的东西拆出去单独做。拆完这里显示子项目的内容，在子项目里改，这里跟着变。样式表、控件和素材两边共用。`
+      : `把选中的 ${ids.length} 样东西一起拆出去单独做，这里换成一块子项目（大小是它们合起来的范围）。在子项目里改，这里跟着变。样式表、控件和素材两边共用。`,
+    fields: [{ key: "name", label: "子项目的名字", value: single ? ids[0] : "" }],
     ok: "拆出来",
     validate: (v) => (v.name.trim() ? null : "起个名字"),
   });
-  // 对话框开着的时候项目可能重读过（文件监听）：节点还在、还能拆，才往下走
-  if (!values || !canCarvePart(id) || !(await flushEditors())) return;
+  // 对话框开着的时候项目可能重读过（文件监听）：东西还在、还能拆，才往下走
+  if (!values || !canCarvePart(ids) || !(await flushEditors())) return;
   const name = values.name.trim();
   // parts/ 下已有的文件夹都不用（包括没有 project.json 的半截文件夹，免得把里面的东西盖掉）
   let taken: Set<string>;
@@ -6637,14 +6662,15 @@ async function carvePart(id: string): Promise<void> {
   } catch (e) {
     return toast(`拆成子项目失败：读不到 ${PARTS_DIR}/ 文件夹（${(e as Error).message}）`);
   }
-  const folder = partFolderName(/[A-Za-z0-9]/.test(name) ? name : id, taken);
+  const folder = partFolderName(/[A-Za-z0-9]/.test(name) || !single ? name : ids[0], taken);
   const part = `${PARTS_DIR}/${folder}`;
-  const board = boardOfNode(project.scene, id);
+  const partNodeId = single ? ids[0] : partNodeIdFor(folder);
+  const board = boardOfNode(project.scene, ids[0]);
   const boardClass = board ? String(node(board)?.props?.class ?? "") : "";
   const scene = structuredClone(project.scene);
   let result: ReturnType<typeof carveOutPart>;
   try {
-    result = carveOutPart(scene, id, { part, name, boardClass, id: crypto.randomUUID() });
+    result = carveOutPart(scene, ids, { part, name, boardClass, id: crypto.randomUUID(), partNodeId });
   } catch (e) {
     return toast((e as Error).message);
   }
@@ -6661,8 +6687,9 @@ async function carvePart(id: string): Promise<void> {
   project.parts = new Map(project.parts ?? []).set(part, { name, scene: result.partScene });
   project.partList = [...(project.partList ?? []), { part, name }];
   project.scene = scene;
+  if (!single) selectedIds = [];
   await saveScene({ label: `拆成子项目 ${name}` });
-  if (node(id)?.type !== "Part") {
+  if (node(partNodeId)?.type !== "Part") {
     // 画布没存上（saveScene 已经把画布退回去、报了错）：刚写的子项目文件也拿掉，内存回到拆之前
     project.parts = before.parts;
     project.partList = before.partList;
@@ -6670,7 +6697,7 @@ async function carvePart(id: string): Promise<void> {
     renderAll();
     return;
   }
-  select(id);
+  select(partNodeId);
   toast(`已拆成子项目“${name}”（${part}）：双击它打开`);
 }
 
@@ -6745,10 +6772,8 @@ function registerShellCommands(): void {
     menu: "edit",
     group: "part",
     keywords: "子项目 单独 施工 part",
-    enabled: () => Boolean(selectedId && canCarvePart(selectedId)),
-    run: () => {
-      if (selectedId) void carvePart(selectedId);
-    },
+    enabled: () => canCarvePart(carveSelection()),
+    run: () => void carvePart(carveSelection()),
   });
   registerCommand({ id: "file.export", label: "导出……", menu: "file", group: "out", run: click("export-qt-btn") });
   registerCommand({ id: "file.preview-window", label: "独立预览", menu: "file", group: "out", run: click("open-preview-window") });

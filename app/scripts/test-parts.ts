@@ -144,6 +144,37 @@ async function pureTests(): Promise<void> {
     assert.throws(() => carveOutPart(master, "row", { part: "parts/x", name: "x", id: "i" }), /已经是子项目/);
   });
 
+  await test("几样东西一起拆：子项目节点是它们合起来的外包框（转过的按转过以后算），里面位置相对外包框，层次不变", () => {
+    const master: Scene = {
+      version: 1,
+      unit: "mm",
+      root: "p",
+      boards: ["p"],
+      nodes: {
+        p: { type: "Page", width: 420, height: 297, props: { class: "spread" }, children: ["bg", "t1", "mid", "t2", "g"] },
+        bg: { type: "Shape", x: 0, y: 0, width: 420, height: 297 },
+        t1: { type: "Text", x: 20, y: 30, width: 40, height: 10 },
+        mid: { type: "Text", x: 300, y: 200, width: 10, height: 10 },
+        // 转 90 度：方框 40×10 绕中心 (100, 105) 转成 10×40，外包框 x 95..105、y 85..125
+        t2: { type: "Text", x: 80, y: 100, width: 40, height: 10, rotation: 90 },
+        g: { type: "Group", x: 0, y: 0, width: 10, height: 10, children: ["gin"] },
+        gin: { type: "Text", x: 0, y: 0, width: 5, height: 5 },
+      },
+    };
+    const { partScene } = carveOutPart(master, ["t2", "t1"], { part: "parts/pair", name: "一对", boardClass: "spread", id: "i", partNodeId: "pair" });
+    assert.deepEqual(master.nodes.pair, { type: "Part", x: 20, y: 30, width: 85, height: 95, props: { part: "parts/pair", board: "part" } });
+    assert.equal(master.nodes.t1, undefined);
+    assert.equal(master.nodes.t2, undefined);
+    assert.deepEqual(master.nodes.p.children, ["bg", "pair", "mid", "g"], "子项目节点放在最靠下的那一个原来的位置");
+    assert.deepEqual(partScene.nodes.part.children, ["t1", "t2"], "叠放顺序照原样");
+    assert.equal(partScene.nodes.part.width, 85);
+    assert.equal(partScene.nodes.part.height, 95);
+    assert.deepEqual([partScene.nodes.t1.x, partScene.nodes.t1.y], [0, 0]);
+    assert.deepEqual([partScene.nodes.t2.x, partScene.nodes.t2.y, partScene.nodes.t2.rotation], [60, 70, 90], "转过的东西在子项目里照样转着");
+    assert.throws(() => carveOutPart(master, ["bg", "gin"], { part: "parts/x", name: "x", id: "i", partNodeId: "x" }), /同一个页面或同一个组/);
+    assert.throws(() => carveOutPart(master, ["bg", "mid"], { part: "parts/x", name: "x", id: "i", partNodeId: "g" }), /已经有叫 g 的/);
+  });
+
   await test("拆成子项目：拆出来的东西里有叫 part 的，子项目的页面换个名字；跨出去的连线挂接拿掉", () => {
     const make = (): Scene => ({
       version: 1,
@@ -497,6 +528,37 @@ async function editorTests(): Promise<void> {
       scene.nodes.waveFigure.x = 7;
       writeJson(partFile, scene);
       await waitFor("总项目跟着变", async () => (await cdp.evaluate<string>(`document.getElementById("stage-iframe").contentDocument.querySelector('[data-vf-type="Part"] .vf-part [data-vf-id="waveFigure"]')?.style.left ?? ""`)) === "7mm");
+    });
+
+    await test("多选两个文本框，右键 ▸ 把这 2 个拆成子项目：一块子项目，大小是两个合起来的范围", async () => {
+      const a = await center('[data-vf-id="rightTitle"]');
+      await mouse("mouseMoved", a.x, a.y);
+      await mouse("mousePressed", a.x, a.y);
+      await mouse("mouseReleased", a.x, a.y);
+      const b = await center('[data-vf-id="rightBody"]');
+      await mouse("mouseMoved", b.x, b.y);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: b.x, y: b.y, button: "left", clickCount: 1, buttons: 1, modifiers: 8 });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: b.x, y: b.y, button: "left", clickCount: 1, buttons: 0, modifiers: 8 });
+      await cdp.evaluate(SETTLE);
+      await mouse("mousePressed", b.x, b.y, "right");
+      await mouse("mouseReleased", b.x, b.y, "right");
+      await cdp.evaluate(SETTLE);
+      const clicked = await cdp.evaluate<boolean>(`(() => { const item = [...document.querySelectorAll("#menu *")].find((e) => e.children.length === 0 && e.textContent.trim() === "把这 2 个拆成子项目……"); item?.click(); return Boolean(item); })()`);
+      assert.ok(clicked, "多选的右键菜单里有“把这 2 个拆成子项目……”");
+      await waitFor("对话框", () => cdp.evaluate<boolean>(`Boolean(document.querySelector("#vf-ask-dialog input"))`));
+      await cdp.evaluate(`(() => { const input = document.querySelector("#vf-ask-dialog input"); input.value = "Right column"; input.dispatchEvent(new Event("input")); })()`);
+      await key("Enter", "Enter", 13);
+      const file = path.join(dir, "parts/right-column/ui/scene.json");
+      await waitFor("子项目的文件", async () => fs.existsSync(file) && masterScene().nodes.rightColumn?.type === "Part");
+      const master = masterScene();
+      assert.deepEqual(master.nodes.rightColumn, { type: "Part", x: 230, y: 14, width: 150, height: 80, props: { part: "parts/right-column", board: "part" } });
+      assert.equal(master.nodes.rightTitle, undefined);
+      assert.equal(master.nodes.rightBody, undefined);
+      const part = readJson<Scene>(file);
+      assert.deepEqual(part.nodes.part.children, ["rightTitle", "rightBody"]);
+      assert.deepEqual([part.nodes.rightBody.x, part.nodes.rightBody.y], [0, 20]);
+      await waitFor("总项目里画出两个文本框", () => stageHas('[data-vf-id="rightColumn"][data-vf-type="Part"] > .vf-part [data-vf-id="rightBody"] .vf-text'));
+      assert.equal(await cdp.evaluate<string>(`document.getElementById("problems").innerText.trim()`), "没有问题。");
     });
   } finally {
     await page.close();
