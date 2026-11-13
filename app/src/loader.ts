@@ -2,6 +2,7 @@
 // 工具界面里走 fs.ts，命令行里走 Node 的文件接口。
 import { parse as parseYaml } from "yaml";
 import { check } from "./check.ts";
+import { DEFAULT_KIND, isKindId, KINDS, type KindId } from "./kinds.ts";
 import { md5 } from "./md5.ts";
 import {
   LOGIC_PATH,
@@ -20,6 +21,14 @@ import type { ShapePreset } from "./shapes.ts";
 import { canonicalJson, normalizeLf } from "./structhash.ts";
 
 export const PRESETS_PATH = "ui/presets.json";
+
+/** 一个还什么都没放的画布：界面设计是一个空窗口，平面设计是一张 A4。 */
+export function emptyScene(kind: KindId): Scene {
+  if (kind === "graphic") {
+    return { version: 1, unit: "mm", root: "page1", boards: ["page1"], nodes: { page1: { type: "Page", width: 210, height: 297, children: [] } } };
+  }
+  return { version: 1, root: "window", nodes: { window: { type: "Window", width: 480, height: 320, children: [] } } };
+}
 
 export interface ProjectIO {
   /** 设计项目文件夹的绝对路径 */
@@ -95,25 +104,42 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
   let name = "未命名项目";
   let pageDoc = "docs/page.md";
   let qtExportDir: string | null = null;
+  let webExportDir: string | null = null;
+  let kind: KindId = DEFAULT_KIND;
+  let stylePaths: string[] = [];
   const extraWindowDocs: string[] = [];
+  const boardDocs: Record<string, string> = {};
   const configText = (await io.readText("project.json")) ?? "{}";
   try {
     const config = JSON.parse(configText) as {
       name?: string;
+      kind?: unknown;
       windows?: Array<{ id?: string; doc?: string }>;
-      export?: { qt?: string };
+      boards?: Array<{ id?: string; doc?: string }>;
+      styles?: unknown;
+      export?: { qt?: string; web?: string };
     };
     name = config.name ?? name;
-    pageDoc = config.windows?.[0]?.doc ?? pageDoc;
-    for (const win of config.windows ?? []) {
-      if (win?.doc) extraWindowDocs.push(win.doc);
+    if (config.kind !== undefined) {
+      if (isKindId(config.kind)) kind = config.kind;
+      else problems.push({ level: "error", message: `project.json 的 kind 写的是 ${JSON.stringify(config.kind)}，只能是 ${Object.keys(KINDS).map((k) => `"${k}"`).join(" 或 ")}；先按界面设计打开` });
     }
+    // 画板和说明文档的对应：界面设计写 windows，平面设计写 boards，两个是一回事
+    const boardList = config.boards ?? config.windows ?? [];
+    pageDoc = boardList[0]?.doc ?? pageDoc;
+    for (const win of boardList) {
+      if (win?.doc) extraWindowDocs.push(win.doc);
+      if (win?.id && win.doc) boardDocs[win.id] = win.doc;
+    }
+    if (Array.isArray(config.styles)) stylePaths = config.styles.filter((item): item is string => typeof item === "string" && item !== "");
+    else if (config.styles !== undefined) problems.push({ level: "error", message: "project.json 的 styles 要写成样式表路径的数组，例如 [\"styles/text.css\"]" });
     qtExportDir = config.export?.qt ?? null;
+    webExportDir = config.export?.web ?? null;
   } catch (e) {
     problems.push({ level: "error", message: `project.json 不是有效的 JSON：${(e as Error).message}` });
   }
 
-  let scene: Scene = previous?.scene ?? { version: 1, root: "window", nodes: { window: { type: "Window", width: 480, height: 320, children: [] } } };
+  let scene: Scene = previous?.scene ?? emptyScene(kind);
   const sceneText = await io.readText(SCENE_PATH);
   if (sceneText === null) {
     problems.push({ level: "error", message: `找不到 ${SCENE_PATH}` });
@@ -123,6 +149,14 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
     } catch (e) {
       problems.push({ level: "error", message: `${SCENE_PATH} 不是有效的 JSON，画布沿用上一份有效内容：${(e as Error).message}` });
     }
+  }
+
+  // 项目级的样式表：读出来才能算进指纹（改了要重新挂），文字样式的清单也从这里来
+  const styles: Array<{ path: string; text: string }> = [];
+  for (const path of stylePaths) {
+    const text = await io.readText(path);
+    if (text === null) problems.push({ level: "error", message: `找不到样式表 ${path}（project.json 的 styles 里写了它）` });
+    else styles.push({ path, text });
   }
 
   const logicText = (await io.readText(LOGIC_PATH)) ?? "";
@@ -216,12 +250,16 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
     if (text !== null) docs.set(path, text);
   }
 
-  const signature = JSON.stringify([sceneText, logicText, [...docs], fingerprints, configText, presetsText]);
+  const signature = JSON.stringify([sceneText, logicText, [...docs], fingerprints, configText, presetsText, styles]);
   const project: Project = {
+    kind,
     root,
     name,
     pageDoc,
+    boardDocs,
     qtExportDir,
+    webExportDir,
+    styles,
     presets,
     scene,
     sceneText: sceneText ?? "",

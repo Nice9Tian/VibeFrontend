@@ -3,6 +3,8 @@
 import type { Value } from "./expr.ts";
 import { LINE_DECL, SHAPE_DECL, type ShapePreset } from "./shapes.ts";
 import { STANDARD_COMPONENTS } from "../standard/index.ts";
+import { GRAPHIC_COMPONENTS } from "../standard/graphic.ts";
+import { DEFAULT_KIND, fromPx, kindOf, roundUnit, UNITS, type DesignKind, type KindId, type UnitSpec } from "./kinds.ts";
 import {
   computeDockWindowLayout,
   defaultSplitOrientation,
@@ -154,10 +156,24 @@ export interface SceneNode {
 
 export interface Scene {
   version: number;
+  /** 坐标和尺寸的单位：px（默认）或 mm。按纸张尺寸做的平面设计用 mm */
+  unit?: "px" | "mm";
   root: string;
   /** 全部顶层窗口与对话框 ID（不写时自动包含 root 及所有 Window/Dialog 节点） */
   windows?: string[];
+  /** 平面设计的页面 ID，按页序排列。和 windows 是同一个概念（顶层画板），只是页面有先后顺序，必须写出来 */
+  boards?: string[];
   nodes: Record<string, SceneNode>;
+}
+
+/** 画布用的单位。没写就是像素。 */
+export function unitOf(scene: Pick<Scene, "unit"> | null | undefined): UnitSpec {
+  return UNITS[scene?.unit === "mm" ? "mm" : "px"];
+}
+
+/** 把一个坐标或尺寸取整到画布单位的步长：像素取整数，毫米取到 0.01。 */
+export function roundInScene(scene: Pick<Scene, "unit"> | null | undefined, value: number): number {
+  return roundUnit(unitOf(scene), value);
 }
 
 // ---------- 控件 ----------
@@ -166,6 +182,14 @@ export interface PropDecl {
   type: "string" | "number" | "boolean" | "array" | "object";
   default?: Value;
   logic?: boolean;
+  /** 右侧“属性”页签里显示的名字；不写就显示属性名 */
+  label?: string;
+  /** 只能从这几个值里选 */
+  options?: string[];
+  /** 文字很长，用多行文本框编辑 */
+  multiline?: boolean;
+  /** 值是项目里一个文件的路径（图片等） */
+  asset?: boolean;
 }
 
 /** 控件在 Qt 里对应什么。没有这一项的控件，导出后是一个占位框。 */
@@ -231,6 +255,28 @@ export interface ComponentInstance {
   destroy(): void;
 }
 
+/**
+ * 设计窗口给控件的环境。编辑器、独立的播放页和导出的网页给的是同一套，控件不用区分自己跑在哪里。
+ */
+export interface StageServices {
+  /** 画布的单位：css 是单位名，px 是 1 个单位合多少 CSS 像素 */
+  unit: { css: "px" | "mm"; px: number };
+  /** 现在只该画静止的一帧：编辑模式下、打印导出时、系统设了减少动态效果时为 true */
+  still: boolean;
+  /**
+   * 正在导出成 PDF 或图片。播放页会在画完之后把画布（canvas）换成图片再出图；
+   * 用 WebGL 的控件建画布时要传 preserveDrawingBuffer: stage.print，画面才留得到那时候。
+   */
+  print: boolean;
+  /** 项目里的文件 → 可以直接用的地址（图片、数据、字体） */
+  url(path: string): string;
+  /**
+   * 有异步加载（图片、数据、字体）时调用，全部加载完再调用返回的函数。
+   * 导出图片和 PDF 时，会等所有控件都加载完才出图。
+   */
+  wait(label?: string): () => void;
+}
+
 export type ComponentCreate = (
   el: HTMLElement,
   ctx: {
@@ -239,6 +285,8 @@ export type ComponentCreate = (
     mode: "design" | "preview";
     stateImages?: StateImagesDecl;
     svgFiles?: Record<string, string>;
+    /** 设计窗口提供的环境；老的调用方可能没有 */
+    stage?: StageServices;
   },
 ) => ComponentInstance;
 
@@ -260,6 +308,21 @@ export const CONTAINER_DECL: ComponentDecl = {
   type: "Container",
   label: "容器",
   defaultSize: { width: 160, height: 80 },
+  children: true,
+};
+
+/**
+ * 组：平面设计里把几样东西归在一起。组自己不画东西，只是给里面的东西一个共同的位置；
+ * 可以带样式类，样式表里“某个组里面的文字”这样的规则靠它生效。
+ */
+export const GROUP_DECL: ComponentDecl = {
+  type: "Group",
+  label: "组",
+  description: "把几样东西归在一起，一起移动；可以带样式类",
+  defaultSize: { width: 240, height: 160 },
+  props: {
+    class: { type: "string", default: "", label: "样式类" },
+  },
   children: true,
 };
 
@@ -306,6 +369,26 @@ export const STACK_DECL: ComponentDecl = {
   children: true,
 };
 
+/**
+ * 页面：平面设计的画板。尺寸按画布单位（通常是毫米）。一个页面可以由几张纸左右拼成（跨页），
+ * 拼页数和版心边距只用来画参考线、吸附和做检查，不改变内容的位置。
+ */
+export const PAGE_DECL: ComponentDecl = {
+  type: "Page",
+  label: "页面",
+  description: "平面设计的一页或一个跨页",
+  defaultSize: { width: 210, height: 297 },
+  props: {
+    sheets: { type: "number", default: 1, label: "拼页数" },
+    marginTop: { type: "number", default: 0, label: "上边距" },
+    marginBottom: { type: "number", default: 0, label: "下边距" },
+    marginOuter: { type: "number", default: 0, label: "外边距" },
+    marginInner: { type: "number", default: 0, label: "内边距（靠中缝）" },
+    class: { type: "string", default: "", label: "样式类" },
+  },
+  children: true,
+};
+
 export const LAYOUT_TYPE_KINDS: Record<string, LayoutKind> = {
   VBox: "vbox",
   HBox: "hbox",
@@ -330,7 +413,16 @@ export const BUILTIN_TYPES = [
   "Flow",
   "Shape",
   "Line",
+  "Page",
+  "Group",
 ];
+
+/** 顶层画板的类型：窗口、对话框、页面。 */
+export const BOARD_TYPES = ["Window", "Dialog", "Page"];
+
+export function isBoardType(type: string | undefined): boolean {
+  return type !== undefined && BOARD_TYPES.includes(type);
+}
 
 // ---------- 效果 ----------
 
@@ -455,6 +547,8 @@ export interface Problem {
 
 /** 逻辑运行层需要的那一部分项目内容。 */
 export interface RuntimeProject {
+  /** 设计类型；不写就是界面设计 */
+  kind?: KindId;
   scene: Scene;
   logic: Logic;
   components: Map<string, { decl: ComponentDecl }>;
@@ -469,6 +563,8 @@ export interface Project extends RuntimeProject {
   name: string;
   /** 当前窗口的页面文档路径 */
   pageDoc: string;
+  /** 画板（窗口、页面）→ 它的说明文档，来自 project.json 的 windows / boards；没写的画板用 pageDoc */
+  boardDocs?: Record<string, string>;
   /** scene.json 的原文，用来算出某个节点在文件中的行号 */
   sceneText: string;
   logicText: string;
@@ -481,6 +577,10 @@ export interface Project extends RuntimeProject {
   presets: ShapePreset[];
   /** 导出成 Qt 时默认写到哪里，相对于项目文件夹；project.json 里没写就是空 */
   qtExportDir: string | null;
+  /** 导出成网页时默认写到哪里，相对于项目文件夹；project.json 里没写就是空 */
+  webExportDir?: string | null;
+  /** 项目级的样式表（project.json 的 styles）：路径和原文，按顺序挂进设计窗口 */
+  styles?: Array<{ path: string; text: string }>;
   problems: Problem[];
   /** 所有项目文件内容拼成的指纹，用来判断重新加载后有没有变化 */
   signature: string;
@@ -567,15 +667,41 @@ export function allConditions(logic: Logic): Array<{ id: string; def: ConditionD
   return list;
 }
 
+/** 这类设计自带的标准控件。界面设计是 17 种窗口控件，平面设计是文本框和图片。 */
+export function standardComponentsOf(kind: KindId | undefined | null): Map<string, LoadedComponent & { styleText: string }> {
+  return (kind ?? DEFAULT_KIND) === "graphic" ? GRAPHIC_COMPONENTS : STANDARD_COMPONENTS;
+}
+
+/** 项目的设计类型。 */
+export function kindOfProject(project: Pick<RuntimeProject, "kind"> | null | undefined): DesignKind {
+  return kindOf(project?.kind);
+}
+
 export function declFor(project: RuntimeProject, type: string): ComponentDecl | null {
   if (type === "Stack") return STACK_DECL;
   if (type === "Dock") return DOCK_DECL;
   if (type === "Dialog") return DIALOG_DECL;
+  // 页面和组是平面设计的内置类型；界面设计项目里同名的项目控件照旧可用
+  if (type === "Page" && project.kind === "graphic") return PAGE_DECL;
+  if (type === "Group" && project.kind === "graphic") return GROUP_DECL;
   if (type === "Container" || type === "Window" || type in LAYOUT_TYPE_KINDS) return CONTAINER_DECL;
   if (type === "External") return EXTERNAL_DECL;
   if (type === "Shape") return SHAPE_DECL;
   if (type === "Line") return LINE_DECL;
-  return project.components.get(type)?.decl ?? STANDARD_COMPONENTS.get(type)?.decl ?? null;
+  return project.components.get(type)?.decl ?? standardComponentsOf(project.kind).get(type)?.decl ?? null;
+}
+
+/**
+ * 新放进画布的节点默认多大，按画布单位。
+ * 工具自带的类型和标准控件的默认尺寸是按像素定的，换成画布单位；项目自己的控件按画布单位写，原样用。
+ */
+export function defaultSizeFor(project: RuntimeProject, type: string): { width: number; height: number } {
+  if (type === "Page") return PAGE_DECL.defaultSize!;
+  const own = project.components.get(type)?.decl.defaultSize;
+  if (own) return own;
+  const unit = unitOf(project.scene);
+  const size = declFor(project, type)?.defaultSize ?? CONTAINER_DECL.defaultSize!;
+  return { width: roundUnit(unit, fromPx(unit, size.width)), height: roundUnit(unit, fromPx(unit, size.height)) };
 }
 
 /** 获取某个控件声明自身携带的需要翻译的效果名列表。 */
@@ -715,6 +841,9 @@ export function removeNodeReferences(scene: Scene, removed: ReadonlySet<string>)
   if (scene.windows) {
     scene.windows = scene.windows.filter((wid) => !removed.has(wid));
   }
+  if (scene.boards) {
+    scene.boards = scene.boards.filter((bid) => !removed.has(bid));
+  }
   for (const n of Object.values(scene.nodes)) {
     if (n.children) n.children = n.children.filter((cid) => !removed.has(cid));
     if (n.docks) n.docks = n.docks.filter((cid) => !removed.has(cid));
@@ -742,6 +871,9 @@ export function renameNodeReferences(scene: Scene, oldId: string, nextId: string
   if (scene.root === oldId) scene.root = nextId;
   if (scene.windows) {
     scene.windows = scene.windows.map((wid) => (wid === oldId ? nextId : wid));
+  }
+  if (scene.boards) {
+    scene.boards = scene.boards.map((bid) => (bid === oldId ? nextId : bid));
   }
   for (const n of Object.values(scene.nodes)) {
     if (n.children) n.children = n.children.map((cid) => (cid === oldId ? nextId : cid));
@@ -799,12 +931,30 @@ export function allWindowIds(scene: Scene): string[] {
   const add = (id: string) => {
     if (id && scene.nodes[id] && !result.includes(id)) result.push(id);
   };
+  // 页面有先后顺序：写了 boards 就按它的顺序，root 不抢到最前面
+  for (const id of scene.boards ?? []) add(id);
   add(scene.root);
   for (const id of scene.windows ?? []) add(id);
   for (const [id, n] of Object.entries(scene.nodes)) {
-    if (n.type === "Window" || n.type === "Dialog") add(id);
+    if (isBoardType(n.type)) add(id);
   }
   return result;
+}
+
+/** 全部顶层画板（窗口、对话框、页面）。和 allWindowIds 是同一个函数，平面设计里叫这个名字更顺。 */
+export const allBoardIds = allWindowIds;
+
+/** 节点在哪个画板里；节点自己就是画板时返回它自己。 */
+export function boardOfNode(scene: Scene, id: string): string | null {
+  const visited = new Set<string>();
+  let cursor: string | null = id;
+  while (cursor && !visited.has(cursor)) {
+    visited.add(cursor);
+    const parent = parentOfNode(scene, cursor);
+    if (!parent) return scene.nodes[cursor] ? cursor : null;
+    cursor = parent;
+  }
+  return null;
 }
 
 export function allMenuItems(scene: Scene): Array<{ windowId: string; menuId: string; item: MenuItemSpec }> {
@@ -928,20 +1078,21 @@ export function prefHeight(node: SceneNode): number {
   return Math.round(node.size?.fixedHeight ?? node.size?.preferredHeight ?? node.height ?? 32);
 }
 
-export function clampWidth(node: SceneNode, w: number): number {
-  if (node.size?.fixedWidth !== undefined) return Math.round(node.size.fixedWidth);
+/** round：结果怎么取整。像素画布取整数（默认），毫米画布由调用方传入按 0.01 取整的函数。 */
+export function clampWidth(node: SceneNode, w: number, round: (value: number) => number = Math.round): number {
+  if (node.size?.fixedWidth !== undefined) return round(node.size.fixedWidth);
   if (node.size?.horizontal === "fixed") return prefWidth(node);
   const minW = node.size?.minWidth ?? 0;
   const maxW = node.size?.maxWidth ?? Infinity;
-  return Math.round(Math.max(minW, Math.min(maxW, w)));
+  return round(Math.max(minW, Math.min(maxW, w)));
 }
 
-export function clampHeight(node: SceneNode, h: number): number {
-  if (node.size?.fixedHeight !== undefined) return Math.round(node.size.fixedHeight);
+export function clampHeight(node: SceneNode, h: number, round: (value: number) => number = Math.round): number {
+  if (node.size?.fixedHeight !== undefined) return round(node.size.fixedHeight);
   if (node.size?.vertical === "fixed") return prefHeight(node);
   const minH = node.size?.minHeight ?? 0;
   const maxH = node.size?.maxHeight ?? Infinity;
-  return Math.round(Math.max(minH, Math.min(maxH, h)));
+  return round(Math.max(minH, Math.min(maxH, h)));
 }
 
 /** 按与 Qt qGeomCalc 相同的累积舍入与最小/最大夹紧重分配规则把 rem 按比例分给各项。 */
@@ -1055,12 +1206,14 @@ export function syncResizedNodeDimensions(
   scene?: Scene,
   id?: string,
 ): void {
-  const rawW = Math.max(minSize, Math.round(width));
-  const rawH = Math.max(minSize, Math.round(height));
+  // 按画布单位取整：像素取整数，毫米取到 0.01。最小尺寸也一起取整，免得写进文件的是 2.1166…
+  const round = (value: number) => roundInScene(scene, value);
+  const rawW = round(Math.max(minSize, width));
+  const rawH = round(Math.max(minSize, height));
   if (node.size?.fixedWidth !== undefined) node.size.fixedWidth = rawW;
   if (node.size?.fixedHeight !== undefined) node.size.fixedHeight = rawH;
-  const nextW = clampWidth(node, rawW);
-  const nextH = clampHeight(node, rawH);
+  const nextW = clampWidth(node, rawW, round);
+  const nextH = clampHeight(node, rawH, round);
   node.width = nextW;
   node.height = nextH;
   if (node.size?.preferredWidth !== undefined) node.size.preferredWidth = nextW;
@@ -1252,10 +1405,10 @@ export function computeSceneLayout(
     if (!layout) {
       for (const cid of children) {
         const c = scene.nodes[cid]!;
-        const cx = Math.round(c.x ?? 0);
-        const cy = Math.round((c.y ?? 0) + headerOffset);
-        const cw = Math.round(c.width);
-        const ch = Math.round(c.height);
+        const cx = roundInScene(scene, c.x ?? 0);
+        const cy = roundInScene(scene, (c.y ?? 0) + headerOffset);
+        const cw = roundInScene(scene, c.width);
+        const ch = roundInScene(scene, c.height);
         const box: ComputedBox = {
           x: cx,
           y: cy,
@@ -1730,6 +1883,7 @@ export function isSceneNodeLocked(scene: Scene, id: string): boolean {
 
 export function canNodeHoldChildren(project: RuntimeProject | null, node: SceneNode | undefined): boolean {
   if (!node) return false;
+  if ((node.type === "Page" || node.type === "Group") && project?.kind === "graphic") return true;
   if (
     node.type === "Window" ||
     node.type === "Dialog" ||

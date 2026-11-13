@@ -2765,3 +2765,257 @@ body.standalone-preview #stage {
 }
 
 
+
+/* ---------- 设计类型与单位 ---------- */
+
+/* 翻页条：一次只看一个画板的设计类型（平面设计）才有 */
+#board-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#board-bar[hidden] {
+  display: none;
+}
+
+#board-bar .tool-select {
+  max-width: 180px;
+}
+
+/* 在画布上直接改字时，编辑层不拦鼠标：点击落到设计窗口里的文字上 */
+#overlay.text-editing {
+  pointer-events: none;
+}
+
+/* 毫米画布上，编辑层整层按“1 个单位合多少像素”放大（见 main.ts 的 syncOverlayScale）。
+   写死像素的线宽和字号除以这个倍数，屏幕上看起来和像素画布一样 */
+#overlay.unit-scaled #selection {
+  border-width: calc(1.5px / var(--vf-unit, 1));
+}
+
+#overlay.unit-scaled #marquee {
+  border-width: calc(1px / var(--vf-unit, 1));
+}
+
+#overlay.unit-scaled #guides .guide-align,
+#overlay.unit-scaled #guides .guide-gap,
+#overlay.unit-scaled #guides .attach-box {
+  stroke-width: calc(1px / var(--vf-unit, 1));
+}
+
+#overlay.unit-scaled #guides .guide-label {
+  font-size: calc(10px / var(--vf-unit, 1));
+}
+
+#overlay.unit-scaled .node-ghost {
+  font-size: calc(12px / var(--vf-unit, 1));
+  border-width: calc(1px / var(--vf-unit, 1));
+}
+
+#overlay.unit-scaled .text-editor {
+  padding: calc(2px / var(--vf-unit, 1));
+  border-width: calc(1px / var(--vf-unit, 1));
+  border-radius: calc(2px / var(--vf-unit, 1));
+}
+
+/* 页面的参考线：版心（品红）和中缝（蓝，虚线）。只在编辑时显示，不进导出 */
+#page-guides {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+#page-guides .page-margin {
+  fill: none;
+  stroke: #e0249a;
+  stroke-opacity: 0.55;
+  stroke-width: calc(1px / var(--vf-zoom, 1));
+}
+
+#page-guides .page-fold {
+  stroke: #2563eb;
+  stroke-opacity: 0.55;
+  stroke-width: calc(1px / var(--vf-zoom, 1));
+  stroke-dasharray: calc(6px / var(--vf-zoom, 1)) calc(4px / var(--vf-zoom, 1));
+}
+
+body.preview #page-guides {
+  display: none;
+}
+
+/* ---------- 右侧“属性”页签 ---------- */
+
+.props-pane {
+  overflow-y: auto;
+  padding-bottom: 16px;
+}
+
+.props-section {
+  padding: 8px 10px 4px;
+  border-top: 1px solid var(--line);
+}
+
+.props-section h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.props-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 8px;
+}
+
+.props-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.props-cell > span {
+  flex: none;
+  width: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.props-cell > input {
+  flex: 1;
+  min-width: 0;
+}
+
+.props-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  min-width: 0;
+}
+
+.props-row.wide {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.props-label {
+  flex: none;
+  width: 92px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.props-row.wide .props-label {
+  width: auto;
+}
+
+.props-row > input[type="text"],
+.props-row > input[type="number"],
+.props-row > select,
+.props-row > textarea,
+.props-classes > input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}
+
+.props-pane input[type="text"],
+.props-pane input[type="number"],
+.props-pane select,
+.props-pane textarea {
+  box-sizing: border-box;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.props-pane textarea {
+  resize: vertical;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  line-height: 1.45;
+}
+
+.props-pane input:disabled,
+.props-pane select:disabled,
+.props-pane textarea:disabled {
+  opacity: 0.55;
+}
+
+.props-note {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.props-classes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.props-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.props-chip {
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.props-chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.props-chip:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.props-head {
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ---------- 平面设计的导出对话框 ---------- */
+
+.export-graphic-title {
+  margin-top: 4px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.export-graphic-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.export-graphic-files {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+  word-break: break-all;
+}

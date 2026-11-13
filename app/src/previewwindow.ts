@@ -38,12 +38,15 @@ export async function notifyMainWindowSelect(id: string): Promise<void> {
   }
 }
 
-/** 打开或聚焦独立预览窗口。 */
+/** 打开或聚焦独立预览窗口。平面设计打开的是播放页（player.html）：按页排开，和导出的网页一样。 */
 export async function openStandalonePreviewWindow(project: Project): Promise<void> {
   const root = project.scene.nodes[project.scene.root];
-  const width = Math.max(440, (root?.width ?? 520) + 48);
-  const height = Math.max(340, (root?.height ?? 360) + 112);
-  const title = `${root?.title ?? project.name} · 独立预览`;
+  const player = project.kind === "graphic";
+  const width = player ? 1280 : Math.max(440, (root?.width ?? 520) + 48);
+  const height = player ? 900 : Math.max(340, (root?.height ?? 360) + 112);
+  const title = `${player ? project.name : (root?.title ?? project.name)} · 独立预览`;
+  const pageUrl = player ? "player.html" : "index.html?preview=1";
+  const browserUrl = player ? "player.html" : "?preview=1";
 
   if (inTauri) {
     try {
@@ -57,14 +60,14 @@ export async function openStandalonePreviewWindow(project: Project): Promise<voi
         return;
       }
       const win = new WebviewWindow("preview", {
-        url: "index.html?preview=1",
+        url: pageUrl,
         title,
         width,
         height,
         resizable: true,
       });
       win.once("tauri://error", () => {
-        window.open("?preview=1", "vf-standalone-preview", `width=${width},height=${height},resizable=yes`);
+        window.open(browserUrl, "vf-standalone-preview", `width=${width},height=${height},resizable=yes`);
       });
       return;
     } catch {
@@ -72,7 +75,7 @@ export async function openStandalonePreviewWindow(project: Project): Promise<voi
     }
   }
 
-  window.open("?preview=1", "vf-standalone-preview", `width=${width},height=${height},resizable=yes`);
+  window.open(browserUrl, "vf-standalone-preview", `width=${width},height=${height},resizable=yes`);
 }
 
 /** 主窗口初始化：在顶部栏右侧挂载“▶ 独立预览”按钮，并监听来自独立预览窗口的 Alt+点击选中事件。 */

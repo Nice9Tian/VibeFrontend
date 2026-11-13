@@ -8,6 +8,7 @@ import {
   isPartitionedWindow,
   layoutOf,
   parentOfNode,
+  roundInScene,
   syncResizedNodeDimensions,
   type ComputedBox,
   type Scene,
@@ -304,10 +305,10 @@ export function worldRectToNodeLocalInScene(
       ? worldToNodeLocalInScene(scene, parentId, worldCenter, layoutBoxes)
       : worldCenter;
   return {
-    x: Math.round(localCenter.x - worldRect.width / 2),
-    y: Math.round(localCenter.y - worldRect.height / 2),
-    width: Math.round(worldRect.width),
-    height: Math.round(worldRect.height),
+    x: roundInScene(scene, localCenter.x - worldRect.width / 2),
+    y: roundInScene(scene, localCenter.y - worldRect.height / 2),
+    width: roundInScene(scene, worldRect.width),
+    height: roundInScene(scene, worldRect.height),
   };
 }
 
@@ -455,6 +456,8 @@ export function computeResizeBox(
   keepAspect = false,
   minSize = MIN_NODE_SIZE,
   rotationDeg = 0,
+  /** 保持长宽比时另一边怎么取整：像素画布取整数，毫米画布由调用方传入按 0.01 取整的函数 */
+  round: (value: number) => number = Math.round,
 ): Rect {
   let ldx = dx;
   let ldy = dy;
@@ -470,11 +473,11 @@ export function computeResizeBox(
   if (handle.includes("s")) height = orig.height + ldy;
   if (handle.includes("n")) height = orig.height - ldy;
   if (keepAspect && handle.length === 2) {
-    const ratio = orig.width / Math.max(1, orig.height);
-    if (Math.abs(width / Math.max(1, orig.width)) >= Math.abs(height / Math.max(1, orig.height))) {
-      height = Math.round((width * orig.height) / Math.max(1, orig.width));
+    const ratio = orig.width / Math.max(1e-6, orig.height);
+    if (Math.abs(width / Math.max(1e-6, orig.width)) >= Math.abs(height / Math.max(1e-6, orig.height))) {
+      height = round((width * orig.height) / Math.max(1e-6, orig.width));
     } else {
-      width = Math.round(height * ratio);
+      width = round(height * ratio);
     }
   }
   width = Math.max(minSize, width);
@@ -543,13 +546,13 @@ export function scaleGroupItems(
   for (const item of items) {
     const nx = mapX(item.abs.x);
     const ny = mapY(item.abs.y);
-    const nw = Math.max(minSize, Math.round(item.abs.width * sx));
-    const nh = Math.max(minSize, Math.round(item.abs.height * sy));
+    const nw = roundInScene(scene, Math.max(minSize, item.abs.width * sx));
+    const nh = roundInScene(scene, Math.max(minSize, item.abs.height * sy));
     const local = scene
       ? worldRectToNodeLocalInScene(scene, item.id, { x: nx, y: ny, width: nw, height: nh })
       : {
-          x: Math.round(nx - item.parentOrigin.x),
-          y: Math.round(ny - item.parentOrigin.y),
+          x: roundInScene(scene, nx - item.parentOrigin.x),
+          y: roundInScene(scene, ny - item.parentOrigin.y),
           width: nw,
           height: nh,
         };
@@ -574,13 +577,13 @@ export function scaleGroupItems(
       };
       if (!p.startNode) {
         const pt = mapLinePt(numVal(p.x1, 0), numVal(p.y1, 0));
-        p.x1 = Math.round(pt.x);
-        p.y1 = Math.round(pt.y);
+        p.x1 = roundInScene(scene, pt.x);
+        p.y1 = roundInScene(scene, pt.y);
       }
       if (!p.endNode) {
         const pt = mapLinePt(numVal(p.x2, 160), numVal(p.y2, 0));
-        p.x2 = Math.round(pt.x);
-        p.y2 = Math.round(pt.y);
+        p.x2 = roundInScene(scene, pt.x);
+        p.y2 = roundInScene(scene, pt.y);
       }
       const bends = parseBends(p.bends);
       if (bends.length > 0) {
@@ -656,6 +659,8 @@ export interface AlignItem {
 export function alignRects(
   items: AlignItem[],
   kind: AlignKind,
+  /** 结果怎么取整：像素画布取整数（默认），毫米画布由调用方传入 */
+  round: (value: number) => number = Math.round,
   referenceBounds?: Rect,
 ): Map<string, { x: number; y: number }> {
   const result = new Map<string, { x: number; y: number }>();
@@ -686,8 +691,8 @@ export function alignRects(
         break;
     }
     result.set(item.id, {
-      x: Math.round(absX - origin.x),
-      y: Math.round(absY - origin.y),
+      x: round(absX - origin.x),
+      y: round(absY - origin.y),
     });
   }
   return result;
@@ -700,12 +705,14 @@ export function alignRects(
 export function distributeRects(
   items: AlignItem[],
   axis: DistributeAxis,
+  /** 结果怎么取整：像素画布取整数（默认），毫米画布由调用方传入 */
+  round: (value: number) => number = Math.round,
 ): Map<string, { x: number; y: number }> {
   const result = new Map<string, { x: number; y: number }>();
   if (items.length < 3) {
     for (const item of items) {
       const origin = item.parentOrigin ?? { x: 0, y: 0 };
-      result.set(item.id, { x: Math.round(item.rect.x - origin.x), y: Math.round(item.rect.y - origin.y) });
+      result.set(item.id, { x: round(item.rect.x - origin.x), y: round(item.rect.y - origin.y) });
     }
     return result;
   }
@@ -725,8 +732,8 @@ export function distributeRects(
     const absX = axis === "horizontal" ? cursor : item.rect.x;
     const absY = axis === "vertical" ? cursor : item.rect.y;
     result.set(item.id, {
-      x: Math.round(absX - origin.x),
-      y: Math.round(absY - origin.y),
+      x: round(absX - origin.x),
+      y: round(absY - origin.y),
     });
     cursor += sizeOf(item.rect) + gap;
   }
@@ -747,7 +754,7 @@ export function alignSceneNodes(scene: Scene, ids: string[], kind: AlignKind): b
     visualMap.set(id, v);
     return { id, rect: v };
   });
-  const next = alignRects(items, kind);
+  const next = alignRects(items, kind, (value) => roundInScene(scene, value));
   let changed = false;
   for (const [id, pos] of next) {
     const n = scene.nodes[id];
@@ -756,8 +763,8 @@ export function alignSceneNodes(scene: Scene, ids: string[], kind: AlignKind): b
     const wdx = pos.x - oldV.x;
     const wdy = pos.y - oldV.y;
     const pDelta = worldToParentDeltaInScene(scene, id, wdx, wdy);
-    const nx = Math.round((n.x ?? 0) + pDelta.x);
-    const ny = Math.round((n.y ?? 0) + pDelta.y);
+    const nx = roundInScene(scene, (n.x ?? 0) + pDelta.x);
+    const ny = roundInScene(scene, (n.y ?? 0) + pDelta.y);
     if ((n.x ?? 0) !== nx || (n.y ?? 0) !== ny) {
       n.x = nx;
       n.y = ny;
@@ -779,7 +786,7 @@ export function distributeSceneNodes(scene: Scene, ids: string[], axis: Distribu
     visualMap.set(id, v);
     return { id, rect: v };
   });
-  const next = distributeRects(items, axis);
+  const next = distributeRects(items, axis, (value) => roundInScene(scene, value));
   let changed = false;
   for (const [id, pos] of next) {
     const n = scene.nodes[id];
@@ -788,8 +795,8 @@ export function distributeSceneNodes(scene: Scene, ids: string[], axis: Distribu
     const wdx = pos.x - oldV.x;
     const wdy = pos.y - oldV.y;
     const pDelta = worldToParentDeltaInScene(scene, id, wdx, wdy);
-    const nx = Math.round((n.x ?? 0) + pDelta.x);
-    const ny = Math.round((n.y ?? 0) + pDelta.y);
+    const nx = roundInScene(scene, (n.x ?? 0) + pDelta.x);
+    const ny = roundInScene(scene, (n.y ?? 0) + pDelta.y);
     if ((n.x ?? 0) !== nx || (n.y ?? 0) !== ny) {
       n.x = nx;
       n.y = ny;

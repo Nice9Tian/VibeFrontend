@@ -190,6 +190,18 @@ async function main(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
+    // 界面设计项目打开时停在“文档”页签，页签顺序和以前一样。
+    // 右栏放不下时一部分页签收在“…”里，先把右栏拉宽让它们全回到一排，再看顺序
+    await page.evaluate(`document.getElementById("right").style.width = "1200px"`);
+    await new Promise((r) => setTimeout(r, 400));
+    const tabs = await page.evaluate<{ selected: string; order: string[] }>(`(() => ({
+      selected: document.querySelector('#right .tabs [aria-selected="true"]')?.id ?? "",
+      order: [...document.querySelectorAll("#right .tabs > [role=tab]")].filter((t) => !t.hidden).map((t) => t.id),
+    }))()`);
+    await page.evaluate(`document.getElementById("right").style.width = ""`);
+    assert.equal(tabs.selected, "tab-doc");
+    assert.deepEqual(tabs.order, ["tab-layout", "tab-menu", "tab-state", "tab-events", "tab-doc", "tab-yaml"]);
+
     const views: Array<[string, string]> = [
       ["刚打开", ""],
       ["适应窗口", clickZoom("适应")],

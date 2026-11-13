@@ -17,6 +17,7 @@ import {
   windowDockIds,
 } from "./dock.ts";
 import type { Value } from "./expr.ts";
+import { fromPx } from "./kinds.ts";
 import {
   canNodeHoldChildren,
   childrenOfNode,
@@ -27,6 +28,7 @@ import {
   computeSceneLayout,
   CONTAINER_DECL,
   declFor,
+  defaultSizeFor,
   findStateLeaf,
   isBusinessState,
   isLayoutPositionedNode,
@@ -36,7 +38,9 @@ import {
   parentOfNode,
   prefHeight,
   prefWidth,
+  roundInScene,
   syncResizedNodeDimensions,
+  unitOf,
   type ComputedBox,
   type DockArea,
   type DockDropTarget,
@@ -140,11 +144,12 @@ export function placeNewNodeInScene(
   if (!parent || isSceneNodeLocked(scene, targetParentId)) return false;
 
   const pLayout = layoutOf(parent);
-  const minDim = type === "Line" ? 1 : 8;
+  // 最小尺寸是按屏幕像素定的手感，换成画布单位再比
+  const minDim = fromPx(unitOf(scene), type === "Line" ? 1 : 8);
   const created: SceneNode = {
     type,
-    width: Math.max(minDim, Math.round(defaultSize.width)),
-    height: Math.max(minDim, Math.round(defaultSize.height)),
+    width: roundInScene(scene, Math.max(minDim, defaultSize.width)),
+    height: roundInScene(scene, Math.max(minDim, defaultSize.height)),
   };
   if (options.props && Object.keys(options.props).length > 0) {
     created.props = JSON.parse(JSON.stringify(options.props)) as Record<string, Value>;
@@ -172,11 +177,11 @@ export function placeNewNodeInScene(
     const originX = targetParentId === scene.root ? 0 : (pBox?.absX ?? parent.x ?? 0);
     const originY = targetParentId === scene.root ? 0 : (pBox?.absY ?? parent.y ?? 0);
     if (options.exactTopLeft) {
-      created.x = Math.round(options.exactTopLeft.x - originX);
-      created.y = Math.round(options.exactTopLeft.y - originY);
+      created.x = roundInScene(scene, options.exactTopLeft.x - originX);
+      created.y = roundInScene(scene, options.exactTopLeft.y - originY);
     } else {
-      created.x = Math.round(px - originX - created.width / 2);
-      created.y = Math.round(py - originY - created.height / 2);
+      created.x = roundInScene(scene, px - originX - created.width / 2);
+      created.y = roundInScene(scene, py - originY - created.height / 2);
     }
     scene.nodes[id] = created;
     if (options.insertIndex !== undefined) {
@@ -645,16 +650,16 @@ export function updateNodePropsAndMeta(
   if (isSceneNodeLocked(scene, nodeId) || (nodeId === scene.root && n.locked)) return false;
 
   if (meta.width !== undefined && Number.isFinite(meta.width)) {
-    const rawW = Math.max(8, Math.round(meta.width));
+    const rawW = roundInScene(scene, Math.max(fromPx(unitOf(scene), 8), meta.width));
     if (n.size?.fixedWidth !== undefined) n.size.fixedWidth = rawW;
     if (n.size?.preferredWidth !== undefined) n.size.preferredWidth = rawW;
-    n.width = clampWidth(n, rawW);
+    n.width = clampWidth(n, rawW, (value) => roundInScene(scene, value));
   }
   if (meta.height !== undefined && Number.isFinite(meta.height)) {
-    const rawH = Math.max(8, Math.round(meta.height));
+    const rawH = roundInScene(scene, Math.max(fromPx(unitOf(scene), 8), meta.height));
     if (n.size?.fixedHeight !== undefined) n.size.fixedHeight = rawH;
     if (n.size?.preferredHeight !== undefined) n.size.preferredHeight = rawH;
-    n.height = clampHeight(n, rawH);
+    n.height = clampHeight(n, rawH, (value) => roundInScene(scene, value));
   }
   if (n.type === "Dock" && (meta.width !== undefined || meta.height !== undefined)) {
     syncResizedNodeDimensions(n, n.width, n.height, 8, scene, nodeId);
@@ -795,7 +800,7 @@ export async function commitPaletteDropOnStage(type: string, px: number, py: num
   if (!deps || deps.getMode() !== "edit") return null;
   const project = deps.getProject();
   const decl = declFor(project, type) ?? CONTAINER_DECL;
-  const size = decl.defaultSize ?? CONTAINER_DECL.defaultSize!;
+  const size = defaultSizeFor(project, type);
   const hoveredContainerId = deps.containerAtPoint(px, py);
   const targetContainerId = type === "Dock" ? project.scene.root : hoveredContainerId;
   if (isSceneNodeLocked(project.scene, hoveredContainerId) || isSceneNodeLocked(project.scene, targetContainerId)) {

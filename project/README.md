@@ -4,6 +4,8 @@
 
 本文件描述的是**当前原型已经支持的内容**。没有写在这里的写法，原型不认识。
 
+本文件是**界面设计**项目（`project.json` 里 `kind` 不写或写 `"ui"`）的规则。平面设计项目（`"kind": "graphic"`：海报、作品集这类按纸张做的版面）的规则见 VibeFrontend 仓库的 `examples/graphic/design/README.md`。
+
 ## 1. 文件结构
 
 ```text

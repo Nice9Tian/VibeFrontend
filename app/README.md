@@ -18,6 +18,23 @@ npm run tauri dev
 
 只想在浏览器里看界面时，可以运行 `npm run dev`，再打开 <http://localhost:1420>。这时文件读写走 `vite.config.ts` 里的开发接口，功能与桌面窗口相同。两种方式都使用 1420 端口，不能同时运行。
 
+## 两种设计：界面设计和平面设计
+
+设计项目的 `project.json` 里 `kind` 决定它是哪一类设计（不写就是界面设计）：
+
+| | 界面设计（`"ui"`） | 平面设计（`"graphic"`） |
+| --- | --- | --- |
+| 做什么 | 软件的窗口、面板、对话框 | 海报、作品集、宣传页这类按纸张做的版面 |
+| 画板 | 窗口（对话框叠在主窗口上） | 页面（一次看一页，翻页条翻页；一个页面可以是左右拼起来的跨页） |
+| 单位 | 像素 | 毫米（`scene.json` 的 `unit`） |
+| 右侧页签 | 布局、菜单、状态、文档、YAML、交互事件 | 属性、文档 |
+| 自带的控件 | 17 种窗口控件 | 文本框（`Text`，一段 HTML，样子由样式类决定）、图片（`Image`）、组（`Group`） |
+| 预览 | 逻辑运行，控件能点 | 项目控件按时间动；编辑时只画静帧 |
+| 导出 | Qt 6 工程 | 网页、PDF、每页的图片 |
+
+两类共用同一个编辑器内核：画布、图层、选中、拖动、缩放、吸附、撤销、锁定、引用、说明文档、文件监听。随类型变的东西集中在 `src/kinds.ts`，加一类设计就是在那里加一项，再写它自己的标准控件和导出。
+平面设计项目的写法见 `examples/graphic/design/README.md`。
+
 ## 已实现
 
 - 素材栏：容器、外部容器、六种排版容器（竖排 `VBox`、横排 `HBox`、换行 `Flow`、网格 `Grid`、表单 `Form`、层叠 `Stack`）、停靠面板 `Dock`、对话框 `Dialog`、17 种自带标准控件（`Label`、`Button`、`TextInput`、`TextArea`、`SpinBox`、`Slider`、`ScrollBar`、`ComboBox`、`CheckBox`、`TabBar`、`List`、`Tree`、`DataForm`、`DialogButtonBox`、`Spacer`、`Separator`、`FloatBox` 浮动嵌入框）、“收藏的素材”（跨项目复用，按结构哈希与 `.designer/origins.json` 来源记录识别“已修改 / 有新版本 / 两边都改过”，拖进还没有它的项目时自动复制到 `components/`）、`project/components/` 中的自定义控件（自动列出，可拖入或右键收藏），以及基础图形、流程图图形、线条和“我的预设”
@@ -61,7 +78,24 @@ npm run tauri dev
 - 右侧“文档”和“YAML”页签：文档支持“源码 | 预览”切换和所见即所得编辑（未改动的段落保留原文，小节和锁定标记受保护），停止输入后自动保存
 - 问题栏：YAML 语法、未知的状态路径或条件代号、控件不支持的属性和事件、逻辑函数中的网页元素检查、找不到的说明小节等
 - 事件记录
+- 平面设计（`kind: "graphic"`）：毫米画布（位置和尺寸存到 0.01 mm，按屏幕像素定的手感如吸附距离、最小尺寸、粘贴错开的距离换成毫米）；页面和跨页（`boards` 定页序，翻页条和 PageUp / PageDown 翻页，加页、删页、调页序）；版心和中缝参考线，东西能吸到版心线和中缝上；文本框双击直接改字（存成单引号属性的 HTML），右侧“属性”页签改位置尺寸、纸张、样式类（列出样式表里用 `/* @style 名字 */` 标出的样式）和控件属性；项目样式表（`project.json` 的 `styles`）挂进设计窗口；问题栏检查压中缝的文字、找不到的样式类、界面设计专用的类型
+- 设计窗口是“项目的网页”：基准地址指向项目文件夹，项目里的脚本在设计窗口自己的环境里加载，控件可以用相对路径引用项目里别的脚本（`lib/`）、图片和字体；脚本改了换一个干净的环境重新加载
+- 播放页（`player.html`）：不带编辑器，按页排开显示平面设计项目，能翻页、能打印；“▶ 独立预览”打开它，导出的网页里跑的也是它
 - 监听项目文件夹，外部修改后自动刷新；YAML 写坏时沿用上一份有效逻辑。和界面上的操作同时发生时的规则：同一文件的写入按发起顺序落盘；重载等本窗口的写入做完再读，读的过程中又有本地修改就重读；文档和 YAML 编辑器里没保存的内容不被外部修改覆盖，停止输入后以编辑器为准；“新增”表单里填了一半的内容不被重绘清掉；鼠标按住时不重绘，松开后补上。切换选中时文档页立刻跟到新控件，没存完的说明继续按原来的小节保存，保存失败时内容留着，文档页有重试入口，回到原控件能接着编辑；一次操作写几个文件时中途失败会把已写的写回原内容，内存、界面和历史都回到操作之前，写回也失败时提示哪些文件不一致
+
+## 导出成网页、PDF 和图片（平面设计）
+
+```bash
+npm run export:web -- <设计项目文件夹> [导出到哪个文件夹]
+```
+
+```bash
+npm run export:print -- <设计项目文件夹> [输出文件夹] [--scale 2] [--no-png] [--no-split]
+```
+
+- 网页：`index.html` + 播放页的程序 + 项目里画面要用的文件（说明文档、逻辑不带）。要经一个本地服务打开。内容没变的文件不重写，上次导出过、这次不要的会删掉（只删导出记录 `vf-export.json` 里记着的）。
+- PDF 和图片：先导出成网页，用无头浏览器（本机的 Chrome 或 Edge，不加载扩展）按纸张原大打开，等字体、图片和各控件的异步加载都到位再出图。`boards.pdf` 每个页面一页、尺寸和页面一样，文字和矢量图形保持矢量；有跨页时 `sheets.pdf` 按纸拆开；每页一张 PNG（`--scale` 是像素倍数）；`report.json` 记着页面清单和页面报的错。画布（`<canvas>`）在出图前自动换成同样大小的图片，PDF 里不会有白方块。
+- 编辑器顶栏的“导出”按钮在浏览器模式（`npm run dev`）下经开发服务器调用同样的脚本。
 
 ## 导出成 Qt
 
@@ -96,6 +130,7 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 - `animean/mainwindow.cpp` 与 `animean/pythonbind/python_bindings.cpp` 中尚未剥离的 9 类直接操作画布/弹窗/光标/菜单的 Python UI 回调（`animean/business/README.md` 归纳的 `registerAnimeanUiOverlayCallback`、`registerAnimeanUiEditHandlesCallback` / `registerAnimeanUiEditHandleCallback`、`registerAnimeanUiCursorCallback`、`registerAnimeanUiMenuCallbacks`、`registerAnimeanUiLayerContextCallbacks`、`registerAnimeanUiDialogCallbacks`、`registerAnimeanUiFreezeCallbacks` / `registerAnimeanUiFreezeCallback`、`registerAnimeanUiPythonDebugCallback`、`registerAnimeanUiStatusCallback` 以及 `registerAnimeanUiWindowsCallback`、`registerAnimeanUiFillPaintModeCallback`、`registerAnimeanUiPadValueCallback`）、动态脚本菜单、Python 调试 REPL 面板、交互式导入弹窗等界面耦合；`examples/animean/qt/app/Connect.cpp` 目前只连接了示范桩代码（`LayerModel` + `CanvasWidget`，仅接线 `layerToggleVisibleRequested` 与 `setCanvasHostWidget`），尚未接入 `AnimeanBusiness`；`animean/CMakeLists.txt` 默认 `ANIMEAN_WITH_PYTHON=ON` 且 `animean/tests/business_tests.cpp` 含有 `pybind11`（`py::scoped_interpreter`）测试，但最后一次集成验收是在 `ANIMEAN_WITH_PYTHON=OFF` 下执行的，`ANIMEAN_WITH_PYTHON=ON` 未在最终版本上重跑
 - Tauri 桌面端运行路径（`inTauri` / `isInTauri()` 分支，如素材库桌面读写、独立预览 `WebviewWindow`、导出目录选择与写盘）仅通过 `cargo check` 和浏览器/Node 端开发接口模拟验证，未实际启动 Tauri 桌面端验证
 - 批量跑用例时曾出现单轮 300 到 610 秒的卡顿，后来多轮没有再出现，根因未查明
+- 平面设计：桌面窗口（Tauri）里的“导出”还不能直接写盘，对话框给出要运行的命令；线条（`Line`）只在像素画布上有；还没有出血；文字放不下时没有自动提示
 - `可视化界面与语义逻辑设计工具.md` 第 11 节“以后再做”中的内容：跨重启持久化的 `.designer/history/` 及按单小节/单条目独立版本列表与恢复、YAML 条目/整文件锁定（`# 🔒`）与 `component.json` 锁定及 `.designer/locks.json` 快照比对恢复、iOS 版、控件实现直接引入 npm 依赖包并由工具打包、运行时自动测量文字溢出提示、导出为独立 Web 项目
 
 
@@ -148,5 +183,19 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 | `src/eventedit.ts` | 右侧“交互事件”页签：列出控件的事件并触发 |
 | `src/overflowbar.ts` | 一排控件放不下时收进“…”弹层，工具栏和右侧页签共用 |
 | `src/panels.ts` | 左、右、下三个拓展栏的收起、展开和拖动改大小 |
-| `src/fs.ts` | 文件读写接口，桌面窗口里调用 Rust，浏览器里调用开发接口 |
-| `src-tauri/src/lib.rs` | Rust 系统层：读、写、列目录、监听 |
+| `src/fs.ts` | 文件读写接口，桌面窗口里调用 Rust，浏览器里调用开发接口；项目文件的网址（`projectBaseUrl`、`projectUrl`） |
+| `src/kinds.ts` | 设计类型（界面设计、平面设计）各自的配置和单位换算：编辑器内核只从这里取随类型变的东西 |
+| `src/stage.ts` | 设计窗口里节点的 DOM 怎么搭：基础样式、方框、给控件的环境（`StageServices`）；编辑器、播放页和导出共用 |
+| `src/pages.ts` | 页面：版心、中缝、页码，加页、删页、调页序 |
+| `src/propsedit.ts` | 右侧“属性”页签（平面设计） |
+| `src/richtext.ts` | 文本框的内容写回文件：固定写法的 HTML，属性用单引号 |
+| `src/classstyles.ts` | 项目样式表里有哪些样式类 |
+| `src/checkgraphic.ts` | 平面设计项目的检查 |
+| `src/cssscope.ts` | 控件样式加类型前缀（从 `project.ts` 挪出来，播放页也用） |
+| `src/graphicexport.ts` | 平面设计的“导出”对话框 |
+| `src/player/` | 播放页：`main.ts` 画页面，`host.ts` 是编辑器自带的入口（`player.html`） |
+| `standard/graphic.ts` | 平面设计自带的标准控件：文本框、图片 |
+| `scripts/export-web.ts`、`scripts/export-print.ts` | 导出成网页、PDF 和图片的命令行入口 |
+| `scripts/headless.ts` | 无头浏览器和本地静态服务的共用部分 |
+| `scripts/test-graphic.ts` | 平面设计的测试：纯函数、检查、真实编辑器里的拖动翻页改字预览、导出（`npm run test:graphic`） |
+| `src-tauri/src/lib.rs` | Rust 系统层：读、写、列目录、监听，以及把项目文件夹当网站的 `vfproject` 协议 |

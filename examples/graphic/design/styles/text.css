@@ -1,0 +1,52 @@
+/* 文字样式。每个样式前面用 @style 标出给人看的名字，右侧“属性”页签据此列出可以点选的样式。
+   字号用 pt，长度用 mm：这些是印出来的尺寸。 */
+
+/* @style 大标题 */
+.title {
+  font-family: var(--serif);
+  font-weight: 800;
+  font-size: 54pt;
+  line-height: 1.1;
+  letter-spacing: 0.04em;
+}
+
+/* @style 小标题 */
+.heading {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 20pt;
+  line-height: 1.3;
+}
+
+/* @style 导语 */
+.lead {
+  font-size: 13pt;
+  line-height: 22pt;
+  color: var(--ink-2);
+}
+.lead b {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* @style 正文 */
+.body {
+  font-size: 9.5pt;
+  line-height: 16pt;
+  text-align: justify;
+}
+.body p {
+  margin: 0 0 2.5mm;
+}
+
+/* @style 图注 */
+.caption {
+  font-family: var(--sans);
+  font-size: 7pt;
+  line-height: 10pt;
+  color: var(--ink-2);
+}
+.caption .no {
+  color: var(--accent);
+  letter-spacing: 0.08em;
+}

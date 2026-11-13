@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "unit": "mm",
+  "root": "spread1",
+  "boards": ["spread1", "page3"],
+  "nodes": {
+    "spread1": {
+      "type": "Page",
+      "width": 420,
+      "height": 297,
+      "props": {
+        "sheets": 2,
+        "marginTop": 14,
+        "marginBottom": 16,
+        "marginOuter": 14,
+        "marginInner": 20,
+        "class": "paper"
+      },
+      "children": ["coverTitle", "coverLead", "coverRule", "waveFigure", "waveCaption", "rightTitle", "rightBody", "picture", "pictureCaption"]
+    },
+    "coverTitle": {
+      "type": "Text",
+      "x": 14,
+      "y": 14,
+      "width": 150,
+      "height": 34,
+      "props": { "class": "title", "html": "设计类型" }
+    },
+    "coverLead": {
+      "type": "Text",
+      "x": 14,
+      "y": 52,
+      "width": 120,
+      "height": 30,
+      "props": {
+        "class": "lead",
+        "html": "同一个编辑器，换一种设计类型，画板就从<b>窗口</b>变成<b>纸</b>，单位从像素变成毫米。"
+      }
+    },
+    "coverRule": {
+      "type": "Shape",
+      "x": 14,
+      "y": 88,
+      "width": 176,
+      "height": 0.4,
+      "props": { "shape": "rectangle", "fill": "#1e1d1a", "stroke": "none" }
+    },
+    "waveFigure": {
+      "type": "Wave",
+      "x": 14,
+      "y": 100,
+      "width": 176,
+      "height": 90,
+      "props": { "waves": 3, "still": 0.25 }
+    },
+    "waveCaption": {
+      "type": "Text",
+      "x": 14,
+      "y": 194,
+      "width": 176,
+      "height": 12,
+      "props": {
+        "class": "caption",
+        "html": "<span class='no'>图 1</span> 项目自己的控件：预览时会动，编辑和打印时停在选好的一帧。"
+      }
+    },
+    "rightTitle": {
+      "type": "Text",
+      "x": 230,
+      "y": 14,
+      "width": 150,
+      "height": 16,
+      "props": { "class": "heading", "html": "文字用样式类，不逐个调" }
+    },
+    "rightBody": {
+      "type": "Text",
+      "x": 230,
+      "y": 34,
+      "width": 110,
+      "height": 60,
+      "props": {
+        "class": "body",
+        "html": "<p>文本框里是一段 HTML。它长什么样由样式类决定，样式类写在项目的样式表里，改一处，用到它的地方都跟着变。</p><p>双击文本框直接改字；要调字号、行距、颜色，把控件的引用贴给 Agent，让它改样式表。</p>"
+      }
+    },
+    "picture": {
+      "type": "Image",
+      "x": 230,
+      "y": 104,
+      "width": 176,
+      "height": 110,
+      "props": { "src": "assets/grid.svg", "fit": "cover" }
+    },
+    "pictureCaption": {
+      "type": "Text",
+      "x": 230,
+      "y": 218,
+      "width": 176,
+      "height": 8,
+      "props": { "class": "caption", "html": "<span class='no'>图 2</span> 图片：项目里 assets/ 下的文件。" }
+    },
+    "page3": {
+      "type": "Page",
+      "width": 210,
+      "height": 297,
+      "props": { "marginTop": 14, "marginBottom": 16, "marginOuter": 14, "class": "paper" },
+      "children": ["page3Title", "page3Body"]
+    },
+    "page3Title": {
+      "type": "Text",
+      "x": 14,
+      "y": 14,
+      "width": 150,
+      "height": 16,
+      "props": { "class": "heading", "html": "单页" }
+    },
+    "page3Body": {
+      "type": "Text",
+      "x": 14,
+      "y": 34,
+      "width": 120,
+      "height": 30,
+      "props": { "class": "body", "html": "<p>一个页面可以是一张纸，也可以是左右拼起来的跨页。导出成 PDF 时，每个页面是一页，尺寸和这里一样。</p>" }
+    }
+  }
+}

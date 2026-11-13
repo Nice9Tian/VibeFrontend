@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "export:qt": "node scripts/export-qt.ts",
+    "export:web": "node scripts/export-web.ts",
+    "export:print": "node scripts/export-print.ts",
     "case": "node scripts/run-case.ts",
     "test": "node scripts/test-all.ts",
     "test:qt": "node scripts/test-all.ts --qt",
@@ -17,7 +19,8 @@
     "test:docview": "node scripts/test-docview.ts",
     "test:layout-edit": "node scripts/test-layout-edit.ts",
     "test:mode-switch": "node scripts/test-mode-switch.ts",
-    "test:dock": "node scripts/test-dock.ts"
+    "test:dock": "node scripts/test-dock.ts",
+    "test:graphic": "node scripts/test-graphic.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

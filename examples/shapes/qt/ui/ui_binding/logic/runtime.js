@@ -3681,6 +3681,198 @@ var VF = (function(exports) {
 		}
 	].map((item) => [item.decl.type, item]));
 	//#endregion
+	//#region standard/graphic.ts
+	const text = (value) => typeof value === "string" ? value : value === void 0 || value === null ? "" : String(value);
+	/**
+	* 文本框。内容是一段 HTML（props.html），长什么样由样式类（props.class）决定，
+	* 样式类写在项目的样式表里（project.json 的 styles）。
+	* 一段话可以只有文字，也可以带行内标签（<b>、<i>、<span class>、<br>），或者是几个段落、一张表。
+	*/
+	const createText = (el, { props }) => {
+		const box = el.ownerDocument.createElement("div");
+		el.append(box);
+		let shown = null;
+		const update = (next) => {
+			const cls = text(next.class).trim();
+			box.className = cls ? `vf-text vf-fill ${cls}` : "vf-text vf-fill";
+			const html = text(next.html);
+			if (html !== shown && !box.isContentEditable) {
+				box.innerHTML = html;
+				shown = html;
+			}
+		};
+		update(props);
+		return {
+			update,
+			destroy: () => box.remove()
+		};
+	};
+	const TEXT_DECL = {
+		type: "Text",
+		label: "文本框",
+		description: "一段文字。双击直接改字；样式用项目样式表里的样式类",
+		defaultSize: {
+			width: 240,
+			height: 72
+		},
+		props: {
+			html: {
+				type: "string",
+				default: "文字",
+				label: "内容（HTML）",
+				multiline: true
+			},
+			class: {
+				type: "string",
+				default: "",
+				label: "样式类"
+			}
+		},
+		children: false
+	};
+	/**
+	* 图片。props.src 是项目里的文件路径；fit 决定图片怎样放进框里，position 决定裁切时留哪一部分。
+	*/
+	const createImage = (el, { props, stage }) => {
+		const doc = el.ownerDocument;
+		const box = doc.createElement("div");
+		const img = doc.createElement("img");
+		img.draggable = false;
+		box.append(img);
+		el.append(box);
+		let shownSrc = null;
+		let done = null;
+		const settle = () => {
+			done === null || done === void 0 || done();
+			done = null;
+		};
+		img.addEventListener("load", settle);
+		img.addEventListener("error", () => {
+			box.dataset.missing = "true";
+			settle();
+		});
+		const update = (next) => {
+			const cls = text(next.class).trim();
+			box.className = cls ? `vf-image vf-fill ${cls}` : "vf-image vf-fill";
+			const src = text(next.src).trim();
+			if (src !== shownSrc) {
+				shownSrc = src;
+				settle();
+				delete box.dataset.missing;
+				box.dataset.empty = String(!src);
+				if (src) {
+					var _stage$wait;
+					done = (_stage$wait = stage === null || stage === void 0 ? void 0 : stage.wait(`图片 ${src}`)) !== null && _stage$wait !== void 0 ? _stage$wait : null;
+					img.src = stage ? stage.url(src) : src;
+				} else img.removeAttribute("src");
+			}
+			img.alt = text(next.alt);
+			img.style.objectFit = text(next.fit) || "contain";
+			img.style.objectPosition = text(next.position) || "50% 50%";
+		};
+		update(props);
+		return {
+			update,
+			destroy: () => {
+				settle();
+				box.remove();
+			}
+		};
+	};
+	const GRAPHIC_COMPONENTS = new Map([{
+		decl: TEXT_DECL,
+		folder: "Text",
+		create: createText,
+		styleText: `.vf-text[contenteditable="true"] { outline: none; cursor: text; user-select: text; }`
+	}, {
+		decl: {
+			type: "Image",
+			label: "图片",
+			description: "项目里的一张图片（位图或 SVG）",
+			defaultSize: {
+				width: 240,
+				height: 160
+			},
+			props: {
+				src: {
+					type: "string",
+					default: "",
+					label: "文件",
+					asset: true
+				},
+				fit: {
+					type: "string",
+					default: "contain",
+					label: "放进框里的方式",
+					options: [
+						"contain",
+						"cover",
+						"fill",
+						"none"
+					]
+				},
+				position: {
+					type: "string",
+					default: "50% 50%",
+					label: "裁切时留哪里"
+				},
+				alt: {
+					type: "string",
+					default: "",
+					label: "替代文字"
+				},
+				class: {
+					type: "string",
+					default: "",
+					label: "样式类"
+				}
+			},
+			children: false
+		},
+		folder: "Image",
+		create: createImage,
+		styleText: `.vf-image { overflow: hidden; }
+.vf-image > img { display: block; width: 100%; height: 100%; }
+.vf-image[data-empty="true"], .vf-image[data-missing="true"] { background: repeating-linear-gradient(45deg, rgba(120,120,120,0.10) 0 6px, rgba(120,120,120,0.18) 6px 12px); outline: 1px dashed rgba(90,90,90,0.6); outline-offset: -1px; }
+.vf-image[data-empty="true"] > img, .vf-image[data-missing="true"] > img { visibility: hidden; }`
+	}].map((item) => [item.decl.type, item]));
+	//#endregion
+	//#region src/kinds.ts
+	const UNITS = {
+		px: {
+			css: "px",
+			px: 1,
+			step: 1,
+			digits: 0,
+			nudge: [1, 10],
+			grids: [
+				0,
+				4,
+				8,
+				10,
+				16
+			]
+		},
+		mm: {
+			css: "mm",
+			px: 96 / 25.4,
+			step: .01,
+			digits: 2,
+			nudge: [.1, 1],
+			grids: [
+				0,
+				1,
+				2.5,
+				5
+			]
+		}
+	};
+	/** 把一个长度取整到这个单位的步长，并去掉浮点运算留下的尾巴（0.1 + 0.2 这类）。 */
+	function roundUnit(unit, value) {
+		if (unit.step === 1) return Math.round(value);
+		return Number((Math.round(value / unit.step) * unit.step).toFixed(unit.digits));
+	}
+	//#endregion
 	//#region src/dock.ts
 	const DOCK_AREAS = [
 		"top",
@@ -4596,6 +4788,14 @@ var VF = (function(exports) {
 	}
 	//#endregion
 	//#region src/model.ts
+	/** 画布用的单位。没写就是像素。 */
+	function unitOf(scene) {
+		return UNITS[(scene === null || scene === void 0 ? void 0 : scene.unit) === "mm" ? "mm" : "px"];
+	}
+	/** 把一个坐标或尺寸取整到画布单位的步长：像素取整数，毫米取到 0.01。 */
+	function roundInScene(scene, value) {
+		return roundUnit(unitOf(scene), value);
+	}
 	/** 未转换的容器。 */
 	const CONTAINER_DECL = {
 		type: "Container",
@@ -4604,6 +4804,25 @@ var VF = (function(exports) {
 			width: 160,
 			height: 80
 		},
+		children: true
+	};
+	/**
+	* 组：平面设计里把几样东西归在一起。组自己不画东西，只是给里面的东西一个共同的位置；
+	* 可以带样式类，样式表里“某个组里面的文字”这样的规则靠它生效。
+	*/
+	const GROUP_DECL = {
+		type: "Group",
+		label: "组",
+		description: "把几样东西归在一起，一起移动；可以带样式类",
+		defaultSize: {
+			width: 240,
+			height: 160
+		},
+		props: { class: {
+			type: "string",
+			default: "",
+			label: "样式类"
+		} },
 		children: true
 	};
 	/** 外部容器：工具里只是占位，导出后由业务把自己的控件放进来。 */
@@ -4669,6 +4888,52 @@ var VF = (function(exports) {
 		},
 		children: true
 	};
+	/**
+	* 页面：平面设计的画板。尺寸按画布单位（通常是毫米）。一个页面可以由几张纸左右拼成（跨页），
+	* 拼页数和版心边距只用来画参考线、吸附和做检查，不改变内容的位置。
+	*/
+	const PAGE_DECL = {
+		type: "Page",
+		label: "页面",
+		description: "平面设计的一页或一个跨页",
+		defaultSize: {
+			width: 210,
+			height: 297
+		},
+		props: {
+			sheets: {
+				type: "number",
+				default: 1,
+				label: "拼页数"
+			},
+			marginTop: {
+				type: "number",
+				default: 0,
+				label: "上边距"
+			},
+			marginBottom: {
+				type: "number",
+				default: 0,
+				label: "下边距"
+			},
+			marginOuter: {
+				type: "number",
+				default: 0,
+				label: "外边距"
+			},
+			marginInner: {
+				type: "number",
+				default: 0,
+				label: "内边距（靠中缝）"
+			},
+			class: {
+				type: "string",
+				default: "",
+				label: "样式类"
+			}
+		},
+		children: true
+	};
 	const LAYOUT_TYPE_KINDS = {
 		VBox: "vbox",
 		HBox: "hbox",
@@ -4677,6 +4942,15 @@ var VF = (function(exports) {
 		Stack: "stack",
 		Flow: "flow"
 	};
+	/** 顶层画板的类型：窗口、对话框、页面。 */
+	const BOARD_TYPES = [
+		"Window",
+		"Dialog",
+		"Page"
+	];
+	function isBoardType(type) {
+		return type !== void 0 && BOARD_TYPES.includes(type);
+	}
 	function isStateLeaf(def) {
 		return typeof def === "object" && def !== null && typeof def.type === "string";
 	}
@@ -4751,16 +5025,22 @@ var VF = (function(exports) {
 		}
 		return list;
 	}
+	/** 这类设计自带的标准控件。界面设计是 17 种窗口控件，平面设计是文本框和图片。 */
+	function standardComponentsOf(kind) {
+		return (kind !== null && kind !== void 0 ? kind : "ui") === "graphic" ? GRAPHIC_COMPONENTS : STANDARD_COMPONENTS;
+	}
 	function declFor(project, type) {
-		var _ref, _project$components$g, _project$components$g2, _STANDARD_COMPONENTS$;
+		var _ref, _project$components$g, _project$components$g2, _standardComponentsOf;
 		if (type === "Stack") return STACK_DECL;
 		if (type === "Dock") return DOCK_DECL;
 		if (type === "Dialog") return DIALOG_DECL;
+		if (type === "Page" && project.kind === "graphic") return PAGE_DECL;
+		if (type === "Group" && project.kind === "graphic") return GROUP_DECL;
 		if (type === "Container" || type === "Window" || type in LAYOUT_TYPE_KINDS) return CONTAINER_DECL;
 		if (type === "External") return EXTERNAL_DECL;
 		if (type === "Shape") return SHAPE_DECL;
 		if (type === "Line") return LINE_DECL;
-		return (_ref = (_project$components$g = (_project$components$g2 = project.components.get(type)) === null || _project$components$g2 === void 0 ? void 0 : _project$components$g2.decl) !== null && _project$components$g !== void 0 ? _project$components$g : (_STANDARD_COMPONENTS$ = STANDARD_COMPONENTS.get(type)) === null || _STANDARD_COMPONENTS$ === void 0 ? void 0 : _STANDARD_COMPONENTS$.decl) !== null && _ref !== void 0 ? _ref : null;
+		return (_ref = (_project$components$g = (_project$components$g2 = project.components.get(type)) === null || _project$components$g2 === void 0 ? void 0 : _project$components$g2.decl) !== null && _project$components$g !== void 0 ? _project$components$g : (_standardComponentsOf = standardComponentsOf(project.kind).get(type)) === null || _standardComponentsOf === void 0 ? void 0 : _standardComponentsOf.decl) !== null && _ref !== void 0 ? _ref : null;
 	}
 	/**
 	* 根据控件当前状态（不可用、按下、悬停、选中、正常）选出应显示的状态与对应的 SVG 文件名。
@@ -4810,14 +5090,15 @@ var VF = (function(exports) {
 		}
 	}
 	function allWindowIds(scene) {
-		var _scene$windows;
+		var _scene$boards, _scene$windows;
 		const result = [];
 		const add = (id) => {
 			if (id && scene.nodes[id] && !result.includes(id)) result.push(id);
 		};
+		for (const id of (_scene$boards = scene.boards) !== null && _scene$boards !== void 0 ? _scene$boards : []) add(id);
 		add(scene.root);
 		for (const id of (_scene$windows = scene.windows) !== null && _scene$windows !== void 0 ? _scene$windows : []) add(id);
-		for (const [id, n] of Object.entries(scene.nodes)) if (n.type === "Window" || n.type === "Dialog") add(id);
+		for (const [id, n] of Object.entries(scene.nodes)) if (isBoardType(n.type)) add(id);
 		return result;
 	}
 	function allMenuItems(scene) {
@@ -4884,21 +5165,22 @@ var VF = (function(exports) {
 		var _ref4, _ref5, _node$size$fixedHeigh, _node$size3, _node$size4;
 		return Math.round((_ref4 = (_ref5 = (_node$size$fixedHeigh = (_node$size3 = node.size) === null || _node$size3 === void 0 ? void 0 : _node$size3.fixedHeight) !== null && _node$size$fixedHeigh !== void 0 ? _node$size$fixedHeigh : (_node$size4 = node.size) === null || _node$size4 === void 0 ? void 0 : _node$size4.preferredHeight) !== null && _ref5 !== void 0 ? _ref5 : node.height) !== null && _ref4 !== void 0 ? _ref4 : 32);
 	}
-	function clampWidth(node, w) {
+	/** round：结果怎么取整。像素画布取整数（默认），毫米画布由调用方传入按 0.01 取整的函数。 */
+	function clampWidth(node, w, round = Math.round) {
 		var _node$size5, _node$size6, _node$size$minWidth, _node$size7, _node$size$maxWidth, _node$size8;
-		if (((_node$size5 = node.size) === null || _node$size5 === void 0 ? void 0 : _node$size5.fixedWidth) !== void 0) return Math.round(node.size.fixedWidth);
+		if (((_node$size5 = node.size) === null || _node$size5 === void 0 ? void 0 : _node$size5.fixedWidth) !== void 0) return round(node.size.fixedWidth);
 		if (((_node$size6 = node.size) === null || _node$size6 === void 0 ? void 0 : _node$size6.horizontal) === "fixed") return prefWidth(node);
 		const minW = (_node$size$minWidth = (_node$size7 = node.size) === null || _node$size7 === void 0 ? void 0 : _node$size7.minWidth) !== null && _node$size$minWidth !== void 0 ? _node$size$minWidth : 0;
 		const maxW = (_node$size$maxWidth = (_node$size8 = node.size) === null || _node$size8 === void 0 ? void 0 : _node$size8.maxWidth) !== null && _node$size$maxWidth !== void 0 ? _node$size$maxWidth : Infinity;
-		return Math.round(Math.max(minW, Math.min(maxW, w)));
+		return round(Math.max(minW, Math.min(maxW, w)));
 	}
-	function clampHeight(node, h) {
+	function clampHeight(node, h, round = Math.round) {
 		var _node$size9, _node$size10, _node$size$minHeight, _node$size11, _node$size$maxHeight, _node$size12;
-		if (((_node$size9 = node.size) === null || _node$size9 === void 0 ? void 0 : _node$size9.fixedHeight) !== void 0) return Math.round(node.size.fixedHeight);
+		if (((_node$size9 = node.size) === null || _node$size9 === void 0 ? void 0 : _node$size9.fixedHeight) !== void 0) return round(node.size.fixedHeight);
 		if (((_node$size10 = node.size) === null || _node$size10 === void 0 ? void 0 : _node$size10.vertical) === "fixed") return prefHeight(node);
 		const minH = (_node$size$minHeight = (_node$size11 = node.size) === null || _node$size11 === void 0 ? void 0 : _node$size11.minHeight) !== null && _node$size$minHeight !== void 0 ? _node$size$minHeight : 0;
 		const maxH = (_node$size$maxHeight = (_node$size12 = node.size) === null || _node$size12 === void 0 ? void 0 : _node$size12.maxHeight) !== null && _node$size$maxHeight !== void 0 ? _node$size$maxHeight : Infinity;
-		return Math.round(Math.max(minH, Math.min(maxH, h)));
+		return round(Math.max(minH, Math.min(maxH, h)));
 	}
 	/** 按与 Qt qGeomCalc 相同的累积舍入与最小/最大夹紧重分配规则把 rem 按比例分给各项。 */
 	function distributeStretch(rem, weights, mins, maxs) {
@@ -5067,13 +5349,13 @@ var VF = (function(exports) {
 				for (const cid of children) {
 					var _c$x, _c$y;
 					const c = scene.nodes[cid];
-					const cx = Math.round((_c$x = c.x) !== null && _c$x !== void 0 ? _c$x : 0);
-					const cy = Math.round(((_c$y = c.y) !== null && _c$y !== void 0 ? _c$y : 0) + headerOffset);
+					const cx = roundInScene(scene, (_c$x = c.x) !== null && _c$x !== void 0 ? _c$x : 0);
+					const cy = roundInScene(scene, ((_c$y = c.y) !== null && _c$y !== void 0 ? _c$y : 0) + headerOffset);
 					const box = {
 						x: cx,
 						y: cy,
-						width: Math.round(c.width),
-						height: Math.round(c.height),
+						width: roundInScene(scene, c.width),
+						height: roundInScene(scene, c.height),
 						absX: parentBox.absX + cx,
 						absY: parentBox.absY + cy,
 						visible: parentBox.visible && isVisible(cid),
@@ -6113,9 +6395,9 @@ var VF = (function(exports) {
 			for (const winId of allWindowIds(this.project.scene)) {
 				var _ref, _n$initialOpen, _n$props, _ref2, _n$modal, _n$props2;
 				const n = this.project.scene.nodes[winId];
-				const isRoot = winId === this.project.scene.root;
-				const open = isRoot ? true : Boolean((_ref = (_n$initialOpen = n === null || n === void 0 ? void 0 : n.initialOpen) !== null && _n$initialOpen !== void 0 ? _n$initialOpen : n === null || n === void 0 || (_n$props = n.props) === null || _n$props === void 0 ? void 0 : _n$props.open) !== null && _ref !== void 0 ? _ref : false);
-				const modal = isRoot ? false : Boolean((_ref2 = (_n$modal = n === null || n === void 0 ? void 0 : n.modal) !== null && _n$modal !== void 0 ? _n$modal : n === null || n === void 0 || (_n$props2 = n.props) === null || _n$props2 === void 0 ? void 0 : _n$props2.modal) !== null && _ref2 !== void 0 ? _ref2 : (n === null || n === void 0 ? void 0 : n.type) === "Dialog");
+				const alwaysOpen = winId === this.project.scene.root || (n === null || n === void 0 ? void 0 : n.type) === "Page";
+				const open = alwaysOpen ? true : Boolean((_ref = (_n$initialOpen = n === null || n === void 0 ? void 0 : n.initialOpen) !== null && _n$initialOpen !== void 0 ? _n$initialOpen : n === null || n === void 0 || (_n$props = n.props) === null || _n$props === void 0 ? void 0 : _n$props.open) !== null && _ref !== void 0 ? _ref : false);
+				const modal = alwaysOpen ? false : Boolean((_ref2 = (_n$modal = n === null || n === void 0 ? void 0 : n.modal) !== null && _n$modal !== void 0 ? _n$modal : n === null || n === void 0 || (_n$props2 = n.props) === null || _n$props2 === void 0 ? void 0 : _n$props2.modal) !== null && _ref2 !== void 0 ? _ref2 : (n === null || n === void 0 ? void 0 : n.type) === "Dialog");
 				this.windows.set(winId, {
 					open,
 					modal

@@ -13,11 +13,14 @@ import {
   isPartitionedWindow,
   layoutOf,
   removeNodeReferences,
+  roundInScene,
   syncResizedNodeDimensions,
+  unitOf,
   type DockLayoutSpec,
   type Scene,
   type SceneNode,
 } from "./model.ts";
+import { fromPx } from "./kinds.ts";
 import {
   MIN_NODE_SIZE,
   absRectInScene,
@@ -513,8 +516,8 @@ export function applyMoveToScene(scene: Scene, ids: string[], dx: number, dy: nu
       continue;
     }
     const d = worldToParentDeltaInScene(next, id, dx, dy);
-    n.x = Math.round((n.x ?? 0) + d.x);
-    n.y = Math.round((n.y ?? 0) + d.y);
+    n.x = roundInScene(next, (n.x ?? 0) + d.x);
+    n.y = roundInScene(next, (n.y ?? 0) + d.y);
   }
   return next;
 }
@@ -534,21 +537,21 @@ export function applyResizeToScene(
   const isRoot = id === next.root;
   const orig = isRoot ? { x: 0, y: 0, width: n.width, height: n.height } : absRectInScene(next, id);
   const rot = isRoot ? 0 : worldRotationInScene(next, id);
-  const box = computeResizeBox(orig, handle, dx, dy, keepAspect, MIN_NODE_SIZE, rot);
+  const box = computeResizeBox(orig, handle, dx, dy, keepAspect, fromPx(unitOf(next), MIN_NODE_SIZE), rot, (value) => roundInScene(next, value));
   if (!isRoot) {
     if (isLayoutPositionedNode(next, id)) {
       delete n.x;
       delete n.y;
-      syncResizedNodeDimensions(n, box.width, box.height, MIN_NODE_SIZE, next, id);
+      syncResizedNodeDimensions(n, box.width, box.height, fromPx(unitOf(next), MIN_NODE_SIZE), next, id);
     } else {
       const local = worldRectToNodeLocalInScene(next, id, box);
       n.x = local.x;
       n.y = local.y;
-      syncResizedNodeDimensions(n, local.width, local.height, MIN_NODE_SIZE, next, id);
+      syncResizedNodeDimensions(n, local.width, local.height, fromPx(unitOf(next), MIN_NODE_SIZE), next, id);
     }
   } else {
-    n.width = Math.round(box.width);
-    n.height = Math.round(box.height);
+    n.width = roundInScene(next, box.width);
+    n.height = roundInScene(next, box.height);
   }
   return next;
 }

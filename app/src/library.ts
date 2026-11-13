@@ -9,6 +9,9 @@ import {
   BUILTIN_TYPES,
   CONTAINER_DECL,
   declFor,
+  defaultSizeFor,
+  standardComponentsOf,
+  unitOf,
   effectsForComponent,
   isPaintEffect,
   STANDARD_COMPONENTS,
@@ -1691,7 +1694,10 @@ function startLibraryDrag(down: PointerEvent, fav: LibraryItem, matchedLocalType
   down.preventDefault();
   const project = host.getProject();
   const decl = (matchedLocalType ? declFor(project, matchedLocalType) : null) ?? parseComponentDecl(fav.files, fav.type);
-  const size = decl.defaultSize ?? CONTAINER_DECL.defaultSize!;
+  // 拖着走的虚框按屏幕像素画；尺寸在声明里是按画布单位写的
+  const unitPx = unitOf(project.scene).px;
+  const natural = decl.defaultSize ?? CONTAINER_DECL.defaultSize!;
+  const size = { width: natural.width * unitPx, height: natural.height * unitPx };
   const ghost = document.createElement("div");
   ghost.id = "drag-ghost";
   ghost.style.width = `${size.width}px`;
@@ -2022,7 +2028,9 @@ export async function renderLibraryPalette(): Promise<void> {
         return;
       }
       down.preventDefault();
-      const size = (declFor(host.getProject(), type) ?? CONTAINER_DECL).defaultSize ?? CONTAINER_DECL.defaultSize!;
+      const natural = defaultSizeFor(host.getProject(), type);
+      const unitPx = unitOf(host.getProject().scene).px;
+      const size = { width: natural.width * unitPx, height: natural.height * unitPx };
       const ghost = document.createElement("div");
       ghost.id = "drag-ghost";
       ghost.style.width = `${size.width}px`;
@@ -2055,7 +2063,7 @@ export async function renderLibraryPalette(): Promise<void> {
     });
   };
 
-  for (const stdComp of STANDARD_COMPONENTS.values()) {
+  for (const stdComp of standardComponentsOf(host.getProject().kind).values()) {
     const type = stdComp.decl.type;
     const el = document.createElement("div");
     el.className = "palette-item";

@@ -26,6 +26,23 @@ async function devFetch(endpoint: string, path = "", init?: RequestInit, allow40
   return res;
 }
 
+/**
+ * 项目文件夹的网址，以 / 结尾。设计窗口拿它当基准地址：项目里的脚本、样式表、图片、字体
+ * 用相对路径就能互相引用，和导出成网页之后一样。
+ * 桌面窗口里走 Rust 注册的 vfproject 协议，浏览器里走 Vite 的 /__project/。
+ */
+export function projectBaseUrl(): string {
+  if (!inTauri) return `${location.origin}/__project/`;
+  // Tauri 的自定义协议在 Windows 和 Android 上是 http://<协议名>.localhost/，其他平台是 <协议名>://localhost/
+  return /Windows|Android/i.test(navigator.userAgent) ? "http://vfproject.localhost/" : "vfproject://localhost/";
+}
+
+/** 项目里一个文件的网址。path 相对于项目文件夹。 */
+export function projectUrl(path: string): string {
+  const clean = path.replace(/\\/g, "/").replace(/^\/+/, "");
+  return projectBaseUrl() + clean.split("/").map(encodeURIComponent).join("/");
+}
+
 export async function projectRoot(): Promise<string> {
   if (inTauri) return tauriInvoke<string>("project_root");
   return (await devFetch("root")).text();
@@ -87,16 +104,35 @@ export async function listDir(path: string): Promise<DirEntry[]> {
   return (await devFetch("list", path)).json();
 }
 
-/** 项目文件夹里有任何变化时调用 onChange（已合并 200 毫秒内的连续变化）。 */
-export function watchProject(onChange: () => void): void {
+/**
+ * 项目文件夹里有任何变化时调用 onChange（已合并 200 毫秒内的连续变化）。
+ * paths 是这段时间里变过的文件，相对于项目文件夹，用 / 分隔；系统没告诉是哪个文件时为空。
+ */
+export function watchProject(onChange: (paths: string[]) => void): void {
   let timer: number | undefined;
-  const fire = () => {
+  const changed = new Set<string>();
+  const fire = (paths: unknown) => {
+    for (const path of Array.isArray(paths) ? paths : [paths]) {
+      if (typeof path === "string" && path) changed.add(path.replace(/\\/g, "/"));
+    }
     window.clearTimeout(timer);
-    timer = window.setTimeout(onChange, 200);
+    timer = window.setTimeout(() => {
+      const list = [...changed];
+      changed.clear();
+      onChange(list);
+    }, 200);
   };
   if (inTauri) {
-    void listen("project-changed", fire);
+    void listen<string[]>("project-changed", (event) => fire(event.payload));
   } else {
-    new EventSource("/__fs/watch?path=").onmessage = fire;
+    new EventSource("/__fs/watch?path=").onmessage = (event) => {
+      let path: unknown = null;
+      try {
+        path = JSON.parse(String(event.data));
+      } catch {
+        // 老格式只发一个 changed
+      }
+      fire(path);
+    };
   }
 }

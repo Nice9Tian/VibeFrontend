@@ -51,10 +51,15 @@ export function overflowBar(bar: HTMLElement, options: OverflowOptions): () => v
 
   const fit = () => {
     if (bar.hidden) return;
-    // 这一排可能刚被整个重建过，原来的位置没了的控件就是旧的，不用放回去
+    // 这一排可能刚被整个重建过，原来的位置没了的控件就是旧的，不用放回去；
+    // 收进去以后又被别处挪走了的（例如页签重新排了序），留在挪到的地方
     for (const [item, mark] of marks) {
-      if (mark.parentNode === bar) mark.replaceWith(item);
-      else item.remove();
+      const stillCollapsed = item.parentNode === panel;
+      if (stillCollapsed && mark.parentNode === bar) mark.replaceWith(item);
+      else {
+        mark.remove();
+        if (stillCollapsed) item.remove();
+      }
     }
     marks.clear();
     bar.append(more, panel);

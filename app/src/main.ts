@@ -9,7 +9,9 @@ import {
   syncSceneNodesFromDockLayout,
   type DockPreviewCallbacks,
 } from "./dock";
-import { listDir, localWriteCount, readText, removeFile, watchProject, writeText, writesSettled } from "./fs";
+import { listDir, localWriteCount, projectBaseUrl, readText, removeFile, watchProject, writeText, writesSettled } from "./fs";
+import { cssLength, formatLength, fromPx, linesAvailable, toPx, type DesignKind, type UnitSpec } from "./kinds";
+import { applyBoard, applyGroupClass, applyNodeBox, createStageServices, createWaitTracker, SHAPE_STAGE_CSS, stageBaseCssFor } from "./stage";
 import { initDocView, syncDocView, syncPreviewSelectionToTextarea } from "./docview";
 import { initLibrary, renderLibraryPalette } from "./library";
 import { invoke } from "@tauri-apps/api/core";
@@ -28,6 +30,10 @@ import {
 import { focusMenuItemInEditor, initMenuEdit, renderMenuEditPane } from "./menuedit";
 import { initStateEdit, renderStateEditPane } from "./stateedit";
 import { initEventEdit, refreshEventPane, renderEventPane } from "./eventedit";
+import { addPage, movePage, pageGeometry, pageGuideRects, pageIds, pageLabel, removePage, subtreeIds } from "./pages";
+import { openGraphicExportModal } from "./graphicexport";
+import { initPropsEdit, invalidatePropsAssets, renderPropsPane } from "./propsedit";
+import { serializeEdited } from "./richtext";
 import { overflowBar } from "./overflowbar";
 import { initPanels } from "./panels";
 import { initPreviewLauncher, initStandalonePreviewWindow, isStandalonePreview, notifyMainWindowSelect, syncStandalonePreviewTitle } from "./previewwindow";
@@ -35,11 +41,13 @@ import {
   allSceneMenuIds,
   allWindowIds,
   appendSection,
+  boardOfNode,
   BUILTIN_TYPES,
   childrenOfNode,
   computeSceneLayout,
   CONTAINER_DECL,
   declFor,
+  defaultSizeFor,
   effectsForComponent,
   effectsForNode,
   EXTERNAL_DECL,
@@ -47,6 +55,7 @@ import {
   isLayoutPositionedNode,
   isPartitionedWindow,
   isValidIdentifier,
+  kindOfProject,
   layoutOf,
   LAYOUT_TYPE_KINDS,
   loadProject,
@@ -58,12 +67,14 @@ import {
   remapNodeChildren,
   renameNodeReferences,
   replaceSection,
+  roundInScene,
   SCENE_PATH,
   sectionNameFor,
   sectionOffsets,
-  STANDARD_COMPONENTS,
+  standardComponentsOf,
   setStageStyleTarget,
   syncResizedNodeDimensions,
+  unitOf,
   visibleEffectForNode,
   walkMenuItems,
   type ComponentInstance,
@@ -195,6 +206,66 @@ interface Mounted {
 }
 const mounted = new Map<string, Mounted>();
 const log: LogEntry[] = [];
+
+// ---------- 设计类型、单位、当前画板 ----------
+
+/** 这个项目是哪一类设计。素材栏、右侧页签、画板、导出都按它来，见 kinds.ts。 */
+function kind(): DesignKind {
+  return kindOfProject(project);
+}
+
+/** 画布的单位（像素或毫米），写在 scene.json 的 unit 里。 */
+function unit(): UnitSpec {
+  return unitOf(project.scene);
+}
+
+/** 把坐标或尺寸取整到画布单位的步长：像素取整数，毫米取到 0.01。 */
+function R(value: number): number {
+  return roundInScene(project.scene, value);
+}
+
+/** 按屏幕像素定的手感（最小尺寸、吸附距离、错开的距离）换成画布单位。像素画布上原样返回。 */
+function feel(px: number): number {
+  return fromPx(unit(), px);
+}
+
+/** 屏幕上的距离除以它，就是画布上的距离：视角缩放 × 单位换算。 */
+function unitZoom(): number {
+  return viewZoom() * unit().px;
+}
+
+/** 画布上的长度写成设计窗口里的 CSS 长度，例如 12px、14.5mm。 */
+function len(value: number): string {
+  return cssLength(unit(), value);
+}
+
+/** 一次只看一个画板的设计类型（平面设计）里，现在看的是哪一页。只影响看，不写进文件。 */
+let currentBoardId: string | null = null;
+
+/** 设计窗口现在显示的画板。界面设计始终是主窗口，对话框叠在它上面；平面设计是当前这一页。 */
+function stageRootId(): string {
+  if (!kind().board.oneAtATime) return project.scene.root;
+  const boards = allWindowIds(project.scene);
+  if (currentBoardId && boards.includes(currentBoardId)) return currentBoardId;
+  return boards[0] ?? project.scene.root;
+}
+
+/** 是不是画板本身：不能移动、删除、旋转、锁进多选，只能改尺寸。界面设计只有主窗口算，平面设计的每一页都算。 */
+function isBoardRoot(id: string | null | undefined): boolean {
+  if (!id) return false;
+  return id === project.scene.root || node(id)?.type === "Page";
+}
+
+/** 这类设计自带的标准控件。 */
+function standardComponents() {
+  return standardComponentsOf(project.kind);
+}
+
+/** 给控件的环境：单位、是不是只画静帧、项目文件的地址。编辑模式下只画静帧，预览时才动。 */
+const stageWaits = createWaitTracker();
+function stageServicesNow() {
+  return createStageServices({ unit: unit(), still: mode !== "preview", baseUrl: projectBaseUrl(), tracker: stageWaits });
+}
 /** 工具改写 YAML 时不自动折行，避免把长表达式拆成两行 */
 const YAML_OUTPUT = { lineWidth: 0 };
 
@@ -295,15 +366,16 @@ function hitTest(px: number, py: number): string | null {
       const hit = visit(children[i]);
       if (hit) return hit;
     }
-    if (id === project.scene.root) return null;
+    if (id === stageRootId()) return null;
     return containsPoint(id, px, py) ? id : null;
   };
-  const winIds = allWindowIds(project.scene);
+  // 一次只看一个画板时，别的画板不在设计窗口里，点不到
+  const winIds = kind().board.oneAtATime ? [stageRootId()] : allWindowIds(project.scene);
   frozenBoxes = currentLayoutBoxes();
   try {
     for (let i = winIds.length - 1; i >= 0; i--) {
       const winId = winIds[i];
-      if (winId !== project.scene.root && !isDialogShownInStage(winId)) continue;
+      if (winId !== stageRootId() && !isDialogShownInStage(winId)) continue;
       const hit = visit(winId);
       if (hit) return hit;
     }
@@ -571,6 +643,12 @@ function renderAfterReload(): void {
 function onPointerReleased(): void {
   pointerHeld = false;
   pointerHeldInIframe = false;
+  // 拖动的时候项目脚本变了：松手后再给设计窗口换运行环境
+  if (stageRealmStale) {
+    renderPending = false;
+    void reload(true);
+    return;
+  }
   if (!renderPending) return;
   renderPending = false;
   window.setTimeout(renderAll, 0);
@@ -588,6 +666,27 @@ window.addEventListener("blur", () => {
 let loading = false;
 let reloadAgain = false;
 let reloadForce = false;
+/** 项目里有脚本变了：下次重新加载前，给设计窗口换一个干净的运行环境 */
+let stageRealmStale = false;
+
+/**
+ * 换一个新的设计窗口文档。项目的脚本是在设计窗口自己的环境里加载的，浏览器按地址记着加载过的模块，
+ * 脚本改了之后只有换一个新环境才会重新读：这里把 iframe 换掉，控件随后在新环境里重新加载、重新建。
+ */
+function resetStageRealm(): void {
+  for (const entry of mounted.values()) {
+    try {
+      entry.instance?.destroy();
+    } catch {
+      // 控件的清理出错不影响重建
+    }
+  }
+  mounted.clear();
+  overlay.remove();
+  document.getElementById("stage-iframe")?.remove();
+  ensureStageIframe();
+}
+
 async function reload(force = false): Promise<void> {
   if (force) reloadForce = true;
   if (loading) {
@@ -606,13 +705,20 @@ async function reload(force = false): Promise<void> {
       }
       await writesSettled();
       const writesBefore = localWriteCount();
+      // 鼠标按住时不换运行环境（会把编辑层和正在拖的手势一起拆掉），松手后再换，见 onPointerReleased
+      const staleRealm = stageRealmStale && !pointerHeld;
+      if (staleRealm) {
+        stageRealmStale = false;
+        resetStageRealm();
+      }
       const next = await loadProject(project);
       if (writesBefore !== localWriteCount()) {
-        reloadForce ||= mustRender;
+        // 设计窗口刚换过运行环境、还空着：重读一遍之后一定要重画
+        reloadForce ||= mustRender || staleRealm;
         reloadAgain = true;
         continue;
       }
-      if (!mustRender && next.signature === project.signature) continue;
+      if (!mustRender && !staleRealm && next.signature === project.signature) continue;
       project = next;
       designRuntime = new Runtime(project);
       previewRuntime?.adopt(project);
@@ -648,14 +754,7 @@ function buildNode(id: string, parentEl: HTMLElement): void {
   wrapper.className = "vf-node";
   wrapper.dataset.vfId = id;
   wrapper.dataset.vfType = n.type;
-  Object.assign(wrapper.style, {
-    left: `${n.x ?? 0}px`,
-    top: `${n.y ?? 0}px`,
-    width: `${n.width}px`,
-    height: `${n.height}px`,
-    transform: n.rotation ? `rotate(${n.rotation}deg)` : "",
-    transformOrigin: "center center",
-  });
+  applyNodeBox(wrapper, unit(), { x: n.x ?? 0, y: n.y ?? 0, width: n.width, height: n.height }, n.rotation);
   const body = document.createElement("div");
   body.className = "vf-body";
   wrapper.append(body);
@@ -677,16 +776,26 @@ function buildNode(id: string, parentEl: HTMLElement): void {
     wrapper.style.borderRadius = "8px";
     wrapper.style.boxShadow = "inset 0 0 0 1px #334155, 0 20px 50px rgba(0,0,0,0.6)";
     wrapper.style.zIndex = "50";
+  } else if (n.type === "Group" && kind().id === "graphic") {
+    // 组不画东西，样式类加在外框上；空的组在编辑时显示自己的 ID，免得找不到
+    applyGroupClass(wrapper, n);
+    if (!childrenOf(n).length) {
+      body.textContent = id;
+      body.classList.add("vf-placeholder");
+    }
   } else if (n.type === "Container" || n.type in LAYOUT_TYPE_KINDS) {
     // 未转换的容器或布局容器：没有子节点时显示自己的 ID，作为占位
-    if (!childrenOf(n).length) body.textContent = id;
+    if (!childrenOf(n).length) {
+      body.textContent = id;
+      body.classList.add("vf-placeholder");
+    }
   } else if (n.type === "External") {
     // 外部容器：工具里只是占位，导出后由业务把自己的控件放进来
     body.textContent = `外部容器 ${id}\n导出后由业务放入控件`;
   } else if (n.type === "Shape" || n.type === "Line") {
     paintGraphic(id, entry, activeRuntime().view(id).props);
   } else {
-    const component = project.components.get(n.type) ?? STANDARD_COMPONENTS.get(n.type);
+    const component = project.components.get(n.type) ?? standardComponents().get(n.type);
     if (!component?.create) {
       showNodeError(body, component?.error ?? `找不到控件 ${n.type}`);
     } else {
@@ -697,6 +806,7 @@ function buildNode(id: string, parentEl: HTMLElement): void {
             if (mode === "preview") previewRuntime?.dispatch(id, event, value);
           },
           mode: mode === "preview" ? "preview" : "design",
+          stage: stageServicesNow(),
         });
       } catch (e) {
         showNodeError(body, `${n.type} 运行出错：${(e as Error).message}`);
@@ -789,7 +899,7 @@ function applyViews(): void {
   const runtime = activeRuntime();
   const boxes = computeSceneLayout(project.scene, layoutHooks(runtime));
   const hidden = hiddenPages(project.scene, shownPage);
-  const rootId = project.scene.root;
+  const rootId = stageRootId();
   const rootNode = node(rootId);
   const stageEl = ensureStageIframe();
 
@@ -912,14 +1022,7 @@ function applyViews(): void {
         });
       } else {
         const useAbs = n?.type === "FloatBox" && Boolean(view.props.floating) && entry.wrapper.parentElement === stageEl;
-        Object.assign(entry.wrapper.style, {
-          left: `${useAbs ? box.absX : box.x}px`,
-          top: `${useAbs ? box.absY : box.y}px`,
-          width: `${box.width}px`,
-          height: `${box.height}px`,
-          transform: n?.rotation ? `rotate(${n.rotation}deg)` : "",
-          transformOrigin: "center center",
-        });
+        applyNodeBox(entry.wrapper, unit(), { x: useAbs ? box.absX : box.x, y: useAbs ? box.absY : box.y, width: box.width, height: box.height }, n?.rotation);
       }
     }
     const effectiveVis = box ? box.visible : view.visible;
@@ -1139,43 +1242,7 @@ body.preview .vf-node[data-vf-type="Container"] > .vf-body {
   overflow: hidden;
   text-align: center;
 }
-.vf-node[data-vf-type="Shape"],
-.vf-node[data-vf-type="Line"] {
-  pointer-events: none;
-}
-.vf-shape-svg .vf-hit {
-  pointer-events: all;
-}
-.vf-line-svg .vf-hit {
-  pointer-events: stroke;
-}
-.vf-shape-svg,
-.vf-line-svg {
-  position: absolute;
-  left: 0;
-  top: 0;
-  display: block;
-  overflow: visible;
-}
-.vf-shape-text {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-  line-height: 1.3;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  pointer-events: none;
-}
-.vf-line-label {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: #fff;
-  line-height: 1.3;
-  white-space: pre;
-}
+${SHAPE_STAGE_CSS}
 .vf-dock-header {
   display: flex;
   align-items: center;
@@ -1306,6 +1373,56 @@ body.preview .vf-node[data-vf-type="Container"] > .vf-body {
 }
 `;
 
+/** 平面设计的设计窗口里，只有编辑器才要的样式：占位的容器、出错的控件、编辑时不让选中文字。 */
+const STAGE_EDITOR_ONLY_CSS = `
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+body.edit {
+  user-select: none;
+}
+#stage-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+body.edit .vf-node[data-vf-type="Container"] > .vf-body:empty,
+body.edit .vf-node[data-vf-type="Container"] > .vf-body.vf-placeholder,
+body.edit .vf-node[data-vf-type="Group"] > .vf-body.vf-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed #9aa1ad;
+  color: #8a909b;
+  font: 12px/1.3 "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  overflow: hidden;
+}
+body.preview .vf-placeholder {
+  visibility: hidden;
+}
+.vf-node.vf-ghost {
+  opacity: 0.35;
+  outline: 1px dashed #9aa1ad;
+}
+.vf-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border: 1px solid #c62828;
+  background: #fdecec;
+  color: #c62828;
+  font: 12px/1.3 "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  overflow: hidden;
+  text-align: center;
+}
+`;
+
 function ensureStageIframe(): HTMLElement {
   const stage = $("stage");
   let iframe = document.getElementById("stage-iframe") as HTMLIFrameElement | null;
@@ -1334,9 +1451,12 @@ function ensureStageIframe(): HTMLElement {
   if (!baseStyle) {
     baseStyle = doc.createElement("style");
     baseStyle.id = "vf-stage-base-styles";
-    baseStyle.textContent = STAGE_IFRAME_BASE_CSS;
     doc.head.prepend(baseStyle);
   }
+  // 平面设计的基础样式和播放页、导出的网页是同一份（stage.ts），再加上只在编辑器里要的那几条
+  const kindCss = project ? stageBaseCssFor(kind().id) : null;
+  const baseCss = kindCss === null ? STAGE_IFRAME_BASE_CSS : kindCss + STAGE_EDITOR_ONLY_CSS;
+  if (baseStyle.textContent !== baseCss) baseStyle.textContent = baseCss;
   setStageStyleTarget(doc);
   doc.body.classList.toggle("preview", mode === "preview");
   doc.body.classList.toggle("edit", mode === "edit");
@@ -1401,16 +1521,27 @@ function renderStage(): void {
   }
   mounted.clear();
 
-  const root = node(project.scene.root);
+  const rootId = stageRootId();
+  const root = node(rootId);
   const stage = $("stage");
   const stageCanvas = ensureStageIframe();
   stageCanvas.innerHTML = "";
   overlay.remove();
   if (!root) return;
-  stage.style.width = `${root.width}px`;
-  stage.style.height = `${root.height}px`;
-  $("stage-title").textContent = (root.title ?? project.scene.root) + (mode === "preview" ? "　·　预览中" : "");
-  $("window-size").textContent = `窗口 ${root.width}×${root.height}`;
+  sizeStageTo(root);
+  // 页面的样式类加在画布上：纸色、纸纹这些整页的样式由项目的样式表决定
+  if (root.type === "Page") {
+    applyBoard(stageCanvas, rootId, root, unit());
+    stageCanvas.style.width = "100%";
+    stageCanvas.style.height = "100%";
+  } else {
+    stageCanvas.removeAttribute("class");
+    delete stageCanvas.dataset.vfBoard;
+    delete stageCanvas.dataset.vfType;
+  }
+  $("stage-title").textContent = boardTitle(rootId) + (mode === "preview" ? "　·　预览中" : "");
+  $("window-size").textContent =
+    unit().css === "px" ? `${kind().board.noun} ${root.width}×${root.height}` : `${kind().board.noun} ${formatLength(unit(), root.width)}×${formatLength(unit(), root.height)} ${unit().css}`;
 
   if (root.menuBar) {
     const bar = document.createElement("div");
@@ -1460,14 +1591,102 @@ function renderStage(): void {
   }
 
   for (const child of childrenOf(root)) buildNode(child, stageCanvas);
-  for (const winId of allWindowIds(project.scene)) {
-    if (winId !== project.scene.root) buildNode(winId, stageCanvas);
+  // 界面设计：对话框叠在主窗口上；一次只看一个画板的类型里，别的画板不建
+  if (!kind().board.oneAtATime) {
+    for (const winId of allWindowIds(project.scene)) {
+      if (winId !== rootId) buildNode(winId, stageCanvas);
+    }
   }
   applyViews();
   if (mode === "edit") {
     stage.append(overlay);
+    syncOverlayScale();
+    renderPageGuides();
     updateSelectionBox();
   }
+}
+
+/** 画板的说明文档：project.json 里给这个画板写了就用它，否则用第一个画板的。 */
+function docOfBoard(boardId: string | null): string {
+  return (boardId && project.boardDocs?.[boardId]) || project.pageDoc;
+}
+
+/** 画板在标题条和翻页条上的名字：写了 title 用 title；页面没写时用它是第几页。 */
+function boardTitle(id: string): string {
+  const n = node(id);
+  if (n?.title) return n.title;
+  if (n?.type !== "Page") return id;
+  return pageLabel(project.scene, id);
+}
+
+/** 把设计窗口的尺寸定成这个画板的尺寸（按画布单位）。 */
+function sizeStageTo(root: SceneNode): void {
+  const stage = $("stage");
+  stage.style.width = len(root.width);
+  stage.style.height = len(root.height);
+  syncOverlayScale();
+}
+
+/**
+ * 编辑层里的坐标一律按画布单位写（写成 px），再整层放大“1 个单位合多少像素”倍，盖在设计窗口上。
+ * 像素画布上倍数是 1，什么都不变；毫米画布上，编辑层里写 14 就是 14 毫米。
+ * 手柄、细线除以 --vf-zoom 保持屏幕上的大小，所以这里把单位换算也乘进去。
+ */
+function syncOverlayScale(): void {
+  // 项目还没读完时视角就可能变（缩放快捷键），这时没什么可摆的
+  if (!project) return;
+  const scale = unit().px;
+  const root = node(stageRootId());
+  if (scale === 1 || !root) {
+    overlay.style.transform = "";
+    overlay.style.transformOrigin = "";
+    overlay.style.width = "";
+    overlay.style.height = "";
+    overlay.style.inset = "";
+    overlay.style.removeProperty("--vf-zoom");
+    overlay.style.removeProperty("--vf-unit");
+    overlay.classList.remove("unit-scaled");
+    return;
+  }
+  overlay.classList.add("unit-scaled");
+  overlay.style.inset = "0 auto auto 0";
+  overlay.style.width = `${root.width}px`;
+  overlay.style.height = `${root.height}px`;
+  overlay.style.transformOrigin = "0 0";
+  overlay.style.transform = `scale(${scale})`;
+  overlay.style.setProperty("--vf-zoom", String(viewZoom() * scale));
+  overlay.style.setProperty("--vf-unit", String(scale));
+}
+
+onZoomChange(syncOverlayScale);
+
+/** 页面的参考线：每张纸的边、版心、中缝。只在编辑时画，不进导出。 */
+const pageGuidesLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+pageGuidesLayer.id = "page-guides";
+
+function renderPageGuides(): void {
+  pageGuidesLayer.replaceChildren();
+  const rootId = stageRootId();
+  const root = node(rootId);
+  if (!root || root.type !== "Page" || !kind().has.pageGuides) {
+    pageGuidesLayer.remove();
+    return;
+  }
+  if (pageGuidesLayer.parentElement !== overlay) overlay.prepend(pageGuidesLayer);
+  pageGuidesLayer.setAttribute("viewBox", `0 0 ${root.width} ${root.height}`);
+  pageGuidesLayer.setAttribute("width", String(root.width));
+  pageGuidesLayer.setAttribute("height", String(root.height));
+  const geo = pageGeometry(root);
+  const add = (tag: string, attrs: Record<string, string | number>, cls: string) => {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, String(value));
+    el.setAttribute("class", cls);
+    pageGuidesLayer.append(el);
+  };
+  for (const live of geo.liveAreas) {
+    if (live.width < root.width / geo.sheets || live.height < root.height) add("rect", { ...live }, "page-margin");
+  }
+  for (const x of geo.folds) add("line", { x1: x, y1: 0, x2: x, y2: root.height }, "page-fold");
 }
 
 // ---------- 图形和线条 ----------
@@ -1493,7 +1712,7 @@ function parentOrigin(id: string): Point {
 function attachedTarget(lineId: string, value: Value | undefined): string | null {
   const target = str(value);
   const n = target ? node(target) : undefined;
-  return n && target !== lineId && n.type !== "Line" && target !== project.scene.root ? target : null;
+  return n && target !== lineId && n.type !== "Line" && target !== stageRootId() ? target : null;
 }
 
 // ---- 节点的真实外轮廓：线头挂在形状上时按它算，不按方框 ----
@@ -1696,7 +1915,8 @@ function paintGraphic(id: string, entry: Mounted, props: Record<string, Value>):
   const n = node(id);
   if (!n) return;
   if (n.type === "Shape") {
-    entry.hit = paintShape(entry.body, n.width, n.height, props);
+    // 形状的线宽、字号、圆角是按像素定的：把方框换成像素来画，毫米画布上线才不会粗好几倍
+    entry.hit = paintShape(entry.body, toPx(unit(), n.width), toPx(unit(), n.height), props);
   } else {
     const layout = lineLayoutOf(id, props);
     const origin = placeLine(id, layout);
@@ -1742,7 +1962,8 @@ function containsPoint(id: string, px: number, py: number): boolean {
   const localPt = worldToNodeLocalInScene(project.scene, id, { x: px, y: py });
   if (entry?.hit && (n.type === "Shape" || n.type === "Line")) {
     if (n.type === "Line") return entry.hit.isPointInStroke(new DOMPoint(px, py));
-    const local = new DOMPoint(localPt.x, localPt.y);
+    // 形状是按像素画的，点也换成像素再判断
+    const local = new DOMPoint(toPx(unit(), localPt.x), toPx(unit(), localPt.y));
     return entry.hit.isPointInFill(local) || entry.hit.isPointInStroke(local);
   }
   return pointInRotatedRect({ x: px, y: py }, absRect(id), worldRotation(id));
@@ -1779,7 +2000,9 @@ let lastLineStyle = loadSetting<Record<string, Value>>("vf.lastLineStyle", {});
 /** 按住 Ctrl 时临时关掉吸附，和 Figma 一样。 */
 function snapOptions(e: { ctrlKey: boolean; metaKey: boolean }): SnapOptions {
   const off = e.ctrlKey || e.metaKey;
-  return { threshold: 6, objects: snapSettings.objects && !off, grid: off ? 0 : snapSettings.grid };
+  // 吸附距离是屏幕上的手感，换成画布单位；网格间距不在这种单位的可选项里时当作没开
+  const grid = unit().grids.includes(snapSettings.grid) ? snapSettings.grid : 0;
+  return { threshold: feel(6), objects: snapSettings.objects && !off, grid: off ? 0 : grid };
 }
 
 /** 吸附时参考的方框：除了正在动的这些（和它们里面的东西）以外的全部节点（按旋转后的视觉外包围盒计算），以及窗口本身。线条不算。 */
@@ -1791,10 +2014,15 @@ function snapTargets(exclude: string | string[] | null): Rect[] {
   };
   for (const id of exclude === null ? [] : typeof exclude === "string" ? [exclude] : exclude) collect(id);
   const rects: Rect[] = [];
+  // 一次只看一个画板时，只参考这一页里的东西，别的页看不见
+  const scope = kind().board.oneAtATime ? subtreeIds(project.scene, stageRootId()) : null;
   for (const [id, n] of Object.entries(project.scene.nodes)) {
     if (excluded.has(id) || n.type === "Line") continue;
-    rects.push(id === project.scene.root ? { x: 0, y: 0, width: n.width, height: n.height } : visualRect(id));
+    if (scope && !scope.has(id)) continue;
+    rects.push(id === stageRootId() ? { x: 0, y: 0, width: n.width, height: n.height } : visualRect(id));
   }
+  // 页面的版心和每张纸的边：东西能吸到版心线和中缝上
+  rects.push(...pageGuideRects(project.scene, stageRootId()));
   return rects;
 }
 
@@ -1911,7 +2139,13 @@ overlay.addEventListener("pointerleave", () => {
   setHover(null);
 });
 
-setSelectionRectSource(() => (mode === "edit" && selectedIds.length > 0 ? unionRect(topSelection()) : null));
+// 视角按像素算，选中的范围是画布单位，换成像素再给它
+setSelectionRectSource(() => {
+  const rect = mode === "edit" && selectedIds.length > 0 ? unionRect(topSelection()) : null;
+  if (!rect) return null;
+  const scale = unit().px;
+  return scale === 1 ? rect : { x: rect.x * scale, y: rect.y * scale, width: rect.width * scale, height: rect.height * scale };
+});
 
 /** 多选时的外框：所有选中的东西（按旋转后的视觉外包围盒）合起来的方框。 */
 function unionRect(ids: string[]): Rect | null {
@@ -2047,7 +2281,7 @@ function updateSelectionBox(): void {
   }
   selectionBox.classList.remove("multi");
   const r = absRect(selectedId);
-  const isRoot = selectedId === project.scene.root;
+  const isRoot = selectedId === stageRootId();
   const locked = isNodeLocked(project.scene, selectedId);
   const rot = worldRotation(selectedId);
   const nodeRot = n.rotation ?? 0;
@@ -2088,7 +2322,7 @@ function updateSelectionBox(): void {
 /** 鼠标在设计窗口里的坐标。视角缩放过时，屏幕上的距离要除以缩放比例。 */
 function stagePoint(e: MouseEvent): { x: number; y: number } {
   const rect = $("stage").getBoundingClientRect();
-  const zoom = viewZoom();
+  const zoom = unitZoom();
   return { x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom };
 }
 
@@ -2120,12 +2354,14 @@ function drawGuides(guides: Guide[]): void {
       const a = horizontal ? { x: segment.start, y: segment.at } : { x: segment.at, y: segment.start };
       const b = horizontal ? { x: segment.end, y: segment.at } : { x: segment.at, y: segment.end };
       svgChild(guidesLayer, "line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: "guide-gap" });
+      // 刻度和数字的大小是屏幕上的手感，换成画布单位
+      const tickHalf = feel(4);
       for (const p of [a, b]) {
-        const tick = horizontal ? { x1: p.x, y1: p.y - 4, x2: p.x, y2: p.y + 4 } : { x1: p.x - 4, y1: p.y, x2: p.x + 4, y2: p.y };
+        const tick = horizontal ? { x1: p.x, y1: p.y - tickHalf, x2: p.x, y2: p.y + tickHalf } : { x1: p.x - tickHalf, y1: p.y, x2: p.x + tickHalf, y2: p.y };
         svgChild(guidesLayer, "line", { ...tick, class: "guide-gap" });
       }
-      const label = svgChild(guidesLayer, "text", { x: (a.x + b.x) / 2 + (horizontal ? 0 : 6), y: (a.y + b.y) / 2 + (horizontal ? -6 : 4), class: "guide-label" });
-      label.textContent = String(Math.round(guide.size));
+      const label = svgChild(guidesLayer, "text", { x: (a.x + b.x) / 2 + (horizontal ? 0 : feel(6)), y: (a.y + b.y) / 2 + (horizontal ? -feel(6) : feel(4)), class: "guide-label" });
+      label.textContent = formatLength(unit(), guide.size);
     }
   }
 }
@@ -2150,7 +2386,7 @@ function drawAttachHint(anchor: Anchor | null): void {
 }
 
 function showSize(width: number, height: number): void {
-  sizeLabel.textContent = `${Math.round(width)} × ${Math.round(height)}`;
+  sizeLabel.textContent = `${formatLength(unit(), width)} × ${formatLength(unit(), height)}`;
   sizeLabel.style.display = "";
 }
 
@@ -2168,7 +2404,7 @@ interface Anchor {
 /** 按在它里面就能把线挂上去的节点：形状和控件。容器、外部容器面积大，常常只是底板，只能通过边的中点挂。 */
 function interiorAttachable(id: string): boolean {
   const type = node(id)?.type;
-  return !!type && type !== "Container" && type !== "External" && type !== "Window" && type !== "Line";
+  return !!type && type !== "Container" && type !== "External" && type !== "Window" && type !== "Page" && type !== "Line";
 }
 
 /** 鼠标下面能从内部挂线的节点：最上面、最里面的那个。avoid 是线另一头挂着的节点，不让线两头挂在同一个东西上。 */
@@ -2179,10 +2415,10 @@ function attachableAt(px: number, py: number, excludeId: string | null, avoid: s
       const hit = visit(children[i]);
       if (hit) return hit;
     }
-    if (id === project.scene.root || id === excludeId || id === avoid || !interiorAttachable(id)) return null;
+    if (id === stageRootId() || id === excludeId || id === avoid || !interiorAttachable(id)) return null;
     return containsPoint(id, px, py) ? id : null;
   };
-  return visit(project.scene.root);
+  return visit(stageRootId());
 }
 
 /** 离鼠标 12 像素以内、最近的那个“边的中点”。任何节点（包括容器）都算，窗口和线条不算。 */
@@ -2190,7 +2426,7 @@ function nearestSideAnchor(px: number, py: number, excludeId: string | null, avo
   let best: { node: string; side: Side; point: Point } | null = null;
   let bestDistance = 12;
   for (const [id, n] of Object.entries(project.scene.nodes)) {
-    if (id === project.scene.root || id === excludeId || id === avoid || n.type === "Line") continue;
+    if (id === stageRootId() || id === excludeId || id === avoid || n.type === "Line") continue;
     const r = visualRect(id);
     if (px < r.x - 20 || px > r.x + r.width + 20 || py < r.y - 20 || py > r.y + r.height + 20) continue;
     for (const side of SIDES) {
@@ -2210,7 +2446,7 @@ function nearestEdge(px: number, py: number, excludeId: string | null, avoid: st
   let best: Anchor | null = null;
   let bestDistance = 10;
   for (const [id, n] of Object.entries(project.scene.nodes)) {
-    if (id === project.scene.root || id === excludeId || id === avoid || n.type === "Line") continue;
+    if (id === stageRootId() || id === excludeId || id === avoid || n.type === "Line") continue;
     const vr = visualRect(id);
     if (px < vr.x - 12 || px > vr.x + vr.width + 12 || py < vr.y - 12 || py > vr.y + vr.height + 12) continue;
     const hit = nearestOnOutline(id, { x: px, y: py });
@@ -2320,7 +2556,11 @@ function capturePointer(e: PointerEvent): void {
     // 忽略
   }
 }
+/** 节点最小能缩到多小。按屏幕像素定的手感，用的时候经 minSize() 换成画布单位。 */
 const MIN_SIZE = 8;
+function minSize(): number {
+  return feel(MIN_SIZE);
+}
 
 /** 落在哪个能装东西的节点里：从鼠标下最里面的节点往外找（不穿透已锁定的容器，由调用方统一拒绝向锁定容器放入控件）。 */
 function containerAt(px: number, py: number, excludeId?: string): string {
@@ -2337,7 +2577,7 @@ function containerAt(px: number, py: number, excludeId?: string): string {
     }
     if (canHoldChildren(hit)) return hit;
   }
-  return project.scene.root;
+  return stageRootId();
 }
 
 overlay.addEventListener("pointerdown", (e) => {
@@ -2379,7 +2619,7 @@ overlay.addEventListener("pointerdown", (e) => {
   // 旋转把手
   if (target.dataset.rotate && selectedId && selectedIds.length === 1) {
     const n = node(selectedId);
-    if (!n || n.type === "Line" || selectedId === project.scene.root || isNodeLocked(project.scene, selectedId)) return;
+    if (!n || n.type === "Line" || isBoardRoot(selectedId) || isNodeLocked(project.scene, selectedId)) return;
     const r = absRect(selectedId);
     const center = { x: r.x + r.width / 2, y: r.y + r.height / 2 };
     gesture = {
@@ -2472,7 +2712,7 @@ overlay.addEventListener("pointerdown", (e) => {
     const n = node(selectedId);
     if (!n || n.type === "Line" || isNodeLocked(project.scene, selectedId)) return;
     const orig = { x: n.x ?? 0, y: n.y ?? 0, width: n.width, height: n.height };
-    const isRoot = selectedId === project.scene.root;
+    const isRoot = selectedId === stageRootId();
     gesture = {
       kind: "resize", id: selectedId, handle, start: { x: e.clientX, y: e.clientY }, orig,
       abs: isRoot ? { ...orig, x: 0, y: 0 } : absRect(selectedId), moved: false, targets: isRoot ? [] : snapTargets(selectedId),
@@ -2482,7 +2722,7 @@ overlay.addEventListener("pointerdown", (e) => {
   }
 
   const stageDoc = (document.getElementById("stage-iframe") as HTMLIFrameElement | null)?.contentDocument;
-  const menuBtn = stageDoc?.elementFromPoint(pt.x, pt.y)?.closest<HTMLElement>("[data-vf-menu-item]");
+  const menuBtn = stageDoc?.elementFromPoint(toPx(unit(), pt.x), toPx(unit(), pt.y))?.closest<HTMLElement>("[data-vf-menu-item]");
   if (menuBtn?.dataset.vfMenuItem) {
     focusMenuItemInEditor(menuBtn.dataset.vfMenuItem);
     return;
@@ -2491,8 +2731,8 @@ overlay.addEventListener("pointerdown", (e) => {
   const id = hitTest(pt.x, pt.y);
   const type = id ? node(id)?.type : undefined;
   // 框选：从空白处、或者从一个还没选中的容器上拖出去（和 Figma 在画框里拖的效果一样）。只点一下不拖，就是选中它
-  if (!id || ((type === "Container" || type === "External") && !selectedIds.includes(id))) {
-    gesture = { kind: "marquee", start: pt, scope: id ? id : project.scene.root, base: e.shiftKey ? [...selectedIds] : [], clicked: id, moved: false };
+  if (!id || ((type === "Container" || type === "External" || type === "Group") && !selectedIds.includes(id))) {
+    gesture = { kind: "marquee", start: pt, scope: id ? id : stageRootId(), base: e.shiftKey ? [...selectedIds] : [], clicked: id, moved: false };
     capturePointer(e);
     return;
   }
@@ -2536,23 +2776,15 @@ overlay.addEventListener("pointerdown", (e) => {
 function applyLiveGeometry(id: string): void {
   const n = node(id);
   if (!n) return;
-  if (id === project.scene.root) {
-    $("stage").style.width = `${n.width}px`;
-    $("stage").style.height = `${n.height}px`;
+  if (id === stageRootId()) {
+    sizeStageTo(n);
   }
-  if (id === project.scene.root || isLayoutPositionedNode(project.scene, id) || layoutOf(n) !== null || isPartitionedWindow(n)) {
+  if (id === stageRootId() || isLayoutPositionedNode(project.scene, id) || layoutOf(n) !== null || isPartitionedWindow(n)) {
     applyViews();
   } else {
     const entry = mounted.get(id);
     if (entry) {
-      Object.assign(entry.wrapper.style, {
-        left: `${n.x ?? 0}px`,
-        top: `${n.y ?? 0}px`,
-        width: `${n.width}px`,
-        height: `${n.height}px`,
-        transform: n.rotation ? `rotate(${n.rotation}deg)` : "",
-        transformOrigin: "center center",
-      });
+      applyNodeBox(entry.wrapper, unit(), { x: n.x ?? 0, y: n.y ?? 0, width: n.width, height: n.height }, n.rotation);
       if (n.type === "Shape") paintGraphic(id, entry, activeRuntime().view(id).props);
     }
   }
@@ -2574,8 +2806,8 @@ overlay.addEventListener("pointermove", (e) => {
   clearGuides();
 
   if (gesture.kind === "move") {
-    let dx = Math.round((e.clientX - gesture.start.x) / viewZoom());
-    let dy = Math.round((e.clientY - gesture.start.y) / viewZoom());
+    let dx = R((e.clientX - gesture.start.x) / unitZoom());
+    let dy = R((e.clientY - gesture.start.y) / unitZoom());
     if ((dx === 0 && dy === 0 && !gesture.moved) || gesture.ids.length === 0) return;
     gesture.moved = true;
     // 按住 Shift：只沿水平或竖直方向移动
@@ -2586,24 +2818,24 @@ overlay.addEventListener("pointermove", (e) => {
     // 选中的东西合起来当成一个方框来吸附，所有东西挪同样的距离
     const { abs } = gesture;
     const snapped = snapMove({ x: abs.x + dx, y: abs.y + dy, width: abs.width, height: abs.height }, gesture.targets, options);
-    const mx = Math.round(snapped.x - abs.x);
-    const my = Math.round(snapped.y - abs.y);
+    const mx = R(snapped.x - abs.x);
+    const my = R(snapped.y - abs.y);
     drawGuides(snapped.guides);
     for (const origin of gesture.origins) {
       const n = node(origin.id);
       if (!n) continue;
       const d = worldToParentDeltaInScene(project.scene, origin.id, mx, my);
       if (n.type === "Line" && origin.props) {
-        n.props = offsetLineProps(origin.id, origin.props, Math.round(d.x), Math.round(d.y));
+        n.props = offsetLineProps(origin.id, origin.props, R(d.x), R(d.y));
       } else {
-        n.x = Math.round(origin.x + d.x);
-        n.y = Math.round(origin.y + d.y);
+        n.x = R(origin.x + d.x);
+        n.y = R(origin.y + d.y);
       }
     }
     for (const origin of gesture.origins) {
       const entry = mounted.get(origin.id);
       const n = node(origin.id);
-      if (entry && n && n.type !== "Line") Object.assign(entry.wrapper.style, { left: `${n.x}px`, top: `${n.y}px` });
+      if (entry && n && n.type !== "Line") Object.assign(entry.wrapper.style, { left: len(n.x ?? 0), top: len(n.y ?? 0) });
     }
     refreshLines();
     updateSelectionBox();
@@ -2613,23 +2845,23 @@ overlay.addEventListener("pointermove", (e) => {
   if (gesture.kind === "resize") {
     const n = node(gesture.id);
     if (!n) return;
-    const dx = Math.round((e.clientX - gesture.start.x) / viewZoom());
-    const dy = Math.round((e.clientY - gesture.start.y) / viewZoom());
+    const dx = R((e.clientX - gesture.start.x) / unitZoom());
+    const dy = R((e.clientY - gesture.start.y) / unitZoom());
     if (dx === 0 && dy === 0 && !gesture.moved) return;
     gesture.moved = true;
     const { abs, handle } = gesture;
-    const isRoot = gesture.id === project.scene.root;
+    const isRoot = gesture.id === stageRootId();
     const rot = isRoot ? 0 : worldRotation(gesture.id);
     const keepAspect = e.shiftKey && handle.length === 2;
-    let box = computeResizeBox(abs, handle, dx, dy, keepAspect, MIN_SIZE, rot);
+    let box = computeResizeBox(abs, handle, dx, dy, keepAspect, minSize(), rot, R);
     if (!isRoot && rot === 0 && !keepAspect) {
       const snapped = snapResize(box, handle, gesture.targets, options);
       box = snapped.rect;
       drawGuides(snapped.guides);
     }
-    const nextW = Math.max(MIN_SIZE, Math.round(box.width));
-    const nextH = Math.max(MIN_SIZE, Math.round(box.height));
-    syncResizedNodeDimensions(n, nextW, nextH, MIN_SIZE, project.scene, gesture.id);
+    const nextW = R(Math.max(minSize(), box.width));
+    const nextH = R(Math.max(minSize(), box.height));
+    syncResizedNodeDimensions(n, nextW, nextH, minSize(), project.scene, gesture.id);
     if (n.type === "Dock") {
       const rootNode = node(project.scene.root);
       if (rootNode?.dockLayout) activeRuntime().setDockLayout(rootNode.dockLayout, project.scene.root);
@@ -2653,26 +2885,26 @@ overlay.addEventListener("pointermove", (e) => {
   }
 
   if (gesture.kind === "groupResize") {
-    const dx = Math.round((e.clientX - gesture.start.x) / viewZoom());
-    const dy = Math.round((e.clientY - gesture.start.y) / viewZoom());
+    const dx = R((e.clientX - gesture.start.x) / unitZoom());
+    const dy = R((e.clientY - gesture.start.y) / unitZoom());
     if (dx === 0 && dy === 0 && !gesture.moved) return;
     gesture.moved = true;
     const { origBox, handle } = gesture;
     // 多选整体缩放：四角拖拽默认保持长宽比（按比例缩放），按住 Shift 可自由变形
     const keepAspect = handle.length === 2 ? !e.shiftKey : false;
-    let box = computeResizeBox(origBox, handle, dx, dy, keepAspect, MIN_SIZE, 0);
+    let box = computeResizeBox(origBox, handle, dx, dy, keepAspect, minSize(), 0, R);
     if (!keepAspect) {
       const snapped = snapResize(box, handle, gesture.targets, options);
       box = snapped.rect;
       drawGuides(snapped.guides);
     }
     box = {
-      x: Math.round(box.x),
-      y: Math.round(box.y),
-      width: Math.max(MIN_SIZE, Math.round(box.width)),
-      height: Math.max(MIN_SIZE, Math.round(box.height)),
+      x: R(box.x),
+      y: R(box.y),
+      width: R(Math.max(minSize(), box.width)),
+      height: R(Math.max(minSize(), box.height)),
     };
-    const scaledList = scaleGroupItems(gesture.items, origBox, box, MIN_SIZE, project.scene);
+    const scaledList = scaleGroupItems(gesture.items, origBox, box, minSize(), project.scene);
     let needReflow = false;
     for (const [id, scaled] of scaledList) {
       const eachNode = node(id);
@@ -2680,7 +2912,7 @@ overlay.addEventListener("pointermove", (e) => {
       if (eachNode.type === "Line" && scaled.props) {
         eachNode.props = scaled.props;
       } else {
-        syncResizedNodeDimensions(eachNode, scaled.width, scaled.height, MIN_SIZE, project.scene, id);
+        syncResizedNodeDimensions(eachNode, scaled.width, scaled.height, minSize(), project.scene, id);
         if (eachNode.type === "Dock") {
           const rootNode = node(project.scene.root);
           if (rootNode?.dockLayout) activeRuntime().setDockLayout(rootNode.dockLayout, project.scene.root);
@@ -2698,10 +2930,10 @@ overlay.addEventListener("pointermove", (e) => {
           const entry = mounted.get(id);
           if (entry) {
             Object.assign(entry.wrapper.style, {
-              left: `${eachNode.x}px`,
-              top: `${eachNode.y}px`,
-              width: `${eachNode.width}px`,
-              height: `${eachNode.height}px`,
+              left: len(eachNode.x ?? 0),
+              top: len(eachNode.y ?? 0),
+              width: len(eachNode.width),
+              height: len(eachNode.height),
             });
             if (eachNode.type === "Shape") paintGraphic(id, entry, activeRuntime().view(id).props);
           }
@@ -2735,7 +2967,7 @@ overlay.addEventListener("pointermove", (e) => {
       width: Math.abs(pt.x - gesture.start.x),
       height: Math.abs(pt.y - gesture.start.y),
     };
-    if (!gesture.moved && rect.width < 3 && rect.height < 3) return;
+    if (!gesture.moved && rect.width < feel(3) && rect.height < feel(3)) return;
     gesture.moved = true;
     Object.assign(marqueeBox.style, { display: "block", left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
     // 框住的是起点所在的那一层里、未锁定且和方框（含旋转后精确有向矩形）有交叠的东西
@@ -2804,10 +3036,10 @@ overlay.addEventListener("pointermove", (e) => {
       y1 = gesture.start.y - (y2 - gesture.start.y);
     }
     const rect = { x: Math.min(x1, x2), y: Math.min(y1, y2), width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) };
-    if (rect.width < 2 && rect.height < 2) return;
+    if (rect.width < feel(2) && rect.height < feel(2)) return;
     gesture.rect = rect;
     Object.assign(ghost.style, { display: "block", left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` });
-    if (gesture.preset) paintShape(ghost, Math.max(1, rect.width), Math.max(1, rect.height), presetProps(gesture.preset));
+    if (gesture.preset) paintShapeGhost(rect.width, rect.height, presetProps(gesture.preset));
     else {
       const box = document.createElement("div");
       box.className = "node-ghost";
@@ -2846,6 +3078,22 @@ overlay.addEventListener("pointermove", (e) => {
     updateSelectionBox();
   }
 });
+
+/**
+ * 拖出一个形状时的预览。形状是按像素画的，编辑层里的坐标是画布单位：
+ * 在预览框里放一个按像素大小画的内层，再缩回去，线宽才和画出来的一样。
+ */
+function paintShapeGhost(width: number, height: number, props: Record<string, Value>): void {
+  const scale = unit().px;
+  if (scale === 1) {
+    paintShape(ghost, Math.max(1, width), Math.max(1, height), props);
+    return;
+  }
+  const inner = document.createElement("div");
+  Object.assign(inner.style, { position: "absolute", left: "0", top: "0", transformOrigin: "0 0", transform: `scale(${1 / scale})` });
+  paintShape(inner, Math.max(1, width * scale), Math.max(1, height * scale), props);
+  ghost.replaceChildren(inner);
+}
 
 /** 画线时的预览：用真的线条画法画在编辑层上。 */
 function paintGhostLine(start: Anchor, end: Anchor, props: Record<string, Value>): void {
@@ -2903,19 +3151,20 @@ overlay.addEventListener("pointerup", (e) => {
   }
   if (finished.kind === "draw") {
     setTool({ kind: "select" });
-    const dragged = finished.rect && finished.rect.width >= 4 && finished.rect.height >= 4 ? finished.rect : null;
+    const dragged = finished.rect && finished.rect.width >= feel(4) && finished.rect.height >= feel(4) ? finished.rect : null;
     if (finished.nodeType) {
       // 只点了一下没有拖：按它的默认大小，以点击处为中心放一个
-      const size = (declFor(project, finished.nodeType) ?? CONTAINER_DECL).defaultSize ?? CONTAINER_DECL.defaultSize!;
+      const size = defaultSizeFor(project, finished.nodeType);
       const rect = dragged ?? { x: finished.start.x - size.width / 2, y: finished.start.y - size.height / 2, width: size.width, height: size.height };
       void createNode(finished.nodeType, finished.parentId, rect);
       return;
     }
     // 只点了一下没有拖：按预设的大小，以点击处为中心放一个
     const preset = finished.preset!;
-    const rect = finished.rect && finished.rect.width >= 4 && finished.rect.height >= 4
-      ? finished.rect
-      : { x: finished.start.x - preset.width / 2, y: finished.start.y - preset.height / 2, width: preset.width, height: preset.height };
+    // 预设的大小是按像素定的，换成画布单位
+    const presetW = R(feel(preset.width));
+    const presetH = R(feel(preset.height));
+    const rect = dragged ?? { x: finished.start.x - presetW / 2, y: finished.start.y - presetH / 2, width: presetW, height: presetH };
     void createFromPreset(preset, rect, finished.parentId).then((id) => {
       if (preset.props.shape === "text") openTextEditor(id);
     });
@@ -2956,6 +3205,7 @@ overlay.addEventListener("dblclick", (e) => {
   }
   const id = hitTest(pt.x, pt.y);
   if (id && isGraphic(id)) openTextEditor(id);
+  else if (id && kind().has.richText && node(id)?.type === "Text") openRichTextEditor(id);
 });
 
 overlay.addEventListener("contextmenu", (e) => {
@@ -2987,15 +3237,16 @@ function openTextEditor(id: string): void {
   if (n.type === "Shape") {
     const r = absRect(id);
     const box = entry.body.querySelector<HTMLElement>(".vf-shape-text");
-    const left = r.x + (box?.offsetLeft ?? 0);
-    const top = r.y + (box?.offsetTop ?? 0);
+    // 文字区域是在设计窗口里按像素量的，编辑层里按画布单位摆
+    const left = r.x + feel(box?.offsetLeft ?? 0);
+    const top = r.y + feel(box?.offsetTop ?? 0);
     Object.assign(el.style, {
       left: `${left}px`,
       top: `${top}px`,
-      width: `${Math.max(40, box?.offsetWidth ?? r.width)}px`,
-      height: `${Math.max(24, box?.offsetHeight ?? r.height)}px`,
+      width: `${Math.max(feel(40), box ? feel(box.offsetWidth) : r.width)}px`,
+      height: `${Math.max(feel(24), box ? feel(box.offsetHeight) : r.height)}px`,
       textAlign: str(props.textAlign, "center"),
-      fontSize: `${num(props.fontSize, 14)}px`,
+      fontSize: `${feel(num(props.fontSize, 14))}px`,
       color: str(props.textColor, "#1f2430"),
     });
     if (box) box.style.visibility = "hidden";
@@ -3037,10 +3288,284 @@ function commitTextEditor(cancel = false): void {
   void saveScene();
 }
 
+// ---- 文本框：在画布上直接改字 ----
+
+let richEditor: { id: string; box: HTMLElement; original: string; cleanup: () => void } | null = null;
+
+/**
+ * 双击文本框：让它的内容在设计窗口里直接可编辑。编辑期间编辑层不拦鼠标，点击落到文字上放光标；
+ * 点到文本框外面、按 Ctrl+Enter 都算改完，Esc 放弃。
+ */
+function openRichTextEditor(id: string): void {
+  const n = node(id);
+  const entry = mounted.get(id);
+  if (!n || !entry || mode !== "edit" || isNodeLocked(project.scene, id)) return;
+  const box = entry.body.querySelector<HTMLElement>(".vf-text");
+  if (!box) return;
+  if (richEditor) commitRichTextEditor();
+  if (textEditor) commitTextEditor();
+  select(id);
+  const original = str(n.props?.html, "");
+  box.contentEditable = "true";
+  box.spellcheck = false;
+  overlay.classList.add("text-editing");
+  const onKey = (e: KeyboardEvent) => {
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      commitRichTextEditor(true);
+    } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      commitRichTextEditor();
+    }
+  };
+  // 粘贴只收纯文字：从别处带来的字体、颜色不进文件，样子由样式类决定
+  const onPaste = (e: ClipboardEvent) => {
+    e.preventDefault();
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+    box.ownerDocument.execCommand("insertText", false, text);
+  };
+  const onBlur = () => commitRichTextEditor();
+  box.addEventListener("keydown", onKey);
+  box.addEventListener("paste", onPaste);
+  box.addEventListener("blur", onBlur);
+  richEditor = {
+    id,
+    box,
+    original,
+    cleanup: () => {
+      box.removeEventListener("keydown", onKey);
+      box.removeEventListener("paste", onPaste);
+      box.removeEventListener("blur", onBlur);
+      box.removeAttribute("contenteditable");
+      box.removeAttribute("spellcheck");
+      overlay.classList.remove("text-editing");
+    },
+  };
+  box.focus();
+  // 整段选中，直接打字就是替换；想改其中几个字就再点一下
+  const selection = box.ownerDocument.getSelection();
+  if (selection) {
+    const range = box.ownerDocument.createRange();
+    range.selectNodeContents(box);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+}
+
+function commitRichTextEditor(cancel = false): void {
+  const editor = richEditor;
+  if (!editor) return;
+  richEditor = null;
+  const html = serializeEdited(editor.box);
+  editor.cleanup();
+  const n = node(editor.id);
+  if (!n) return;
+  if (cancel || html === editor.original) {
+    editor.box.innerHTML = editor.original;
+    return;
+  }
+  n.props = { ...n.props, html };
+  void saveScene({ label: "修改文字" });
+}
+
+// ---- 翻页条：一次只看一个画板的设计类型（平面设计）用 ----
+
+function boardStorageKey(): string {
+  return `vf.board:${project.root}`;
+}
+
+function rememberBoard(): void {
+  try {
+    if (currentBoardId) localStorage.setItem(boardStorageKey(), currentBoardId);
+  } catch {
+    // 存不下只是下次打开回到第一页
+  }
+}
+
+function restoreBoard(): void {
+  try {
+    const saved = localStorage.getItem(boardStorageKey());
+    if (saved && node(saved)) currentBoardId = saved;
+  } catch {
+    // 读不到就从第一页开始
+  }
+}
+
+/** 翻到某一页。 */
+function showBoard(id: string): void {
+  if (!node(id) || id === stageRootId()) return;
+  if (richEditor) commitRichTextEditor();
+  if (textEditor) commitTextEditor();
+  currentBoardId = id;
+  rememberBoard();
+  // 选中的东西留在上一页，带不过来
+  selectedId = null;
+  selectedIds = [];
+  renderAll();
+}
+
+async function addPageAfterCurrent(): Promise<void> {
+  const after = stageRootId();
+  const id = newId("Page", "page");
+  addPage(project.scene, id, node(after)?.type === "Page" ? after : null);
+  currentBoardId = id;
+  rememberBoard();
+  selectedId = null;
+  selectedIds = [];
+  await saveScene({ label: "添加页面" });
+}
+
+async function removeCurrentPage(): Promise<void> {
+  const id = stageRootId();
+  const boards = pageIds(project.scene);
+  if (boards.length <= 1) return toast("只剩一页，不能删除");
+  const count = subtreeIds(project.scene, id).size - 1;
+  if (count > 0 && !window.confirm(`删除${pageLabel(project.scene, id)}和它里面的 ${count} 个控件？可以用撤销恢复。`)) return;
+  const at = boards.indexOf(id);
+  if (!removePage(project.scene, id)) return;
+  currentBoardId = pageIds(project.scene)[Math.max(0, at - 1)] ?? null;
+  rememberBoard();
+  selectedId = null;
+  selectedIds = [];
+  await saveScene({ label: "删除页面" });
+}
+
+async function moveCurrentPage(delta: number): Promise<void> {
+  if (!movePage(project.scene, stageRootId(), delta)) return;
+  await saveScene({ label: "调整页序" });
+}
+
+function renderBoardBar(): void {
+  const bar = document.getElementById("board-bar");
+  if (!bar) return;
+  const boards = kind().board.oneAtATime ? allWindowIds(project.scene) : [];
+  bar.hidden = boards.length === 0;
+  if (bar.hidden) {
+    bar.replaceChildren();
+    return;
+  }
+  const current = stageRootId();
+  const at = boards.indexOf(current);
+  const button = (text: string, title: string, enabled: boolean, onClick: () => void, action: string) => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "tool";
+    el.textContent = text;
+    el.title = title;
+    el.disabled = !enabled;
+    el.dataset.board = action;
+    el.addEventListener("click", onClick);
+    return el;
+  };
+  const select = document.createElement("select");
+  select.className = "tool-select";
+  select.title = `切换${kind().board.noun}`;
+  select.dataset.board = "select";
+  for (const id of boards) {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = boardTitle(id);
+    option.selected = id === current;
+    select.append(option);
+  }
+  select.addEventListener("change", () => showBoard(select.value));
+  const editing = mode === "edit";
+  bar.replaceChildren(
+    button("◀", `上一${kind().board.noun === "页面" ? "页" : "个"}（PageUp）`, at > 0, () => showBoard(boards[at - 1]), "prev"),
+    select,
+    button("▶", `下一${kind().board.noun === "页面" ? "页" : "个"}（PageDown）`, at >= 0 && at < boards.length - 1, () => showBoard(boards[at + 1]), "next"),
+    button("＋", "在这一页后面加一页（尺寸和版心照这一页）", editing, () => void addPageAfterCurrent(), "add"),
+    button("⋯", "这一页的其他操作", editing, () => {
+      const rect = bar.getBoundingClientRect();
+      // 做不了的操作不列出来：第一页不能往前挪，只剩一页不能删
+      const items: MenuItem[] = [
+        { label: "页面设置…", action: openPageSettings },
+        { label: "复制引用", action: () => void copyReference(controlReference(project, stageRootId())) },
+      ];
+      const moves: MenuItem[] = [];
+      if (at > 0) moves.push({ label: "往前挪一页", action: () => void moveCurrentPage(-1) });
+      if (at >= 0 && at < boards.length - 1) moves.push({ label: "往后挪一页", action: () => void moveCurrentPage(1) });
+      if (moves.length > 0) items.push("separator", ...moves);
+      if (boards.length > 1) items.push("separator", { label: "删除这一页", action: () => void removeCurrentPage() });
+      openMenu(rect.left, rect.bottom + 4, items);
+    }, "more"),
+  );
+}
+
+/** 页面设置在右侧“属性”页签里：什么都不选时，属性页签显示的就是当前页面。 */
+function openPageSettings(): void {
+  select(null);
+  showRightTab("props");
+}
+
+// PageUp / PageDown 翻页
+document.addEventListener("keydown", (e) => {
+  if (!project || !kind().board.oneAtATime || (e.key !== "PageUp" && e.key !== "PageDown")) return;
+  const target = e.target as HTMLElement | null;
+  if (target && (target.matches("input, textarea, select") || target.isContentEditable)) return;
+  const boards = allWindowIds(project.scene);
+  const next = boards[boards.indexOf(stageRootId()) + (e.key === "PageDown" ? 1 : -1)];
+  if (next) {
+    e.preventDefault();
+    showBoard(next);
+  }
+});
+
+/** 项目里可以当素材用的文件（图片），给属性页签的路径输入框做候选。 */
+async function listProjectAssets(): Promise<string[]> {
+  const found: string[] = [];
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (depth > 4 || found.length > 2000) return;
+    for (const entry of await listDir(dir)) {
+      const path = dir ? `${dir}/${entry.name}` : entry.name;
+      if (entry.isDir) {
+        if (!entry.name.startsWith(".") && entry.name !== "node_modules") await walk(path, depth + 1);
+      } else if (/\.(png|jpe?g|webp|gif|svg|avif)$/i.test(entry.name)) {
+        found.push(path);
+      }
+    }
+  };
+  await walk("assets", 0);
+  return found.sort();
+}
+
+/** 编辑器外框上随设计类型变的东西：素材栏的分区、导出按钮的名字。 */
+function syncKindChrome(): void {
+  const k = kind();
+  document.body.dataset.kind = k.id;
+  const toggle = (id: string, shown: boolean) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.hidden = !shown;
+    const heading = el.previousElementSibling;
+    if (heading instanceof HTMLElement && heading.tagName === "H3") heading.hidden = !shown;
+  };
+  toggle("palette-shapes", k.palette.shapes);
+  toggle("palette-flow", k.palette.flow);
+  toggle("palette-lines", linesAvailable(k, unit()));
+  const exportBtn = document.getElementById("export-qt-btn");
+  if (exportBtn) {
+    const web = !k.exports.includes("qt") && k.exports.includes("web");
+    exportBtn.textContent = web ? "导出" : "导出成 Qt";
+    exportBtn.title = web ? "把这份设计导出成网页、PDF 或图片" : "将当前设计项目导出成 Qt 工程";
+    exportBtn.hidden = k.exports.length === 0;
+  }
+  syncRightTabs();
+}
+
 // ---- 键盘 ----
 
 /** 工具的快捷键，和 Figma / FigJam 相同。 */
 const TOOL_KEYS: Record<string, string> = { r: "rectangle", o: "ellipse", l: "line", x: "elbowConnector", t: "text" };
+
+/** 这个预设在当前的设计类型和单位下能不能用：线条目前只在像素画布上有。 */
+function toolPresetAvailable(presetId: string): boolean {
+  const preset = presetById(presetId);
+  if (!preset) return false;
+  if (preset.type === "Line") return linesAvailable(kind(), unit());
+  return kind().palette.shapes;
+}
 
 document.addEventListener("keydown", (e) => {
   if (document.getElementById("delete-confirm")) return;
@@ -3078,7 +3603,7 @@ document.addEventListener("keydown", (e) => {
   if (ctrl && key === "a") {
     e.preventDefault();
     // 全选：窗口里最外面一层未锁定的全部东西
-    setSelection(childrenOf(node(project.scene.root)).filter((id) => !isNodeLocked(project.scene, id)));
+    setSelection(childrenOf(node(stageRootId())).filter((id) => !isNodeLocked(project.scene, id)));
     return;
   }
   if (ctrl && e.key === "Enter") {
@@ -3088,8 +3613,8 @@ document.addEventListener("keydown", (e) => {
   }
   if (!ctrl && !e.altKey) {
     if (key === "v") return setTool({ kind: "select" });
-    if (key === "l" && e.shiftKey) return setTool({ kind: "preset", preset: presetById("arrow")! });
-    if (TOOL_KEYS[key] && !e.shiftKey) return setTool({ kind: "preset", preset: presetById(TOOL_KEYS[key])! });
+    if (key === "l" && e.shiftKey && linesAvailable(kind(), unit())) return setTool({ kind: "preset", preset: presetById("arrow")! });
+    if (TOOL_KEYS[key] && !e.shiftKey && toolPresetAvailable(TOOL_KEYS[key])) return setTool({ kind: "preset", preset: presetById(TOOL_KEYS[key])! });
     if (e.key === "Escape") {
       if (tool.kind !== "select") setTool({ kind: "select" });
       else select(null);
@@ -3100,11 +3625,16 @@ document.addEventListener("keydown", (e) => {
       openTextEditor(selectedId);
       return;
     }
+    if (e.key === "Enter" && selectedId && kind().has.richText && node(selectedId)?.type === "Text") {
+      e.preventDefault();
+      openRichTextEditor(selectedId);
+      return;
+    }
   }
 
   const ids = topSelection();
   if (ids.length === 0) return;
-  const step = e.shiftKey ? 10 : 1;
+  const step = unit().nudge[e.shiftKey ? 1 : 0];
   const moves: Record<string, [number, number]> = {
     ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step],
   };
@@ -3126,7 +3656,7 @@ document.addEventListener("keydown", (e) => {
       const n = node(id);
       if (n) {
         const d = worldToParentDeltaInScene(project.scene, id, dx, dy);
-        n.props = offsetLineProps(id, n.props ?? {}, Math.round(d.x), Math.round(d.y));
+        n.props = offsetLineProps(id, n.props ?? {}, R(d.x), R(d.y));
       }
     }
     void saveScene();
@@ -3172,7 +3702,7 @@ async function createNode(type: string, parentId: string, rect: Rect, props?: Re
     id,
     rect.x + rect.width / 2,
     rect.y + rect.height / 2,
-    { width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) },
+    { width: R(Math.max(feel(1), rect.width)), height: R(Math.max(feel(1), rect.height)) },
     {
       targetContainerId: parentId,
       exactTopLeft: { x: rect.x, y: rect.y },
@@ -3222,7 +3752,7 @@ async function createFromPreset(preset: ShapePreset, rect: Rect, parentId: strin
 
 async function createLine(preset: ShapePreset, start: Anchor, end: Anchor, parentId: string, _shift: boolean): Promise<string> {
   const props = presetProps(preset);
-  const origin = parentId === project.scene.root ? { x: 0, y: 0 } : absRect(parentId);
+  const origin = parentId === stageRootId() ? { x: 0, y: 0 } : absRect(parentId);
   writeAnchor(props, "start", start, origin);
   writeAnchor(props, "end", end, origin);
   // 外框在写文件前按线的位置重新算，这里先给一个大概的
@@ -3234,11 +3764,13 @@ async function createLine(preset: ShapePreset, start: Anchor, end: Anchor, paren
 /** 复制一份，放在原来的右下方一点。线条复制出来是两头都没挂的。 */
 /** 快速新建（FigJam 的 Ctrl+Enter）：在右边放一个同样的形状，用折线箭头连起来。 */
 async function quickCreate(id: string): Promise<void> {
+  // 快速新建会画一条连接线，线条只在有线条的设计类型里有
+  if (!linesAvailable(kind(), unit())) return;
   if (isNodeLocked(project.scene, id)) return toast("控件已锁定");
   const n = node(id);
   const parentId = parentOf(id);
   if (!n || n.type !== "Shape" || !parentId || isNodeLocked(project.scene, parentId)) return;
-  const GAP = 80;
+  const GAP = R(feel(80));
   const x = n.x ?? 0;
   const y = n.y ?? 0;
   // 右边放得下就放右边，放不下就放下面
@@ -3277,7 +3809,11 @@ interface Clip {
 let clipMemory: Clip | null = null;
 /** 同一份内容连续粘贴的次数：每次往右下错开一点，免得叠在一起看不出来 */
 let pasteCount = 0;
+/** 粘贴和复制一份时往右下错开多少。按屏幕像素定，用的时候经 pasteOffset() 换成画布单位。 */
 const PASTE_OFFSET = 16;
+function pasteOffset(): number {
+  return R(feel(PASTE_OFFSET));
+}
 
 /** 线条的全部坐标（两端和拐点）一起平移，不管挂没挂着。 */
 function shiftLineAll(props: Record<string, Value>, dx: number, dy: number): Record<string, Value> {
@@ -3366,12 +3902,12 @@ function pasteClip(clip: Clip, placement: (rootId: string) => { parentId: string
     const fresh = idMap.get(root);
     if (!fresh) continue;
     let { parentId, index } = placement(root);
-    while (parentId !== project.scene.root && isNodeLocked(project.scene, parentId)) {
-      parentId = parentOf(parentId) ?? project.scene.root;
+    while (parentId !== stageRootId() && isNodeLocked(project.scene, parentId)) {
+      parentId = parentOf(parentId) ?? stageRootId();
       index = undefined;
     }
-    const parent = node(parentId) ?? node(project.scene.root)!;
-    const origin = parentId === project.scene.root ? { x: 0, y: 0 } : absRect(parentId);
+    const parent = node(parentId) ?? node(stageRootId())!;
+    const origin = parentId === stageRootId() ? { x: 0, y: 0 } : absRect(parentId);
     const copy = node(fresh)!;
     const isDockInPartition = copy.type === "Dock" && parentId === project.scene.root && isPartitionedWindow(parent);
     if (copy.type === "Line") copy.props = shiftLineAll(copy.props ?? {}, offset - origin.x, offset - origin.y);
@@ -3422,10 +3958,10 @@ async function duplicateNodes(ids: string[]): Promise<void> {
   if (unlocked.length === 0) return toast("选中的控件已锁定");
   const clip = copyNodes(unlocked);
   const placed = pasteClip(clip, (rootId) => {
-    const parentId = parentOf(rootId) ?? project.scene.root;
+    const parentId = parentOf(rootId) ?? stageRootId();
     const siblings = childrenOf(node(parentId));
     return { parentId, index: siblings.indexOf(rootId) + 1 };
-  }, PASTE_OFFSET);
+  }, pasteOffset());
   selectedIds = placed;
   selectedId = placed[placed.length - 1] ?? null;
   await saveScene();
@@ -3437,20 +3973,20 @@ async function duplicateNode(id: string): Promise<void> {
 
 /** 粘贴到哪里：选中的是能装东西且未锁定的节点，就放进它里面；否则往外找未锁定的父容器；什么都没选就放进窗口。 */
 function pasteParent(): string {
-  if (!selectedId) return project.scene.root;
+  if (!selectedId) return stageRootId();
   if (selectedIds.length === 1 && canHoldChildren(selectedId) && !isNodeLocked(project.scene, selectedId)) {
     return selectedId;
   }
   for (let p = parentOf(selectedId); p; p = parentOf(p)) {
     if (canHoldChildren(p) && !isNodeLocked(project.scene, p)) return p;
   }
-  return project.scene.root;
+  return stageRootId();
 }
 
 async function pasteNodes(clip: Clip): Promise<void> {
   pasteCount++;
   const parentId = pasteParent();
-  const placed = pasteClip(clip, () => ({ parentId }), PASTE_OFFSET * pasteCount);
+  const placed = pasteClip(clip, () => ({ parentId }), pasteOffset() * pasteCount);
   selectedIds = placed;
   selectedId = placed[placed.length - 1] ?? null;
   await saveScene();
@@ -3537,7 +4073,7 @@ function askDeleteYamlEntries(yamlIds: string[]): Promise<"both" | "scene-only" 
 }
 
 async function deleteNodes(ids: string[], options: { askYaml?: boolean; removeYaml?: boolean } = {}): Promise<void> {
-  const candidates = ids.filter((id) => id !== project.scene.root);
+  const candidates = ids.filter((id) => !isBoardRoot(id));
   if (candidates.length === 0) return;
   const unlockedRoots = candidates.filter((id) => !hasLockedInSubtree(project.scene, id));
   if (unlockedRoots.length === 0) {
@@ -3581,7 +4117,7 @@ async function deleteNode(id: string): Promise<void> {
 
 async function toggleLock(targetIds?: string[]): Promise<void> {
   const ids = (targetIds ?? (selectedIds.length > 0 ? topSelection() : selectedId ? [selectedId] : [])).filter(
-    (id) => id !== project.scene.root && !!node(id),
+    (id) => !isBoardRoot(id) && !!node(id),
   );
   if (ids.length === 0) return;
   const shouldLock = ids.some((id) => !isNodeLocked(project.scene, id));
@@ -3765,7 +4301,8 @@ async function createDocSection(id: string): Promise<void> {
     return;
   }
   const name = sectionNameFor(id);
-  const path = project.pageDoc;
+  // 新的说明小节写进控件所在画板的说明文档
+  const path = docOfBoard(boardOfNode(project.scene, id));
   const current = project.docs.get(path) ?? `# ${project.name}\n`;
   const nextDocContent = getSection(current, name) === null ? appendSection(current, name, id) : current;
   ensureObject(doc, id);
@@ -3916,7 +4453,7 @@ function showMenu(x: number, y: number, id: string): void {
     return;
   }
   const items: MenuItem[] = [{ label: "复制引用", action: () => void copyReference(controlReference(project, id)) }];
-  if (id !== project.scene.root) {
+  if (!isBoardRoot(id)) {
     const locked = isNodeLocked(project.scene, id);
     items.push(
       { label: "缩放到所选（Shift+2）", action: zoomToSelection },
@@ -3935,7 +4472,7 @@ function showMenu(x: number, y: number, id: string): void {
     } else if (node(id)?.type !== "Container") {
       items.push({ label: "还原为容器", action: () => void revertToContainer(id) });
     }
-    if (node(id)?.type === "Shape") items.push({ label: "快速新建并连线（Ctrl+Enter）", action: () => void quickCreate(id) });
+    if (node(id)?.type === "Shape" && linesAvailable(kind(), unit())) items.push({ label: "快速新建并连线（Ctrl+Enter）", action: () => void quickCreate(id) });
     items.push(...clipboardItems());
     items.push(
       { label: "复制一份（Ctrl+D）", action: () => void duplicateNode(id) },
@@ -3997,17 +4534,18 @@ function renderToolbar(): void {
   const grid = document.createElement("select");
   grid.className = "tool-select";
   grid.title = "吸附到网格";
-  for (const [value, label] of [[0, "网格：关"], [4, "网格 4"], [8, "网格 8"], [10, "网格 10"], [16, "网格 16"]] as const) {
+  const activeGrid = unit().grids.includes(snapSettings.grid) ? snapSettings.grid : 0;
+  for (const value of unit().grids) {
     const option = document.createElement("option");
     option.value = String(value);
-    option.textContent = label;
-    option.selected = snapSettings.grid === value;
+    option.textContent = value === 0 ? "网格：关" : unit().css === "px" ? `网格 ${value}` : `网格 ${value} ${unit().css}`;
+    option.selected = activeGrid === value;
     grid.append(option);
   }
   grid.addEventListener("change", () => {
     snapSettings.grid = Number(grid.value);
     saveSetting("vf.snap", snapSettings);
-    $("stage").style.setProperty("--grid", snapSettings.grid ? `${snapSettings.grid}px` : "0");
+    $("stage").style.setProperty("--grid", snapSettings.grid ? len(snapSettings.grid) : "0");
     $("stage").classList.toggle("show-grid", snapSettings.grid > 0);
   });
 
@@ -4037,14 +4575,14 @@ function renderToolbar(): void {
   versionBtn.disabled = history.past.length === 0 && history.future.length === 0;
 
   const tops = topSelection();
-  const lockIds = tops.length > 0 ? tops : selectedId && selectedId !== project.scene.root ? [selectedId] : [];
+  const lockIds = tops.length > 0 ? tops : selectedId && !isBoardRoot(selectedId) ? [selectedId] : [];
   const allLocked = lockIds.length > 0 && lockIds.every((id) => isNodeLocked(project.scene, id));
   const lockBtn = toolButton(allLocked ? "🔒" : "🔓", `${allLocked ? "解锁" : "锁定"}选中控件（Ctrl+L）`, allLocked, () => void toggleLock());
   lockBtn.dataset.action = "lock";
   lockBtn.disabled = lockIds.length === 0;
 
   const singleRotatableId =
-    selectedIds.length === 1 && selectedId && selectedId !== project.scene.root && node(selectedId)?.type !== "Line"
+    selectedIds.length === 1 && selectedId && !isBoardRoot(selectedId) && node(selectedId)?.type !== "Line"
       ? selectedId
       : null;
   const rotLabel = document.createElement("label");
@@ -4110,8 +4648,8 @@ function renderToolbar(): void {
     distV,
   );
   fitToolbar();
-  $("stage").style.setProperty("--grid", snapSettings.grid ? `${snapSettings.grid}px` : "0");
-  $("stage").classList.toggle("show-grid", snapSettings.grid > 0);
+  $("stage").style.setProperty("--grid", activeGrid ? len(activeGrid) : "0");
+  $("stage").classList.toggle("show-grid", activeGrid > 0);
 }
 
 /** 工具栏夹在模式选择和缩放中间，比这还窄就不如换到第二行。 */
@@ -4388,10 +4926,12 @@ function positionShapeBar(): void {
   shapeBar.style.transformOrigin = "0 0";
   const barHeight = (shapeBar.offsetHeight || 34) / zoom;
   const gap = 12 / zoom;
-  let top = stage.offsetTop + r.y - barHeight - gap;
-  if (top < 0) top = stage.offsetTop + r.y + r.height + gap;
+  // 样式条在设计窗口的外框里，按像素摆；选中框是画布单位，换成像素
+  const ry = toPx(unit(), r.y);
+  let top = stage.offsetTop + ry - barHeight - gap;
+  if (top < 0) top = stage.offsetTop + ry + toPx(unit(), r.height) + gap;
   shapeBar.style.top = `${top}px`;
-  shapeBar.style.left = `${Math.max(0, stage.offsetLeft + r.x)}px`;
+  shapeBar.style.left = `${Math.max(0, stage.offsetLeft + toPx(unit(), r.x))}px`;
 }
 
 /** 交换线的起点和终点（端头跟着位置走，所以箭头方向反过来）。 */
@@ -4495,9 +5035,11 @@ function startPresetDrag(down: PointerEvent, preset: ShapePreset): void {
     const rect = $("stage").getBoundingClientRect();
     const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
     if (!inside) return;
-    const px = (e.clientX - rect.left) / viewZoom();
-    const py = (e.clientY - rect.top) / viewZoom();
-    void createFromPreset(preset, { x: px - preset.width / 2, y: py - (preset.type === "Line" ? 0 : preset.height / 2), width: preset.width, height: preset.height }, containerAt(px, py));
+    const px = (e.clientX - rect.left) / unitZoom();
+    const py = (e.clientY - rect.top) / unitZoom();
+    const pw = R(feel(preset.width));
+    const ph = R(feel(preset.height));
+    void createFromPreset(preset, { x: px - pw / 2, y: py - (preset.type === "Line" ? 0 : ph / 2), width: pw, height: ph }, containerAt(px, py));
   };
   document.addEventListener("pointermove", place);
   document.addEventListener("pointerup", up);
@@ -4564,19 +5106,24 @@ function renderPalette(): void {
     }
     return el;
   };
+  // 基础素材里列哪些，由设计类型决定（kinds.ts 的 paletteBasics）
+  const BASICS: Record<string, [string, string]> = {
+    Container: ["□ 容器", "拖进设计窗口，再交给 Agent 做成具体控件"],
+    Group: ["▣ 组", "把几样东西归在一起，一起移动；可以带样式类"],
+    External: ["⧉ 外部容器", EXTERNAL_DECL.description ?? ""],
+    VBox: ["▤ 竖排布局", "子控件从上往下排列"],
+    HBox: ["▥ 横排布局", "子控件从左往右排列"],
+    Flow: ["⇶ 换行布局", "子控件从左往右排列，放不下时自动换到下一行"],
+    Grid: ["⊞ 网格布局", "子控件按行列网格排列"],
+    Form: ["☰ 表单布局", "左列标签、右列控件的表单排列"],
+    Stack: ["❐ 层叠布局", "多个页面叠放，按 currentIndex 切换"],
+    Dock: ["◧ 停靠面板", "停靠在主窗口四侧的面板"],
+    Dialog: ["🗔 对话框", "弹出窗口或模态对话框"],
+  };
   $("palette-basic").replaceChildren(
-    make("Container", "□ 容器", "拖进设计窗口，再交给 Agent 做成具体控件"),
-    make("External", "⧉ 外部容器", EXTERNAL_DECL.description ?? ""),
-    make("VBox", "▤ 竖排布局", "子控件从上往下排列"),
-    make("HBox", "▥ 横排布局", "子控件从左往右排列"),
-    make("Flow", "⇶ 换行布局", "子控件从左往右排列，放不下时自动换到下一行"),
-    make("Grid", "⊞ 网格布局", "子控件按行列网格排列"),
-    make("Form", "☰ 表单布局", "左列标签、右列控件的表单排列"),
-    make("Stack", "❐ 层叠布局", "多个页面叠放，按 currentIndex 切换"),
-    make("Dock", "◧ 停靠面板", "停靠在主窗口四侧的面板"),
-    make("Dialog", "🗔 对话框", "弹出窗口或模态对话框"),
+    ...kind().paletteBasics.filter((type) => BASICS[type]).map((type) => make(type, BASICS[type][0], BASICS[type][1])),
   );
-  const stdItems = [...STANDARD_COMPONENTS.values()].map((component) =>
+  const stdItems = [...standardComponents().values()].map((component) =>
     make(component.decl.type, `${component.decl.label ?? component.decl.type}（标准）`, component.decl.description ?? ""),
   );
   const projectItems = [...project.components.values()]
@@ -4605,7 +5152,9 @@ function startPaletteDrag(down: PointerEvent, type: string): void {
   if (down.button !== 0) return;
   if (mode !== "edit") return toast("预览模式下不能添加控件，请先切回编辑模式");
   down.preventDefault();
-  const size = (declFor(project, type) ?? CONTAINER_DECL).defaultSize ?? CONTAINER_DECL.defaultSize!;
+  // 拖着走的虚框按屏幕像素画，默认尺寸是画布单位
+  const natural = defaultSizeFor(project, type);
+  const size = { width: toPx(unit(), natural.width), height: toPx(unit(), natural.height) };
   const ghost = document.createElement("div");
   ghost.id = "drag-ghost";
   ghost.style.width = `${size.width}px`;
@@ -4616,7 +5165,7 @@ function startPaletteDrag(down: PointerEvent, type: string): void {
     if (Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) > 4) {
       const rect = $("stage").getBoundingClientRect();
       const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
-      if (inside) previewPaletteDropOnStage(type, (e.clientX - rect.left) / viewZoom(), (e.clientY - rect.top) / viewZoom());
+      if (inside) previewPaletteDropOnStage(type, (e.clientX - rect.left) / unitZoom(), (e.clientY - rect.top) / unitZoom());
       else hideLayoutDropIndicator();
     }
   };
@@ -4634,7 +5183,7 @@ function startPaletteDrag(down: PointerEvent, type: string): void {
     }
     const rect = $("stage").getBoundingClientRect();
     const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
-    if (inside) void addNode(type, (e.clientX - rect.left) / viewZoom(), (e.clientY - rect.top) / viewZoom());
+    if (inside) void addNode(type, (e.clientX - rect.left) / unitZoom(), (e.clientY - rect.top) / unitZoom());
   };
   document.addEventListener("pointermove", place);
   document.addEventListener("pointerup", up);
@@ -4687,7 +5236,7 @@ function renderLayers(): void {
       badge.title = `包含${effectList.join("、")}；导出成 Qt 后要在界面效果层为它提供实现`;
       row.append(badge);
     }
-    if (id !== project.scene.root) {
+    if (!isBoardRoot(id)) {
       const lockBtn = document.createElement("button");
       lockBtn.type = "button";
       lockBtn.className = "layer-lock" + (locked ? " active" : "");
@@ -4766,12 +5315,11 @@ $("palette-toggle").addEventListener("click", () => {
 
 
 function syncSelection(): void {
-  const root = project.scene.root;
   if (selectedId && !node(selectedId)) selectedId = null;
-  selectedIds = selectedIds.filter((id) => node(id) && id !== root);
-  if (!selectedId || selectedId === root) {
+  selectedIds = selectedIds.filter((id) => node(id) && !isBoardRoot(id));
+  if (!selectedId || isBoardRoot(selectedId)) {
     selectedIds = [];
-    if (selectedId === root) return;
+    if (isBoardRoot(selectedId)) return;
   } else if (!selectedIds.includes(selectedId)) {
     selectedIds = [selectedId];
   }
@@ -4786,8 +5334,22 @@ function topSelection(): string[] {
   });
 }
 
+/** 选中的东西在别的页上：翻到那一页。返回有没有翻页。 */
+function followSelectionToBoard(): boolean {
+  if (!kind().board.oneAtATime || !selectedId) return false;
+  const board = boardOfNode(project.scene, selectedId);
+  if (!board || board === stageRootId()) return false;
+  currentBoardId = board;
+  rememberBoard();
+  return true;
+}
+
 function afterSelectionChange(): void {
   revealSelection();
+  if (followSelectionToBoard()) {
+    renderStage();
+    renderBoardBar();
+  }
   applyViews();
   renderLayers();
   if (selectedId) layerRow(selectedId)?.scrollIntoView({ block: "nearest" });
@@ -4801,20 +5363,20 @@ function afterSelectionChange(): void {
 /** 选中一个。additive 为真（按住 Shift 点）时，加进选择；已经选中的就去掉。 */
 function select(id: string | null, additive = false): void {
   void flushEditors();
-  if (additive && id && id !== project.scene.root) {
+  if (additive && id && !isBoardRoot(id)) {
     selectedIds = selectedIds.includes(id) ? selectedIds.filter((each) => each !== id) : [...selectedIds, id];
     selectedId = selectedIds[selectedIds.length - 1] ?? null;
   } else {
     if (id === selectedId && selectedIds.length <= 1) return;
     selectedId = id;
-    selectedIds = id && id !== project.scene.root ? [id] : [];
+    selectedIds = id && !isBoardRoot(id) ? [id] : [];
   }
   afterSelectionChange();
 }
 
 function setSelection(ids: string[]): void {
   void flushEditors();
-  selectedIds = ids.filter((id) => node(id) && id !== project.scene.root);
+  selectedIds = ids.filter((id) => node(id) && !isBoardRoot(id));
   selectedId = selectedIds[selectedIds.length - 1] ?? null;
   afterSelectionChange();
 }
@@ -4858,15 +5420,47 @@ let yamlTimer: number | undefined;
 /** 页签都建好之后才有，放不下时收进“…”。 */
 let fitRightTabs: (() => void) | null = null;
 
+/** 右侧全部页签的代号。每类设计用其中的几个，见 kinds.ts 的 tabs。 */
+const RIGHT_TABS = ["props", "layout", "menu", "state", "doc", "yaml", "events"] as const;
+
 function showRightTab(tab: string): void {
-  for (const id of ["doc", "yaml", "layout", "menu", "state", "events"]) {
+  const allowed: readonly string[] = kind().tabs;
+  // 要切到的页签这类设计没有，就留在第一个有的页签上
+  const target = allowed.includes(tab) ? tab : (allowed[0] ?? "doc");
+  for (const id of RIGHT_TABS) {
     const t = document.getElementById(`tab-${id}`);
     const p = document.getElementById(`pane-${id}`);
-    if (t) t.setAttribute("aria-selected", String(tab === id));
-    if (p) p.hidden = tab !== id;
+    const shown = allowed.includes(id);
+    if (t) {
+      t.hidden = !shown;
+      t.setAttribute("aria-selected", String(target === id));
+    }
+    if (p) p.hidden = target !== id;
   }
   fitRightTabs?.();
-  if (tab === "yaml" && selectedId) scrollYamlTo(`  ${selectedId}:`);
+  if (target === "yaml" && selectedId) scrollYamlTo(`  ${selectedId}:`);
+}
+
+/** 现在开着的是右侧哪个页签。 */
+function currentRightTab(): string {
+  for (const id of RIGHT_TABS) {
+    if (document.getElementById(`tab-${id}`)?.getAttribute("aria-selected") === "true") return id;
+  }
+  return "doc";
+}
+
+/** 按设计类型摆好页签的顺序和显隐。项目的设计类型变了（改了 project.json）也调用它。 */
+function syncRightTabs(): void {
+  const tabs = document.querySelector<HTMLElement>("#right .tabs");
+  if (!tabs) return;
+  const anchor = tabs.querySelector(".overflow-more");
+  for (const id of kind().tabs) {
+    const t = document.getElementById(`tab-${id}`);
+    if (!t) continue;
+    if (anchor) anchor.before(t);
+    else tabs.append(t);
+  }
+  showRightTab(currentRightTab());
 }
 
 function noteWithButton(note: HTMLElement, text: string, label?: string, action?: () => void): void {
@@ -4893,9 +5487,9 @@ function docViewForSelection(): {
 } {
   if (!selectedId) {
     return {
-      target: { path: project.pageDoc, section: null },
-      text: project.docs.get(project.pageDoc) ?? "",
-      note: () => noteWithButton($("doc-note"), `整份页面文档 ${project.pageDoc}`),
+      target: { path: docOfBoard(stageRootId()), section: null },
+      text: project.docs.get(docOfBoard(stageRootId())) ?? "",
+      note: () => noteWithButton($("doc-note"), `整份页面文档 ${docOfBoard(stageRootId())}`),
     };
   }
   const id = selectedId;
@@ -4998,6 +5592,7 @@ function renderRight(): void {
     toast(`已忽略 ${LOGIC_PATH} 的外部修改，保留当前编辑内容`);
   }
   syncDocView();
+  renderPropsPane();
   renderLayoutEditPane();
   renderMenuEditPane();
   renderStateEditPane();
@@ -5610,6 +6205,8 @@ function renderAll(): void {
   syncSelection();
   $("project-name").textContent = project.name;
   $("project-root").textContent = project.root;
+  syncKindChrome();
+  renderBoardBar();
   renderPalette();
   renderLayers();
   renderToolbar();
@@ -5923,17 +6520,21 @@ async function openExportQtModal(): Promise<void> {
 }
 
 document.getElementById("export-qt-btn")?.addEventListener("click", () => {
-  void openExportQtModal();
+  // 按钮在顶栏只有一个，导出成什么由设计类型决定：界面设计导出成 Qt，平面设计导出成网页、PDF 和图片
+  if (kind().exports.includes("qt")) void openExportQtModal();
+  else openGraphicExportModal({ getProject: () => project, flush: flushEditors, toast });
 });
 
 async function main(): Promise<void> {
   ensureStageIframe();
   project = await loadProject(null);
+  // 设计窗口的基础样式随设计类型不同，项目读出来之后再定一次
+  ensureStageIframe();
   designRuntime = new Runtime(project);
   initLibrary({
     getProject: () => project,
     getMode: () => mode,
-    getZoom: () => viewZoom(),
+    getZoom: () => unitZoom(),
     readText,
     writeText,
     removeFile,
@@ -5973,6 +6574,7 @@ async function main(): Promise<void> {
   initDocView({
     getProject: () => project,
     getSelectedId: () => selectedId,
+    getPageDoc: () => docOfBoard(stageRootId()),
     onViewFullDoc: () => select(null),
     onCommitDoc: () => void saveDoc(),
   });
@@ -6003,6 +6605,17 @@ async function main(): Promise<void> {
     editLogic,
     toast,
     activateRightTab: showRightTab,
+  });
+  initPropsEdit({
+    getProject: () => project,
+    getSelectedId: () => selectedId,
+    getBoardId: stageRootId,
+    isLocked: (id) => isNodeLocked(project.scene, id),
+    isLayoutPositioned: (id) => isLayoutPositionedNode(project.scene, id),
+    saveScene,
+    toast,
+    activateRightTab: showRightTab,
+    listAssets: listProjectAssets,
   });
   initEventEdit({
     getProject: () => project,
@@ -6040,13 +6653,21 @@ async function main(): Promise<void> {
   // “独立预览”按钮是上面才加进顶栏的，“详细信息”要排在它后面，贴着右侧栏
   $("topbar").append($("toggle-right"));
   initPanels();
+  restoreBoard();
+  syncRightTabs();
+  showRightTab(kind().defaultTab);
   renderAll();
   renderLog();
   initStandalonePreviewWindow({
     getProject: () => project,
     enterPreviewMode: () => setMode("preview"),
   });
-  watchProject(() => void reload());
+  watchProject((paths) => {
+    // 项目里的脚本（控件、效果和它们引用的别的脚本）变了，设计窗口要换一个干净的环境才读得到新的
+    if (paths.some((path) => /\.m?js$/i.test(path) && !path.startsWith(".designer/"))) stageRealmStale = true;
+    invalidatePropsAssets();
+    void reload();
+  });
 }
 
 main().catch((e) => {

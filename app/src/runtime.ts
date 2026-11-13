@@ -256,9 +256,10 @@ export class Runtime {
     this.lastSceneDockLayouts.clear();
     for (const winId of allWindowIds(this.project.scene)) {
       const n = this.project.scene.nodes[winId];
-      const isRoot = winId === this.project.scene.root;
-      const open = isRoot ? true : Boolean(n?.initialOpen ?? n?.props?.open ?? false);
-      const modal = isRoot ? false : Boolean(n?.modal ?? n?.props?.modal ?? n?.type === "Dialog");
+      // 页面（平面设计的画板）不是弹出的窗口：每一页都一直显示，也不会挡住别的页
+      const alwaysOpen = winId === this.project.scene.root || n?.type === "Page";
+      const open = alwaysOpen ? true : Boolean(n?.initialOpen ?? n?.props?.open ?? false);
+      const modal = alwaysOpen ? false : Boolean(n?.modal ?? n?.props?.modal ?? n?.type === "Dialog");
       this.windows.set(winId, { open, modal });
       if (isPartitionedWindow(n)) {
         this.dockLayouts.set(winId, normalizeDockLayout(this.project.scene, n));

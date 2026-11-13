@@ -1,6 +1,6 @@
 // “引用”：把界面上选中的东西变成一段可以贴给 Agent 的文字，精确到文件和行号。
 import { isMap, isScalar, parseDocument, type Node } from "yaml";
-import { childrenOfNode, LOGIC_PATH, parseDocRef, SCENE_PATH, sectionOffsets, STANDARD_COMPONENTS, type Project } from "./model.ts";
+import { childrenOfNode, LOGIC_PATH, parseDocRef, SCENE_PATH, sectionOffsets, standardComponentsOf, type Project } from "./model.ts";
 
 /** 行号从 1 开始，首尾都包含。 */
 export interface LineRange {
@@ -218,7 +218,7 @@ export function controlsReference(project: Project, ids: string[]): string {
 
 /** 引用素材栏里的一种控件：它的声明、实现和样式文件。 */
 export function componentReference(project: Project, type: string): string {
-  const decl = project.components.get(type)?.decl ?? STANDARD_COMPONENTS.get(type)?.decl;
+  const decl = project.components.get(type)?.decl ?? standardComponentsOf(project.kind).get(type)?.decl;
   const folder = project.components.has(type) ? `components/${type}` : `app/standard/${type}`;
   return reference(project, [
     ["component", type],
