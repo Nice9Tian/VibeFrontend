@@ -20,7 +20,9 @@
     "test:layout-edit": "node scripts/test-layout-edit.ts",
     "test:mode-switch": "node scripts/test-mode-switch.ts",
     "test:dock": "node scripts/test-dock.ts",
-    "test:graphic": "node scripts/test-graphic.ts"
+    "test:graphic": "node scripts/test-graphic.ts",
+    "test:workspace": "node scripts/test-workspace.ts",
+    "test:parts": "node scripts/test-parts.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

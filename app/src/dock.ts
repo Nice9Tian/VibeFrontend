@@ -1609,12 +1609,13 @@ function startDockDragSession(
 
     // 2. 检查是否悬停在可见已停靠面板上（中心叠页签，上下/左右边缘并排；含多页签组把当前激活页签拖到本组边缘拆出分栏）
     const otherDocks = Array.from(
-      windowFrameEl.querySelectorAll<HTMLElement>('.node[data-type="Dock"], .vf-node[data-vf-type="Dock"]'),
+      windowFrameEl.querySelectorAll<HTMLElement>('.node[data-type="Dock"], .vf-node[data-vf-type="Dock"], [data-dock-id]'),
     );
     for (const otherEl of otherDocks) {
-      const otherId = otherEl.dataset.id ?? otherEl.dataset.vfId;
+      // data-dock-id：不是画布节点的停靠框（编辑器自己的工作区面板）
+      const otherId = otherEl.dataset.id ?? otherEl.dataset.vfId ?? otherEl.dataset.dockId;
       if (!otherId) continue;
-      if (otherEl.style.display === "none" || otherEl.classList.contains("dock-floating")) continue;
+      if (otherEl.hidden || otherEl.style.display === "none" || otherEl.classList.contains("dock-floating")) continue;
       let effectiveTargetId = otherId;
       if (otherId === dragDockId) {
         const peerId = dragLoc?.kind === "area" ? dragLoc.group.tabs.find((tid) => tid !== dragDockId) : undefined;

@@ -2,21 +2,24 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ProjectIO } from "../src/loader.ts";
+import { mapPartPath } from "../src/parts.ts";
 
-export function nodeIO(projectDir: string): ProjectIO {
+/** part 是子项目文件夹（如 "parts/x23"）：这时读的是这个子项目，项目自己的文件在子项目文件夹里，和编辑器的 ?part= 一样 */
+export function nodeIO(projectDir: string, part: string | null = null): ProjectIO {
   const root = path.resolve(projectDir);
   return {
     async root() {
       return root;
     },
+    part: () => part,
     async readText(relative) {
-      const full = path.join(root, relative);
+      const full = path.join(root, mapPartPath(relative, part));
       if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
       // Windows 换行符统一成 LF，和工具界面里的读法一致
       return fs.readFileSync(full, "utf8").replace(/\r\n/g, "\n");
     },
     async listDir(relative) {
-      const full = path.join(root, relative);
+      const full = path.join(root, mapPartPath(relative, part));
       if (!fs.existsSync(full)) return [];
       return fs
         .readdirSync(full, { withFileTypes: true })

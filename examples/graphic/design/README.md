@@ -21,6 +21,10 @@ design/
   lib/*.js                  # 几个控件共用的脚本（可选）
   assets/                   # 图片、字体、数据
   docs/*.md                 # 说明文档
+  parts/<名字>/              # 子项目（可选，第 8 节）：从这里拆出去单独做的一块
+    project.json
+    ui/scene.json
+    docs/part.md
 ```
 
 `project.json`：
@@ -72,6 +76,7 @@ design/
 | `Text` | 文本框：一段 HTML | `html`、`class`；只改这一个文本框的 `fontSize`（pt）、`lineHeight`（倍）、`letterSpacing`（em）、`textAlign`（left / center / right / justify），不写就照样式类 |
 | `Image` | 图片 | `src`（项目里的路径）、`fit`（contain / cover / fill / none）、`position`、`alt`、`class` |
 | `Group` | 组：把几样东西归在一起，一起移动 | `class` |
+| `Part` | 子项目：显示 `parts/<名字>/` 里那一页的内容，自己不放东西（第 8 节） | `part`（`"parts/<名字>"`）、`board`（子项目里的页面，不写是第一页） |
 | `Shape` | 基础图形（矩形、圆、多边形……） | 同界面设计，见工具里的样式条 |
 | `Container` | 还没做的占位框 | — |
 | `components/` 里的类型 | 项目自己的控件 | 由它的声明决定 |
@@ -88,6 +93,7 @@ design/
 | `styles/` | 可以改：文字长什么样、颜色和字体都在这里 |
 | `components/`、`lib/` | 可以新增和修改 |
 | `docs/*.md` | 可以改正文；不要删改 `<!-- ui-section: ... -->` 标记 |
+| `Part` 节点 | 不要往里放东西，也不要改 `props.part`；那一块的内容在 `parts/<名字>/ui/scene.json` 里改 |
 
 ## 4. 文字和样式类
 
@@ -147,3 +153,33 @@ design/
 - [ ] 跨页上文本框不压中缝（问题栏会提示）。
 - [ ] 控件的 `index.js` 用 `el.ownerDocument` 建元素，根元素带 `vf-fill`，有异步加载的用了 `stage.wait`，`destroy()` 里把动画停掉。
 - [ ] 没有改动节点的 ID、位置和尺寸，没有删改说明小节的标记。
+- [ ] 改子项目里的东西时，改的是 `parts/<名字>/ui/scene.json`；子项目节点的 `part` 指向的文件夹存在。
+
+## 8. 子项目 `parts/<名字>/`
+
+用户在工具里右键一样东西 ▸“拆成子项目”，它就搬进 `parts/<名字>/`，原处换成一个 `Part` 节点。子项目是一个只有一页的小项目：
+
+```json
+// parts/x23/project.json
+{ "version": 1, "id": "……", "name": "×23 那一行", "kind": "graphic", "part": { "of": "../.." },
+  "boards": [{ "id": "part", "doc": "docs/part.md" }] }
+```
+
+```json
+// parts/x23/ui/scene.json：页面就是这一块的大小，样式类照抄总项目那一页的
+{ "version": 1, "unit": "mm", "root": "part", "boards": ["part"],
+  "nodes": {
+    "part": { "type": "Page", "width": 176, "height": 34.07, "props": { "sheets": 1, "class": "spread", "marginTop": 0, "marginBottom": 0, "marginOuter": 0, "marginInner": 0 }, "children": ["times"] },
+    "times": { "type": "Group", "x": 0, "y": 0, "width": 176, "height": 34.07, "props": { "class": "times" }, "children": ["…"] }
+  } }
+```
+
+```json
+// 总项目 ui/scene.json 里原来的位置
+"times": { "type": "Part", "x": 20, "y": 164.6, "width": 176, "height": 34.07, "props": { "part": "parts/x23", "board": "part" } }
+```
+
+- 子项目里改了，总项目跟着变：编辑器、播放页和导出都按子项目的文件去画 `Part` 节点。
+- `styles/`、`components/`、`lib/`、`assets/` 只有总项目里的一份，子项目直接用，路径照总项目的写（`styles/kata.css`、`assets/…`）。子项目的设计类型和样式表跟着总项目，`project.json` 里不用写。
+- 子项目里可以再放 `Part`（最多 4 层），不能放它自己。
+- `Part` 节点的方框和子项目页面一样大；不一样时超出方框的部分看不到，问题栏会提示。

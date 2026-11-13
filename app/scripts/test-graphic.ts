@@ -3,6 +3,7 @@
 // 2) 检查：示例项目没有问题，写错的地方报出来；
 // 3) 真实的编辑器（无头浏览器）：页签按设计类型显示、毫米下拖动、翻页、双击改字、预览时图会动；
 // 4) 导出：网页能独立打开，PDF 每个页面一页、尺寸对，跨页拆成单页，最后没有多出来的空白页。
+import "./test-env.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";

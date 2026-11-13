@@ -7,6 +7,7 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import { emit, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { Project } from "./project.ts";
+import { partNodeElement } from "./render.ts";
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const CHANNEL_NAME = "vf-standalone-preview";
@@ -45,8 +46,17 @@ export async function openStandalonePreviewWindow(project: Project): Promise<voi
   const width = player ? 1280 : Math.max(440, (root?.width ?? 520) + 48);
   const height = player ? 900 : Math.max(340, (root?.height ?? 360) + 112);
   const title = `${player ? project.name : (root?.title ?? project.name)} · 独立预览`;
-  const pageUrl = player ? "player.html" : "index.html?preview=1";
-  const browserUrl = player ? "player.html" : "?preview=1";
+  // 多项目时带上 ?root（哪个项目）和 ?part（哪个子项目），预览的才是正在编辑的这一个
+  const here = new URLSearchParams(location.search);
+  const query = new URLSearchParams();
+  for (const key of ["root", "part"]) {
+    const value = here.get(key);
+    if (value) query.set(key, value);
+  }
+  if (!player) query.set("preview", "1");
+  const qs = query.toString() ? `?${query}` : "";
+  const pageUrl = player ? `player.html${qs}` : `index.html${qs}`;
+  const browserUrl = player ? `player.html${qs}` : qs;
 
   if (inTauri) {
     try {
@@ -124,7 +134,7 @@ export function initPreviewLauncher(
     "click",
     (e) => {
       if (!e.altKey || !document.body.classList.contains("preview")) return;
-      const wrapper = (e.target as Element | null)?.closest<HTMLElement>(".vf-node");
+      const wrapper = partNodeElement(e.target as Element | null);
       const id = wrapper?.dataset.vfId;
       if (id) {
         e.preventDefault();
@@ -194,7 +204,7 @@ export function initStandalonePreviewWindow(hooks: {
     "click",
     (e) => {
       if (!e.altKey) return;
-      const wrapper = (e.target as Element | null)?.closest<HTMLElement>(".vf-node");
+      const wrapper = partNodeElement(e.target as Element | null);
       const id = wrapper?.dataset.vfId;
       if (id) {
         e.preventDefault();

@@ -1,6 +1,7 @@
 // 针对复审 5 项要求与第一轮 7 项要求的回归验证脚本（含无头浏览器 DOM 实测）。
 //
 //   node scripts/test-step2.ts
+import "./test-env.ts";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";

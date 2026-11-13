@@ -11,39 +11,29 @@
 
   <body>
     <header id="topbar">
-      <button id="toggle-left" type="button" class="panel-toggle" title="收起或展开左侧的素材栏和图层" aria-pressed="true">素材栏</button>
+      <nav id="menubar" aria-label="菜单"></nav>
       <span id="project-name">加载中…</span>
       <span id="window-size" class="muted"></span>
       <span class="spacer"></span>
       <span id="project-root" class="muted" title="设计项目所在的文件夹"></span>
       <button id="export-qt-btn" type="button" class="preview-window-btn" title="将当前设计项目导出成 Qt 工程">导出成 Qt</button>
-      <button id="toggle-right" type="button" class="panel-toggle" title="收起或展开右侧的详细信息" aria-pressed="true">详细信息</button>
     </header>
-    <div id="resize-left" class="panel-resizer vertical" title="拖动改宽度，双击恢复默认"></div>
-    <div id="resize-right" class="panel-resizer vertical" title="拖动改宽度，双击恢复默认"></div>
-    <div id="resize-bottom" class="panel-resizer horizontal" title="拖动改高度，双击恢复默认"></div>
-
-    <aside id="left">
-      <section id="palette-section">
-        <h2>素材栏<button id="palette-toggle" type="button" class="h2-action">收起</button></h2>
-        <h3>基础素材</h3>
+    <!-- 工作区：下面这些是各个面板的内容，启动时挪进停靠面板（src/workspace.ts），面板可以拖到四边、叠成页签、浮出 -->
+    <div id="workspace">
+      <section id="project-panel" class="panel-content"></section>
+      <section id="palette-section" class="panel-content">
         <div id="palette-basic" class="palette"></div>
-        <h3>项目素材</h3>
+        <div id="palette-library" class="palette"></div>
         <div id="palette-project" class="palette"></div>
-        <h3>基础图形</h3>
         <div id="palette-shapes" class="palette-grid"></div>
-        <h3>流程图</h3>
         <div id="palette-flow" class="palette-grid"></div>
-        <h3>线条</h3>
         <div id="palette-lines" class="palette-grid"></div>
-        <h3>我的预设</h3>
         <div id="palette-user" class="palette-grid"></div>
       </section>
-      <section id="layers-section">
-        <h2>图层<button id="layers-collapse" type="button" class="h2-action">全部折叠</button><button id="layers-expand" type="button" class="h2-action">全部展开</button></h2>
+      <section id="layers-section" class="panel-content">
+        <div class="panel-toolbar"><button id="layers-collapse" type="button" class="h2-action">全部折叠</button><button id="layers-expand" type="button" class="h2-action">全部展开</button></div>
         <div id="layers"></div>
       </section>
-    </aside>
 
     <main id="center">
       <div id="center-bar">
@@ -100,15 +90,9 @@
       </div>
     </aside>
 
-    <footer id="bottom">
-      <div class="tabs" role="tablist">
-        <button id="tab-problems" type="button" role="tab" aria-selected="true">问题</button>
-        <button id="tab-log" type="button" role="tab" aria-selected="false">事件记录</button>
-        <button id="bottom-toggle" type="button" title="收起或展开底部栏">收起</button>
-      </div>
-      <div id="problems" class="bottom-pane"></div>
-      <div id="log" class="bottom-pane" hidden></div>
-    </footer>
+      <div id="problems" class="bottom-pane panel-content"></div>
+      <div id="log" class="bottom-pane panel-content"></div>
+    </div>
 
     <div id="menu" hidden></div>
     <div id="toast" hidden></div>

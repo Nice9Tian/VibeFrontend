@@ -9,6 +9,7 @@
 // 4. 在完成复杂停靠编排 + FloatBox 浮出后，实测无头 Chrome getBoundingClientRect() 与 Qt 可执行文件 layoutDump 逐控件对比（<= 3px）
 //    这一项要启动 Qt 程序，带 --qt 才跑
 
+import "./test-env.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";

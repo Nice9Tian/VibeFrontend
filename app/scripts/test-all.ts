@@ -6,6 +6,7 @@
 //   npm test -- --qt      只跑 Qt 测试（npm run test:qt）
 //
 // 改动指当前工作区相对 origin/main 的全部差异，含未跟踪的文件。
+import "./test-env.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,7 +16,7 @@ import { qtRelevantFiles, qtSourceFiles } from "./test-tiers.ts";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.dirname(appRoot);
-const FAST = ["test-editor.ts", "test-step2.ts", "test-library.ts", "test-docview.ts", "test-layout-edit.ts", "test-mode-switch.ts", "test-dock.ts", "test-graphic.ts", "test-workspace.ts"];
+const FAST = ["test-editor.ts", "test-step2.ts", "test-library.ts", "test-docview.ts", "test-layout-edit.ts", "test-mode-switch.ts", "test-dock.ts", "test-graphic.ts", "test-workspace.ts", "test-parts.ts"];
 const ANIMEAN_DESIGN = "../examples/animean/design";
 
 function changedFiles(): string[] | null {

@@ -1,6 +1,7 @@
 // 项目文件的读写接口。在 Tauri 窗口里走 Rust 命令；在普通浏览器里（npm run dev）走 Vite 的开发接口。
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { isValidPartPath, mapPartPath, unmapChangedPath } from "./parts.ts";
 
 export interface DirEntry {
   name: string;
@@ -27,6 +28,21 @@ export function currentRootId(): string | null {
   return root || null;
 }
 
+/**
+ * 当前打开的子项目文件夹（地址栏里的 ?part=parts/<名字>），打开的是总项目时为 null。
+ * 写得不对的（不在 parts/ 下、带 ..）当作没写，免得读写到项目外面去。
+ */
+export function currentPart(): string | null {
+  if (typeof location === "undefined") return null;
+  const part = (new URLSearchParams(location.search).get("part") ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+  return part && isValidPartPath(part) ? part : null;
+}
+
+/** 编辑器里的路径 → 总项目文件夹里的路径（打开子项目时，项目自己的文件在子项目文件夹里） */
+function resolve(path: string): string {
+  return mapPartPath(path, currentPart());
+}
+
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
     return await invoke<T>(cmd, args);
@@ -41,11 +57,8 @@ async function devFetch(endpoint: string, path = "", init?: RequestInit, allow40
   if (root) params.set("root", root);
   const res = await fetch(`/__fs/${endpoint}?${params}`, init);
   if (!res.ok) {
-    if (allow404 && res.status === 404) {
-      const detail = (await res.clone().text().catch(() => "")).trim();
-      if (!detail) return res;
-      throw new Error(detail);
-    }
+    // 404 是文件不存在；项目本身不在（?root= 指向的项目不在清单里）时开发服务器另外标一个 X-VF-Error，那要报错
+    if (allow404 && res.status === 404 && res.headers.get("X-VF-Error") !== "no-project") return res;
     const detail = (await res.text().catch(() => "")).trim();
     throw new Error(detail || `${endpoint} ${path} 失败（HTTP ${res.status}）`);
   }
@@ -81,9 +94,9 @@ export async function projectRoot(): Promise<string> {
 export async function readText(path: string): Promise<string | null> {
   let text: string | null;
   if (inTauri) {
-    text = await tauriInvoke<string | null>("read_text", { path });
+    text = await tauriInvoke<string | null>("read_text", { path: resolve(path) });
   } else {
-    const res = await devFetch("read", path, undefined, true);
+    const res = await devFetch("read", resolve(path), undefined, true);
     text = res.status === 404 ? null : await res.text();
   }
   return text === null ? null : text.replace(/\r\n/g, "\n");
@@ -115,35 +128,46 @@ export async function writesSettled(): Promise<void> {
 }
 
 export function writeText(path: string, content: string): Promise<void> {
-  return enqueueFileChange(path, async () => {
-    if (inTauri) return tauriInvoke<void>("write_text", { path, content });
-    await devFetch("write", path, { method: "POST", body: content });
+  const real = resolve(path);
+  return enqueueFileChange(real, async () => {
+    if (inTauri) return tauriInvoke<void>("write_text", { path: real, content });
+    await devFetch("write", real, { method: "POST", body: content });
   });
 }
 
 export function removeFile(path: string): Promise<void> {
-  return enqueueFileChange(path, async () => {
-    if (inTauri) return tauriInvoke<void>("remove_file", { path });
-    await devFetch("remove", path, { method: "POST" });
+  const real = resolve(path);
+  return enqueueFileChange(real, async () => {
+    if (inTauri) return tauriInvoke<void>("remove_file", { path: real });
+    await devFetch("remove", real, { method: "POST" });
   });
 }
 
 export async function listDir(path: string): Promise<DirEntry[]> {
-  if (inTauri) return tauriInvoke<DirEntry[]>("list_dir", { path });
-  return (await devFetch("list", path)).json();
+  if (inTauri) return tauriInvoke<DirEntry[]>("list_dir", { path: resolve(path) });
+  return (await devFetch("list", resolve(path))).json();
 }
 
 /**
  * 项目文件夹里有任何变化时调用 onChange（已合并 200 毫秒内的连续变化）。
  * paths 是这段时间里变过的文件，相对于项目文件夹，用 / 分隔；系统没告诉是哪个文件时为空。
+ * 打开子项目时，路径按编辑器的眼光换算：子项目自己的文件去掉 parts/<名字>/ 前缀，总项目自己的画布和文档不报，
+ * 别的子项目的文件带 @root/ 前缀报（子项目里可能又放了别的子项目）。
  */
 export function watchProject(onChange: (paths: string[]) => void): void {
   let timer: number | undefined;
   const changed = new Set<string>();
+  const part = currentPart();
   const fire = (paths: unknown) => {
-    for (const path of Array.isArray(paths) ? paths : [paths]) {
-      if (typeof path === "string" && path) changed.add(path.replace(/\\/g, "/"));
+    const list = (Array.isArray(paths) ? paths : [paths]).filter((p): p is string => typeof p === "string" && p !== "");
+    let relevant = list.length === 0; // 没说是哪个文件：照旧重读
+    for (const path of list) {
+      const mapped = unmapChangedPath(path.replace(/\\/g, "/"), part);
+      if (mapped === null) continue;
+      changed.add(mapped);
+      relevant = true;
     }
+    if (!relevant) return;
     window.clearTimeout(timer);
     timer = window.setTimeout(() => {
       const list = [...changed];

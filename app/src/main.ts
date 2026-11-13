@@ -9,7 +9,11 @@ import {
   syncSceneNodesFromDockLayout,
   type DockPreviewCallbacks,
 } from "./dock";
-import { listDir, localWriteCount, projectBaseUrl, readText, removeFile, watchProject, writeText, writesSettled } from "./fs";
+import { currentRootId, listDir, localWriteCount, projectBaseUrl, projectPageUrl, readText, removeFile, watchProject, writeText, writesSettled } from "./fs";
+import { askFields } from "./dialogs";
+import { carveOutPart, partFolderName, partRefOf, PARTS_DIR, ROOT_PREFIX } from "./parts";
+import { initProjectPanel } from "./projectpanel";
+import { partNodeElement, renderPartContent, type RenderContext } from "./render";
 import { cssLength, formatLength, fromPx, linesAvailable, toPx, type DesignKind, type UnitSpec } from "./kinds";
 import { applyBoard, applyGroupClass, applyNodeBox, createStageServices, createWaitTracker, SHAPE_STAGE_CSS, stageBaseCssFor } from "./stage";
 import { initDocView, syncDocView, syncPreviewSelectionToTextarea } from "./docview";
@@ -35,7 +39,10 @@ import { openGraphicExportModal } from "./graphicexport";
 import { initPropsEdit, invalidatePropsAssets, renderPropsPane } from "./propsedit";
 import { serializeEdited } from "./richtext";
 import { overflowBar } from "./overflowbar";
-import { initPanels } from "./panels";
+import { initAssetBrowser } from "./assetbrowser";
+import { registerCommand } from "./commands";
+import { initMenuBar, openCommandPalette, openShortcutSheet } from "./menubar";
+import { createWorkspace, type Workspace } from "./workspace";
 import { initPreviewLauncher, initStandalonePreviewWindow, isStandalonePreview, notifyMainWindowSelect, syncStandalonePreviewTitle } from "./previewwindow";
 import {
   allSceneMenuIds,
@@ -174,8 +181,8 @@ import {
 } from "./transform";
 import { snapMove, snapPoint, snapResize, type Guide, type SnapOptions } from "./snap";
 import { activePage, hiddenPages, pagesToReveal } from "./stackview";
-import { onZoomChange, panToSelection, setSelectionRectSource, viewZoom, zoomToSelection } from "./viewport";
-import { PRESETS_PATH } from "./loader";
+import { centerView, onZoomChange, panToSelection, setSelectionRectSource, setZoom, viewZoom, zoomToFit, zoomToSelection } from "./viewport";
+import { presetsPath } from "./loader";
 import type { Value } from "./expr";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -476,7 +483,7 @@ async function applyHistorySnapshot(target: HistorySnapshot, nextHistory: typeof
     if ((prevDoc ?? "") !== content) changes.push({ path: docPath, next: content, prev: prevDoc ?? null });
   }
   if (target.presetsText !== undefined && target.presetsText !== currentPresetsText()) {
-    changes.push({ path: PRESETS_PATH, next: target.presetsText, prev: currentPresetsText() });
+    changes.push({ path: presetsPath(project.partOf), next: target.presetsText, prev: currentPresetsText() });
   }
   window.clearTimeout(yamlTimer);
   project.logicText = target.logicText;
@@ -747,6 +754,38 @@ function showNodeError(body: HTMLElement, message: string): void {
   body.append(box);
 }
 
+/**
+ * 子项目节点：子项目那一页的内容画在方框里，和播放页、导出用的是同一份画法（render.ts）。
+ * 只看不改：画布上点它选中的是整个子项目节点，双击打开子项目去改。
+ */
+function mountPart(id: string, n: SceneNode, body: HTMLElement): ComponentInstance {
+  const instances: ComponentInstance[] = [];
+  const ctx: RenderContext = {
+    types: (type) => project.components.get(type) ?? standardComponents().get(type),
+    services: stageServicesNow(),
+    instances,
+    parts: (ref) => project.parts?.get(ref)?.scene ?? undefined,
+    // 找不到、套了自己这些问题，检查已经在问题栏里报了
+    onError: () => undefined,
+    stack: project.partOf?.part ? [project.partOf.part] : [],
+  };
+  renderPartContent(body, n, id, ctx);
+  return {
+    update() {
+      // 子项目的内容只跟着子项目的文件变，文件一变整个画布重画
+    },
+    destroy() {
+      for (const instance of instances) {
+        try {
+          instance.destroy();
+        } catch {
+          // 控件的清理出错不影响重建
+        }
+      }
+    },
+  };
+}
+
 function buildNode(id: string, parentEl: HTMLElement): void {
   const n = node(id);
   if (!n) return;
@@ -783,6 +822,8 @@ function buildNode(id: string, parentEl: HTMLElement): void {
       body.textContent = id;
       body.classList.add("vf-placeholder");
     }
+  } else if (n.type === "Part" && kind().id === "graphic") {
+    entry.instance = mountPart(id, n, body);
   } else if (n.type === "Container" || n.type in LAYOUT_TYPE_KINDS) {
     // 未转换的容器或布局容器：没有子节点时显示自己的 ID，作为占位
     if (!childrenOf(n).length) {
@@ -1404,6 +1445,14 @@ body.edit .vf-node[data-vf-type="Group"] > .vf-body.vf-placeholder {
 body.preview .vf-placeholder {
   visibility: hidden;
 }
+/* 子项目：内容只看不改，编辑时用虚线框标出它是一整块（双击进去改） */
+.vf-body.vf-part {
+  pointer-events: none;
+}
+body.edit .vf-node[data-vf-type="Part"] > .vf-body.vf-part {
+  outline: 1px dashed rgba(100, 116, 139, 0.5);
+  outline-offset: -0.5px;
+}
 .vf-node.vf-ghost {
   opacity: 0.35;
   outline: 1px dashed #9aa1ad;
@@ -1489,7 +1538,7 @@ function ensureStageIframe(): HTMLElement {
       "click",
       (e) => {
         if (!e.altKey || mode !== "preview") return;
-        const wrapper = (e.target as Element | null)?.closest<HTMLElement>(".vf-node");
+        const wrapper = partNodeElement(e.target as Element | null);
         const id = wrapper?.dataset.vfId;
         if (id) {
           e.preventDefault();
@@ -3204,7 +3253,8 @@ overlay.addEventListener("dblclick", (e) => {
     }
   }
   const id = hitTest(pt.x, pt.y);
-  if (id && isGraphic(id)) openTextEditor(id);
+  if (id && node(id)?.type === "Part") void openPart(id, e.ctrlKey || e.metaKey);
+  else if (id && isGraphic(id)) openTextEditor(id);
   else if (id && kind().has.richText && node(id)?.type === "Text") openRichTextEditor(id);
 });
 
@@ -4469,9 +4519,15 @@ function showMenu(x: number, y: number, id: string): void {
         { label: node(id)?.type === "Line" ? "编辑文字" : "编辑文字（双击）", action: () => openTextEditor(id) },
         { label: "存为预设", action: () => void saveAsPreset(id) },
       );
+    } else if (node(id)?.type === "Part") {
+      items.push(
+        { label: "打开子项目（双击）", action: () => void openPart(id, false) },
+        { label: "在新标签页打开子项目", action: () => void openPart(id, true) },
+      );
     } else if (node(id)?.type !== "Container") {
       items.push({ label: "还原为容器", action: () => void revertToContainer(id) });
     }
+    if (canCarvePart(id)) items.push({ label: "拆成子项目……", action: () => void carvePart(id) });
     if (node(id)?.type === "Shape" && linesAvailable(kind(), unit())) items.push({ label: "快速新建并连线（Ctrl+Enter）", action: () => void quickCreate(id) });
     items.push(...clipboardItems());
     items.push(
@@ -4962,7 +5018,7 @@ async function writePresets(presets: ShapePreset[]): Promise<boolean> {
   const nextText = currentPresetsText(presets);
   const before = currentSnapshot();
   try {
-    await writeText(PRESETS_PATH, nextText);
+    await writeText(presetsPath(project.partOf), nextText);
   } catch (e) {
     toast(`保存预设失败：${(e as Error).message ?? String(e)}`);
     return false;
@@ -5289,29 +5345,7 @@ $("layers-expand").addEventListener("click", () => {
   renderLayers();
 });
 
-// 素材栏收起来，把地方让给图层
-const PALETTE_COLLAPSED_KEY = "vf.paletteCollapsed";
 
-function setPaletteCollapsed(collapsed: boolean): void {
-  $("palette-section").classList.toggle("collapsed", collapsed);
-  $("palette-toggle").textContent = collapsed ? "展开" : "收起";
-}
-
-try {
-  setPaletteCollapsed(localStorage.getItem(PALETTE_COLLAPSED_KEY) === "1");
-} catch {
-  setPaletteCollapsed(false);
-}
-
-$("palette-toggle").addEventListener("click", () => {
-  const collapsed = !$("palette-section").classList.contains("collapsed");
-  setPaletteCollapsed(collapsed);
-  try {
-    localStorage.setItem(PALETTE_COLLAPSED_KEY, collapsed ? "1" : "0");
-  } catch {
-    // 存不下只是下次打开要再收一次
-  }
-});
 
 
 function syncSelection(): void {
@@ -5872,19 +5906,16 @@ idInput.addEventListener("change", () => {
 
 // ---------- 底部：问题与事件记录 ----------
 
+/** 切到问题或事件记录（它们是两个停靠面板，默认叠在一起）；用户关掉了的不去打开 */
 function showBottomTab(tab: "problems" | "log"): void {
-  $("tab-problems").setAttribute("aria-selected", String(tab === "problems"));
-  $("tab-log").setAttribute("aria-selected", String(tab === "log"));
-  $("problems").hidden = tab !== "problems";
-  $("log").hidden = tab !== "log";
+  const id = tab === "problems" ? "panel-problems" : "panel-log";
+  if (workspace?.isOpen(id)) workspace.focus(id);
 }
-$("tab-problems").addEventListener("click", () => showBottomTab("problems"));
-$("tab-log").addEventListener("click", () => showBottomTab("log"));
 
 function renderProblems(): void {
   const errors = project.problems.filter((p) => p.level === "error").length;
   const hints = project.problems.length - errors;
-  $("tab-problems").textContent = `问题（${errors} 个错误，${hints} 个提示）`;
+  workspace?.setTitle("panel-problems", errors + hints === 0 ? "问题" : `问题（${errors} 个错误，${hints} 个提示）`);
   const rows = project.problems.map((problem) => {
     const row = document.createElement("div");
     row.className = `problem ${problem.level}` + (problem.nodeId ? " clickable" : "");
@@ -5927,7 +5958,7 @@ function renderLog(): void {
   const pane = $("log");
   pane.replaceChildren(...rows);
   pane.scrollTop = pane.scrollHeight;
-  $("tab-log").textContent = `事件记录（${log.length}）`;
+  workspace?.setTitle("panel-log", log.length === 0 ? "事件记录" : `事件记录（${log.length}）`);
 }
 
 // ---------- 预览 ----------
@@ -6203,8 +6234,9 @@ function restoreFormDrafts(drafts: Array<[string, string]>): void {
 function renderAll(): void {
   const formDrafts = readFormDrafts();
   syncSelection();
-  $("project-name").textContent = project.name;
-  $("project-root").textContent = project.root;
+  renderProjectName();
+  $("project-root").textContent = project.partOf?.part ? `${project.root} ▸ ${project.partOf.part}` : project.root;
+  projectPanel?.refresh();
   syncKindChrome();
   renderBoardBar();
   renderPalette();
@@ -6525,9 +6557,259 @@ document.getElementById("export-qt-btn")?.addEventListener("click", () => {
   else openGraphicExportModal({ getProject: () => project, flush: flushEditors, toast });
 });
 
+// ---------- 工作区：停靠面板、菜单、命令 ----------
+
+let workspace: Workspace | null = null;
+let projectPanel: { refresh(): void } | null = null;
+
+// ---------- 子项目 ----------
+
+/** 顶栏的项目名：在子项目里时是“总项目 › 子项目”，点总项目的名字回去 */
+function renderProjectName(): void {
+  const host = $("project-name");
+  if (!project.partOf) {
+    host.textContent = project.name;
+    host.title = "";
+    return;
+  }
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "project-crumb";
+  back.textContent = project.partOf.name;
+  back.title = "回到总项目";
+  back.addEventListener("click", () => void leaveTo(projectPageUrl(currentRootId(), null), false));
+  const sep = document.createElement("span");
+  sep.className = "project-crumb-sep";
+  sep.textContent = "›";
+  const here = document.createElement("span");
+  here.textContent = project.name;
+  host.replaceChildren(back, sep, here);
+  host.title = "正在编辑子项目：改完总项目里的这一块跟着变";
+}
+
+/** 离开这个页面去另一个项目或子项目：先把没存的存上 */
+async function leaveTo(url: string, newTab: boolean): Promise<void> {
+  if (newTab) {
+    window.open(url, "_blank", "noopener");
+    return;
+  }
+  if (!(await flushEditors())) {
+    toast("有内容还没存上，先没有离开");
+    return;
+  }
+  await writesSettled();
+  location.assign(url);
+}
+
+async function openPart(id: string, newTab: boolean): Promise<void> {
+  const ref = partRefOf(node(id));
+  if (!ref) return toast(`子项目 ${id} 没写是哪个子项目`);
+  if (!project.parts?.get(ref.part)?.scene) return toast(`找不到子项目 ${ref.part}`);
+  await leaveTo(projectPageUrl(currentRootId(), ref.part), newTab);
+}
+
+/** 平面设计里，页面上的一样东西（不是页面本身、不是子项目）可以拆成子项目 */
+function canCarvePart(id: string): boolean {
+  const n = node(id);
+  return kind().id === "graphic" && !!n && !isBoardRoot(id) && n.type !== "Part" && n.type !== "Line" && !isNodeLocked(project.scene, id);
+}
+
+/**
+ * 把一样东西（连同它里面的）拆成子项目：parts/<名字>/ 下写好子项目的文件，画布里原地换成子项目节点。
+ * 撤销只把画布换回去，子项目的文件夹留着（项目面板里还看得到，可以再放回来或者删掉）。
+ */
+async function carvePart(id: string): Promise<void> {
+  if (!canCarvePart(id) || !(await flushEditors())) return;
+  const values = await askFields({
+    title: "拆成子项目",
+    message: `把“${id}”连同它里面的东西拆出去单独做。拆完这里显示子项目的内容，在子项目里改，这里跟着变。样式表、控件和素材两边共用。`,
+    fields: [{ key: "name", label: "子项目的名字", value: id }],
+    ok: "拆出来",
+    validate: (v) => (v.name.trim() ? null : "起个名字"),
+  });
+  // 对话框开着的时候项目可能重读过（文件监听）：节点还在、还能拆，才往下走
+  if (!values || !canCarvePart(id) || !(await flushEditors())) return;
+  const name = values.name.trim();
+  // parts/ 下已有的文件夹都不用（包括没有 project.json 的半截文件夹，免得把里面的东西盖掉）
+  let taken: Set<string>;
+  try {
+    taken = new Set((await listDir(`${ROOT_PREFIX}${PARTS_DIR}`)).map((entry) => entry.name));
+  } catch (e) {
+    return toast(`拆成子项目失败：读不到 ${PARTS_DIR}/ 文件夹（${(e as Error).message}）`);
+  }
+  const folder = partFolderName(/[A-Za-z0-9]/.test(name) ? name : id, taken);
+  const part = `${PARTS_DIR}/${folder}`;
+  const board = boardOfNode(project.scene, id);
+  const boardClass = board ? String(node(board)?.props?.class ?? "") : "";
+  const scene = structuredClone(project.scene);
+  let result: ReturnType<typeof carveOutPart>;
+  try {
+    result = carveOutPart(scene, id, { part, name, boardClass, id: crypto.randomUUID() });
+  } catch (e) {
+    return toast((e as Error).message);
+  }
+  const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
+  const files = [
+    { path: `${ROOT_PREFIX}${part}/project.json`, next: json(result.partConfig), prev: null },
+    { path: `${ROOT_PREFIX}${part}/ui/scene.json`, next: json(result.partScene), prev: null },
+    { path: `${ROOT_PREFIX}${part}/docs/part.md`, next: result.partDoc, prev: null },
+  ];
+  const failure = await writeFilesTogether(files);
+  if (failure !== null) return toast(`拆成子项目失败：${failure}`);
+  // 新的子项目先放进内存，画布马上就能画出它；文件监听随后会整个重读
+  const before = { parts: project.parts, partList: project.partList };
+  project.parts = new Map(project.parts ?? []).set(part, { name, scene: result.partScene });
+  project.partList = [...(project.partList ?? []), { part, name }];
+  project.scene = scene;
+  await saveScene({ label: `拆成子项目 ${name}` });
+  if (node(id)?.type !== "Part") {
+    // 画布没存上（saveScene 已经把画布退回去、报了错）：刚写的子项目文件也拿掉，内存回到拆之前
+    project.parts = before.parts;
+    project.partList = before.partList;
+    for (const file of files) await removeFile(file.path).catch(() => undefined);
+    renderAll();
+    return;
+  }
+  select(id);
+  toast(`已拆成子项目“${name}”（${part}）：双击它打开`);
+}
+
+/** 面板的 ID 存进了用户的排列里，改名会丢掉用户的排列 */
+const PANELS = {
+  project: "panel-project",
+  assets: "panel-assets",
+  layers: "panel-layers",
+  details: "panel-details",
+  problems: "panel-problems",
+  log: "panel-log",
+} as const;
+
+function initWorkspaceShell(): void {
+  // 独立预览窗口只有设计窗口，没有面板
+  if (isStandalonePreview()) return;
+  workspace = createWorkspace(
+    $("workspace"),
+    $("center"),
+    [
+      { id: PANELS.project, title: "项目", content: $("project-panel"), area: "left", width: 240, height: 320 },
+      { id: PANELS.assets, title: "素材", content: $("palette-section"), area: "left", width: 240, height: 380 },
+      { id: PANELS.layers, title: "图层", content: $("layers-section"), area: "left", width: 240, height: 300 },
+      { id: PANELS.details, title: "详细信息", content: $("right"), area: "right", width: 360, height: 600 },
+      { id: PANELS.problems, title: "问题", content: $("problems"), area: "bottom", width: 600, height: 150 },
+      { id: PANELS.log, title: "事件记录", content: $("log"), area: "bottom", width: 600, height: 150 },
+    ],
+    {
+      areas: {
+        left: {
+          size: 240,
+          splitOrientation: "vertical",
+          groups: [{ tabs: [PANELS.assets, PANELS.project], active: PANELS.assets }, { tabs: [PANELS.layers] }],
+        },
+        right: { size: 360, groups: [{ tabs: [PANELS.details] }] },
+        bottom: { size: 150, groups: [{ tabs: [PANELS.problems, PANELS.log], active: PANELS.problems }] },
+        top: { groups: [] },
+      },
+      floating: [],
+    },
+  );
+  // 素材面板：按组进入、能搜索（参考 PromptCut 的素材库）
+  initAssetBrowser($("palette-section"), [
+    { id: "basic", title: "基础素材", category: "controls", container: $("palette-basic"), preview: "list" },
+    { id: "library", title: "收藏的素材", category: "controls", container: $("palette-library"), preview: "list", emptyHint: "项目控件右键 ▸ 收藏素材，以后在别的项目里也能用" },
+    { id: "project", title: "项目控件", category: "controls", container: $("palette-project"), preview: "list", emptyHint: "Agent 做好的控件会出现在这里" },
+    { id: "shapes", title: "基础图形", category: "graphics", container: $("palette-shapes"), preview: "grid" },
+    { id: "flow", title: "流程图", category: "graphics", container: $("palette-flow"), preview: "grid" },
+    { id: "lines", title: "线条", category: "graphics", container: $("palette-lines"), preview: "grid" },
+    { id: "user", title: "我的预设", category: "graphics", container: $("palette-user"), preview: "grid", emptyHint: "画布上的图形右键 ▸ 存为预设，会出现在这里" },
+  ]);
+  registerShellCommands();
+  initMenuBar($("menubar"));
+}
+
+/** 菜单里的命令。快捷键已经由别处处理的只写出来给人看（bind 不设） */
+function registerShellCommands(): void {
+  const click = (id: string) => () => document.getElementById(id)?.click();
+  registerCommand({ id: "file.open-project", label: "项目……", menu: "file", group: "project", keywords: "打开 切换 子项目", run: () => workspace?.focus(PANELS.project) });
+  registerCommand({
+    id: "file.open-master",
+    label: "回到总项目",
+    menu: "file",
+    group: "project",
+    keywords: "子项目 返回 上一级",
+    enabled: () => Boolean(project?.partOf),
+    run: () => void leaveTo(projectPageUrl(currentRootId(), null), false),
+  });
+  registerCommand({
+    id: "edit.carve-part",
+    label: "拆成子项目……",
+    menu: "edit",
+    group: "part",
+    keywords: "子项目 单独 施工 part",
+    enabled: () => Boolean(selectedId && canCarvePart(selectedId)),
+    run: () => {
+      if (selectedId) void carvePart(selectedId);
+    },
+  });
+  registerCommand({ id: "file.export", label: "导出……", menu: "file", group: "out", run: click("export-qt-btn") });
+  registerCommand({ id: "file.preview-window", label: "独立预览", menu: "file", group: "out", run: click("open-preview-window") });
+  registerCommand({ id: "edit.undo", label: "撤销", menu: "edit", group: "history", shortcut: "Ctrl+Z", run: () => void undo() });
+  registerCommand({ id: "edit.redo", label: "重做", menu: "edit", group: "history", shortcut: "Ctrl+Y", run: () => void redo() });
+  registerCommand({ id: "view.edit", label: "编辑模式", menu: "view", group: "mode", checked: () => mode === "edit", run: () => setMode("edit") });
+  registerCommand({ id: "view.preview", label: "预览模式", menu: "view", group: "mode", checked: () => mode === "preview", run: () => setMode("preview") });
+  registerCommand({ id: "view.fit", label: "适应窗口", menu: "view", group: "zoom", shortcut: "Shift+1", run: zoomToFit });
+  registerCommand({ id: "view.actual", label: "实际大小（100%）", menu: "view", group: "zoom", shortcut: "Ctrl+0", run: () => setZoom(1) });
+  registerCommand({ id: "view.selection", label: "缩放到所选", menu: "view", group: "zoom", shortcut: "Shift+2", run: zoomToSelection });
+  registerCommand({ id: "view.center", label: "居中", menu: "view", group: "zoom", run: centerView });
+  for (const panel of workspace?.panels ?? []) {
+    registerCommand({
+      id: `window.${panel.id}`,
+      label: panel.title,
+      menu: "window",
+      group: "panels",
+      keywords: "面板 显示 隐藏",
+      checked: () => workspace?.isOpen(panel.id) ?? false,
+      run: () => (workspace?.isOpen(panel.id) ? workspace.setOpen(panel.id, false) : workspace?.focus(panel.id)),
+    });
+  }
+  registerCommand({ id: "window.reset", label: "重置布局", menu: "window", group: "layout", keywords: "面板 默认", run: () => workspace?.reset() });
+  registerCommand({ id: "help.palette", label: "命令面板", menu: "help", group: "help", shortcut: "Ctrl+K", bind: true, run: () => openCommandPalette() });
+  registerCommand({
+    id: "help.shortcuts",
+    label: "快捷键",
+    menu: "help",
+    group: "help",
+    run: () =>
+      openShortcutSheet([
+        ["V", "选择"],
+        ["R / O / T", "矩形、椭圆、文字"],
+        ["L / X", "直线、折线连接线"],
+        ["方向键", "挪一点；Shift 挪多一点"],
+        ["Ctrl+C / Ctrl+V", "复制、粘贴"],
+        ["Ctrl+D", "原地复制一份"],
+        ["Delete", "删除所选"],
+        ["空格 + 拖动", "平移画布"],
+        ["Ctrl + 滚轮", "缩放画布"],
+        ["PageUp / PageDown", "平面设计翻页"],
+        ["Ctrl+Enter", "从所选画出连接的下一个图形"],
+      ]),
+  });
+}
+
 async function main(): Promise<void> {
+  initWorkspaceShell();
   ensureStageIframe();
   project = await loadProject(null);
+  if (workspace) {
+    projectPanel = initProjectPanel($("project-panel"), {
+      getProject: () => project,
+      flush: flushEditors,
+      select: (id) => {
+        select(id);
+        zoomToSelection();
+      },
+      toast,
+    });
+  }
   // 设计窗口的基础样式随设计类型不同，项目读出来之后再定一次
   ensureStageIframe();
   designRuntime = new Runtime(project);
@@ -6651,9 +6933,6 @@ async function main(): Promise<void> {
       }
     },
   );
-  // “独立预览”按钮是上面才加进顶栏的，“详细信息”要排在它后面，贴着右侧栏
-  $("topbar").append($("toggle-right"));
-  initPanels();
   restoreBoard();
   syncRightTabs();
   showRightTab(kind().defaultTab);

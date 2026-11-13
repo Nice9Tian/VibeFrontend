@@ -12,7 +12,6 @@ import { activePage, hiddenPages, pagesToReveal } from "../src/stackview.ts";
 import { qtRelevantFiles, qtSourceFiles } from "./test-tiers.ts";
 import { eventRowsFor } from "../src/eventedit.ts";
 import { controlReference, controlsReference } from "../src/refs.ts";
-import { clampPanels, DEFAULT_PANELS } from "../src/panels.ts";
 import { nodeIO } from "./node-io.ts";
 import {
   applyAddNodeToScene,
@@ -205,24 +204,6 @@ test("层叠容器：当前页判定、隐藏页集合、切到选中控件所�
   assert.deepEqual(pagesToReveal(scene, "btnD"), [{ stack: "inner", page: "pageD" }, { stack: "outer", page: "pageA" }], "嵌套时每层都要切");
   assert.deepEqual(pagesToReveal(scene, "pageB"), [{ stack: "outer", page: "pageB" }], "选中页本身也要切到它");
   assert.deepEqual(pagesToReveal(scene, "outer"), [], "层叠容器本身不用切");
-});
-
-test("拓展栏尺寸：不能拖过最小值，也不能把画布挤没", () => {
-  const big = { width: 1600, height: 900 };
-  assert.deepEqual(clampPanels(DEFAULT_PANELS, big), DEFAULT_PANELS, "默认尺寸在普通窗口里不用动");
-  assert.equal(clampPanels({ ...DEFAULT_PANELS, left: 10 }, big).left, 140, "左栏有最小宽度");
-  assert.equal(clampPanels({ ...DEFAULT_PANELS, right: 10 }, big).right, 260, "右栏有最小宽度");
-  assert.equal(clampPanels({ ...DEFAULT_PANELS, bottom: 10 }, big).bottom, 72, "底部栏有最小高度");
-
-  const huge = clampPanels({ ...DEFAULT_PANELS, left: 5000 }, big);
-  assert.equal(huge.left + huge.right, 1600 - 500, "两栏加起来也要给画布留出 500");
-  assert.equal(clampPanels({ ...DEFAULT_PANELS, bottom: 5000 }, big).bottom, 900 - 36 - 200, "底部栏要给画布留出 200 高");
-
-  const closed = clampPanels({ ...DEFAULT_PANELS, rightOpen: false, left: 5000 }, big);
-  assert.equal(closed.left, 1600 - 500, "右栏收起后左栏能用它的地方");
-
-  const tiny = clampPanels(DEFAULT_PANELS, { width: 500, height: 300 });
-  assert.deepEqual([tiny.left, tiny.right, tiny.bottom], [140, 260, 72], "窗口太小时各栏停在最小值");
 });
 
 test("多控件引用：共同的信息只写一次，不同的留在各自那一行", () => {

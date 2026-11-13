@@ -88,10 +88,12 @@ function listProjectFiles(projectDir: string, outDir: string): string[] {
       const full = path.join(projectDir, next);
       // 导出目录在项目里面时，不把上一次的导出再抄进去
       if (path.resolve(full) === outDir) continue;
-      // 只在项目文件夹的最上一层挑掉说明文档、逻辑和工具自己的文件；assets/docs/ 这样的素材照样带上
+      // 只在项目文件夹的最上一层挑掉说明文档、逻辑和工具自己的文件；assets/docs/ 这样的素材照样带上。
+      // 子项目（parts/<名字>/）也是一个项目：它的这一层同样挑掉，网页只要它的 project.json 和 ui/
+      const top = rel === "" || /^parts\/[^/]+$/.test(rel);
       if (entry.isDirectory()) {
-        if (!(rel === "" && SKIP_DIRS.has(entry.name)) && !entry.name.startsWith(".") && entry.name !== "node_modules") walk(next);
-      } else if (!(rel === "" && (SKIP_FILES.has(entry.name) || entry.name.endsWith(".md")))) {
+        if (!(top && SKIP_DIRS.has(entry.name)) && !entry.name.startsWith(".") && entry.name !== "node_modules") walk(next);
+      } else if (!(top && (SKIP_FILES.has(entry.name) || entry.name.endsWith(".md")))) {
         found.push(next);
       }
     }

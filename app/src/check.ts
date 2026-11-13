@@ -642,7 +642,7 @@ export function check(project: Project): Problem[] {
       error(`控件 ${type}：${comp.error}`);
     }
     // 和工具自带的类型同名：工具会用自带的那个，项目里的这个不会生效
-    const graphicOnly = type === "Page" || type === "Group";
+    const graphicOnly = type === "Page" || type === "Group" || type === "Part";
     if (BUILTIN_TYPES.includes(type) && (!graphicOnly || project.kind === "graphic")) {
       error(`控件 ${type}：类型名和工具自带的类型重名，工具会用自带的那个，请给 components/${comp.folder ?? type} 改个名字`);
     }

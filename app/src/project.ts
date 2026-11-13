@@ -3,7 +3,7 @@
 import { mountStateImageControl } from "../standard/index.ts";
 import { check } from "./check.ts";
 import { scopeComponentCss } from "./cssscope.ts";
-import { listDir, projectBaseUrl, projectRoot, projectUrl, readText } from "./fs";
+import { currentPart, listDir, projectBaseUrl, projectRoot, projectUrl, readText } from "./fs";
 import { loadProjectFiles } from "./loader.ts";
 import { md5 } from "./md5.ts";
 import {
@@ -164,7 +164,7 @@ async function injectComponentStyles(project: Project): Promise<string> {
 
 /** previous 用于在 YAML 写坏时沿用上一份有效的逻辑。 */
 export async function loadProject(previous: Project | null): Promise<Project> {
-  const project = await loadProjectFiles({ root: projectRoot, readText, listDir }, previous);
+  const project = await loadProjectFiles({ root: projectRoot, readText, listDir, part: currentPart }, previous);
   const preCheckSet = new Set(check(project).map((p) => `${p.level}\0${p.message}`));
   const loaderProblems = project.problems.filter((p) => !preCheckSet.has(`${p.level}\0${p.message}`));
   let svgSignature = "";

@@ -5,6 +5,7 @@
 // 1. 中间栏占着画布上方的空间，切到预览时换一组按钮，栏的高度一变，画布区域就跟着变；
 // 2. 预览模式把设计窗口的边框加粗，窗口尺寸一变，里面的内容就挪了。
 // 所以预览时要改外观，只能用不占尺寸的办法（颜色、box-shadow），不要改边框粗细、内外边距或显隐占位的元素。
+import "./test-env.ts";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";

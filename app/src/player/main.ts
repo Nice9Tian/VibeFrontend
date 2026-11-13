@@ -13,22 +13,12 @@
 //   ?split=1      和 print=1 一起用：跨页按纸拆开，一张纸一页（每张纸各画一遍整个跨页，只露出自己那一半）
 import { GRAPHIC_COMPONENTS } from "../../standard/graphic.ts";
 import { scopeComponentCss } from "../cssscope.ts";
-import type { Value } from "../expr.ts";
 import { cssLength, toPx } from "../kinds.ts";
-import {
-  allWindowIds,
-  childrenOfNode,
-  unitOf,
-  type ComponentCreate,
-  type ComponentDecl,
-  type ComponentInstance,
-  type Scene,
-  type SceneNode,
-  type StageServices,
-} from "../model.ts";
+import { allWindowIds, childrenOfNode, unitOf, type ComponentCreate, type ComponentDecl, type ComponentInstance, type Scene } from "../model.ts";
 import { pageLabel, sheetCount, sheetPageNumbers } from "../pages.ts";
-import { paintShape } from "../paint.ts";
-import { applyBoard, applyGroupClass, applyNodeBox, createStageServices, createWaitTracker, GRAPHIC_STAGE_CSS } from "../stage.ts";
+import { isValidPartPath, MAX_PART_DEPTH, referencedParts } from "../parts.ts";
+import { renderNode, type RenderContext } from "../render.ts";
+import { applyBoard, createStageServices, createWaitTracker, GRAPHIC_STAGE_CSS } from "../stage.ts";
 
 declare global {
   interface Window {
@@ -231,26 +221,34 @@ function addStylesheet(href: string, label: string): Promise<void> {
   });
 }
 
-function showError(body: HTMLElement, message: string): void {
-  const box = document.createElement("div");
-  box.className = "vf-error";
-  box.textContent = message;
-  body.replaceChildren(box);
-}
-
-/** 控件声明里的默认值和 scene.json 里写的值合起来，就是控件拿到的属性。 */
-function propsOf(decl: ComponentDecl | undefined, node: SceneNode): Record<string, Value> {
-  const props: Record<string, Value> = {};
-  for (const [key, spec] of Object.entries(decl?.props ?? {})) {
-    if (spec.default !== undefined) props[key] = spec.default;
+/**
+ * 画布里用到的子项目，连同子项目里又用到的子项目，一层一层读进来（最多 MAX_PART_DEPTH 层）。
+ * 子项目在项目文件夹的 parts/<名字>/ 下，和总项目共用控件、样式和素材。
+ */
+async function loadParts(base: string, scene: Scene): Promise<Map<string, Scene>> {
+  const parts = new Map<string, Scene>();
+  let frontier = referencedParts(scene);
+  for (let depth = 0; depth < MAX_PART_DEPTH && frontier.length > 0; depth++) {
+    const next: string[] = [];
+    for (const part of frontier) {
+      if (parts.has(part)) continue;
+      const partScene = await fetchJson<Scene>(base, `${part}/ui/scene.json`).catch((e: Error) => {
+        errors.push(`子项目 ${part} 读不出来：${e.message}`);
+        return null;
+      });
+      if (!partScene) continue;
+      parts.set(part, partScene);
+      next.push(...referencedParts(partScene));
+    }
+    frontier = next;
   }
-  return { ...props, ...(node.props ?? {}) };
+  return parts;
 }
 
-async function loadTypes(base: string, scene: Scene): Promise<Map<string, LoadedType>> {
-  const builtin = new Set(["Page", "Container", "Group", "Shape", "Line"]);
+async function loadTypes(base: string, scenes: Scene[]): Promise<Map<string, LoadedType>> {
+  const builtin = new Set(["Page", "Container", "Group", "Shape", "Line", "Part"]);
   const types = new Map<string, LoadedType>();
-  const wanted = new Set(Object.values(scene.nodes).map((node) => node.type));
+  const wanted = new Set(scenes.flatMap((scene) => Object.values(scene.nodes).map((node) => node.type)));
   let componentCss = "";
   for (const std of GRAPHIC_COMPONENTS.values()) {
     types.set(std.decl.type, { decl: std.decl, create: std.create });
@@ -287,46 +285,6 @@ async function loadTypes(base: string, scene: Scene): Promise<Map<string, Loaded
   return types;
 }
 
-function buildNode(scene: Scene, id: string, parentEl: HTMLElement, types: Map<string, LoadedType>, services: StageServices, instances: ComponentInstance[]): void {
-  const node = scene.nodes[id];
-  if (!node) return;
-  const unit = unitOf(scene);
-  const wrapper = document.createElement("div");
-  wrapper.className = "vf-node";
-  wrapper.dataset.vfId = id;
-  wrapper.dataset.vfType = node.type;
-  applyNodeBox(wrapper, unit, { x: node.x ?? 0, y: node.y ?? 0, width: node.width, height: node.height }, node.rotation);
-  const body = document.createElement("div");
-  body.className = "vf-body";
-  wrapper.append(body);
-  parentEl.append(wrapper);
-
-  if (node.type === "Shape") {
-    // 形状的线宽、字号是按像素定的，把方框换成像素来画，和编辑器里一样
-    paintShape(body, toPx(unit, node.width), toPx(unit, node.height), propsOf(undefined, node));
-    const opacity = node.props?.opacity;
-    if (typeof opacity === "number") wrapper.style.opacity = String(Math.max(0, Math.min(1, opacity)));
-  } else if (node.type === "Line") {
-    errors.push(`线条 ${id}：平面设计里还不支持线条，没有画出来`);
-  } else if (node.type === "Group") {
-    applyGroupClass(wrapper, node);
-  } else if (node.type !== "Container") {
-    const type = types.get(node.type);
-    if (!type?.create) {
-      showError(body, type?.error ?? `找不到控件 ${node.type}`);
-      if (!type?.error) errors.push(`控件 ${id} 的类型 ${node.type} 找不到`);
-    } else {
-      try {
-        const instance = type.create(body, { props: propsOf(type.decl, node), emit: () => undefined, mode: "preview", stage: services });
-        if (instance) instances.push(instance);
-      } catch (e) {
-        showError(body, `${node.type} 运行出错：${(e as Error).message}`);
-        errors.push(`控件 ${id}（${node.type}）运行出错：${(e as Error).message}`);
-      }
-    }
-  }
-  for (const child of childrenOfNode(node)) buildNode(scene, child, wrapper, types, services, instances);
-}
 
 /** 每个页面框一条 @page 规则：打印时每个框按自己的尺寸出一页，不留白边。sizes 是 CSS 长度。 */
 function pageRules(sizes: Array<{ width: string; height: string }>): string {
@@ -422,11 +380,18 @@ async function start(state: PlayerState): Promise<void> {
   if (printMode) document.documentElement.classList.add("vf-print");
   document.documentElement.classList.toggle("vf-still", still);
 
-  const config = (await fetchJson<{ name?: string; kind?: string; styles?: string[] }>(base, "project.json")) ?? {};
-  const scene = await fetchJson<Scene>(base, "ui/scene.json");
-  if (!scene) throw new Error("找不到 ui/scene.json");
+  // ?part=parts/<名字>：只看一个子项目。样式表、控件、素材都是总项目的，画布和名字是子项目的
+  const partParam = (params.get("part") ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+  const part = partParam && isValidPartPath(partParam) ? partParam : "";
+  const own = (path: string) => (part ? `${part}/${path}` : path);
+  type Config = { name?: string; kind?: string; styles?: string[] };
+  const config = (await fetchJson<Config>(base, "project.json")) ?? {};
+  const partConfig = part ? await fetchJson<Config>(base, own("project.json")) : null;
+  const scene = await fetchJson<Scene>(base, own("ui/scene.json"));
+  if (!scene) throw new Error(`找不到 ${own("ui/scene.json")}`);
   if (config.kind !== "graphic") throw new Error("这个播放页只放平面设计项目（project.json 的 kind 是 \"graphic\"）");
-  if (config.name) document.title = config.name;
+  const name = partConfig?.name ?? config.name;
+  if (name) document.title = name;
 
   const only = params.get("board");
   const boards = allWindowIds(scene).filter((id) => scene.nodes[id]?.type === "Page" && (!only || id === only));
@@ -438,13 +403,24 @@ async function start(state: PlayerState): Promise<void> {
   addStyle("vf-player-styles", PLAYER_CSS);
   // 项目的样式表盖在基础样式上面，控件自己的样式再盖在它上面
   await Promise.all((config.styles ?? []).map((path) => addStylesheet(base + path, path)));
-  const types = await loadTypes(base, scene);
+  const parts = await loadParts(base, scene);
+  const types = await loadTypes(base, [scene, ...parts.values()]);
 
   const services = createStageServices({ unit, still, print: printMode, baseUrl: base, tracker });
   const book = document.createElement("main");
   book.id = "vf-book";
   document.body.append(book);
   const instances: ComponentInstance[] = [];
+  const ctx: RenderContext = {
+    types: (type) => types.get(type),
+    services,
+    instances,
+    parts: (ref) => parts.get(ref),
+    stack: part ? [part] : [],
+    onError: (message) => {
+      if (!errors.includes(message)) errors.push(message);
+    },
+  };
   const numbers = sheetPageNumbers(scene);
   // 平时一个页面一个框；按纸拆开时，跨页的每张纸各一个框，框里是整个跨页，只露出这张纸
   const views: Array<{ frame: HTMLElement; size: { width: string; height: string }; order: number }> = [];
@@ -474,7 +450,7 @@ async function start(state: PlayerState): Promise<void> {
         // 一页一页地出时按页码排：有包封时，封面（包封的右半）是第一页，封底是最后一页
         order: split ? (pages[s] ?? views.length + 1) : views.length,
       });
-      for (const child of childrenOfNode(node)) buildNode(scene, child, board, types, services, instances);
+      for (const child of childrenOfNode(node)) renderNode(scene, child, board, ctx);
     }
     state.boards.push({ id, label: pageLabel(scene, id), width: node.width, height: node.height, unit: unit.css });
   }

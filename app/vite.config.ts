@@ -326,7 +326,11 @@ function devProjectFs(): Plugin {
         };
         const rootId = url.searchParams.get("root");
         const targetDir = rootId ? findProjectDir(rootId) : defaultDir;
-        if (!targetDir) return send(404, "没有这个项目");
+        if (!targetDir) {
+          // 和“文件不存在”（也是 404）分开：编辑器读到它要报错，而不是当成空项目打开
+          res.setHeader("X-VF-Error", "no-project");
+          return send(404, "没有这个项目");
+        }
 
         const rawRel = url.searchParams.get("path") ?? "";
         if (url.pathname === "/root") return send(200, targetDir);

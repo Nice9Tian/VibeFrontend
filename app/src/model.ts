@@ -409,6 +409,22 @@ export const PAGE_DECL: ComponentDecl = {
   children: true,
 };
 
+/**
+ * 子项目：平面设计里放在页面上的一块，内容在 parts/<名字>/ 这个子项目里单独做，这里只显示，不能直接改。
+ * 子项目一改，这里跟着变。尺寸是这一块在总项目页面里占的地方，子项目里那一页的尺寸和它一样（拆出来时就是这样）。
+ */
+export const PART_DECL: ComponentDecl = {
+  type: "Part",
+  label: "子项目",
+  description: "显示一个子项目的内容；双击打开子项目去改",
+  defaultSize: { width: 80, height: 60 },
+  props: {
+    part: { type: "string", default: "", label: "子项目文件夹（parts/名字）" },
+    board: { type: "string", default: "", label: "子项目里的页面（不写是第一页）" },
+  },
+  children: false,
+};
+
 export const LAYOUT_TYPE_KINDS: Record<string, LayoutKind> = {
   VBox: "vbox",
   HBox: "hbox",
@@ -435,6 +451,7 @@ export const BUILTIN_TYPES = [
   "Line",
   "Page",
   "Group",
+  "Part",
 ];
 
 /** 顶层画板的类型：窗口、对话框、页面。 */
@@ -601,9 +618,23 @@ export interface Project extends RuntimeProject {
   webExportDir?: string | null;
   /** 项目级的样式表（project.json 的 styles）：路径和原文，按顺序挂进设计窗口 */
   styles?: Array<{ path: string; text: string }>;
+  /** 打开的是子项目时（它的 project.json 里写了 part）：它属于哪个总项目 */
+  partOf?: { name: string; part: string | null } | null;
+  /** 画布里的子项目节点用到的子项目（连同它们里面又用到的）：文件夹 parts/<名字> → 画布和名字 */
+  parts?: Map<string, LoadedPart>;
+  /** 总项目 parts/ 下的全部子项目，给项目面板列出来 */
+  partList?: Array<{ part: string; name: string }>;
   problems: Problem[];
   /** 所有项目文件内容拼成的指纹，用来判断重新加载后有没有变化 */
   signature: string;
+}
+
+/** 读进来的一个子项目 */
+export interface LoadedPart {
+  name: string;
+  scene: Scene | null;
+  /** 读不出来、或者写坏了时的说明 */
+  error?: string;
 }
 
 // ---------- 状态与名字解析 ----------
@@ -704,6 +735,7 @@ export function declFor(project: RuntimeProject, type: string): ComponentDecl | 
   // 页面和组是平面设计的内置类型；界面设计项目里同名的项目控件照旧可用
   if (type === "Page" && project.kind === "graphic") return PAGE_DECL;
   if (type === "Group" && project.kind === "graphic") return GROUP_DECL;
+  if (type === "Part" && project.kind === "graphic") return PART_DECL;
   if (type === "Container" || type === "Window" || type in LAYOUT_TYPE_KINDS) return CONTAINER_DECL;
   if (type === "External") return EXTERNAL_DECL;
   if (type === "Shape") return SHAPE_DECL;

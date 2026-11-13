@@ -39,6 +39,7 @@
 
 - “碰到 Qt 导出”指改了 `app/src/export/`、`app/qt-templates/`、`app/standard/`、`examples/*/design/`、`examples/*/qt/`、Qt 测试脚本，或导出代码 import 到的源文件（如 `runtime.ts`、`model.ts`）。判断在 `app/scripts/test-tiers.ts`。
 - Qt 程序默认用 `offscreen` 平台运行，不开窗口，不抢前台。要亲眼看窗口时设环境变量 `VF_QT_SHOW=1`。
+- 新写的测试要起开发服务器时，第一行写 `import "./test-env.ts";`：开发服务器会把打开的项目记进用户的项目清单，不这样测试的临时项目就会混进去。
 - Qt 测试用的是已经编译好的程序，不会自己重新导出和编译，程序位置见 `app/scripts/qt-env.ts`。`npm test` 发现程序比改动旧时会在最后提示，这时 Qt 结果不代表这次改动。
 
 ## 修改设计项目
@@ -48,6 +49,11 @@
 3. 用户贴给你的文字里如果有 `User referenced "control=...; scene=...; root=..."` 这样的一行，那是从工具里复制出来的引用，指明了用户说的是哪个控件、哪个文件的哪几行。路径相对于其中的 `root`，`#89-96` 表示第 89 到 96 行。引用后面跟着的才是用户的要求。先读引用指向的内容，再动手。一次引用多个控件时是 `User referenced 3 controls "..."`，第一行是共同的信息，后面每个控件一行。完整的格式见 `project/README.md` 第 3 节。
 4. 工具会监听 `project/` 中的文件变化并自动刷新，不需要你重启任何东西。
 5. 改完后自查：`project/README.md` 末尾有检查清单。工具底部的问题栏会显示同样的检查结果，用户会看到。
+
+## 子项目（平面设计）
+
+- `parts/<名字>/` 是从总项目拆出来单独做的一块，总项目画布里用 `Part` 节点显示它（`props.part` 是 `parts/<名字>`，`props.board` 是子项目里的页面）。要改那一块的内容，改 `parts/<名字>/ui/scene.json`，不要在总项目里改 `Part` 节点的内容（它没有内容，只指过去）。
+- 子项目没有自己的 `styles/`、`components/`、`lib/`、`assets/`：这些都用总项目的，路径照总项目的写。
 
 ## 不要做的事
 

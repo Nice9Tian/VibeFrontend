@@ -1,6 +1,7 @@
 // 平面设计的“导出”对话框：导出成网页，或者导出 PDF 和图片。
 // 真正干活的是命令行脚本 scripts/export-web.ts 和 scripts/export-print.ts；在浏览器里打开编辑器时（npm run dev），
 // 对话框经开发服务器的 /__export/graphic 接口调用同一份代码。桌面窗口里还没有这条路，对话框给出要运行的命令。
+import { currentRootId } from "./fs.ts";
 import type { Project } from "./model.ts";
 
 export interface GraphicExportDeps {
@@ -27,8 +28,10 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLEl
   return node;
 }
 
+/** 导出的总是整个项目（打开的是子项目时，导出它所在的总项目：子项目是施工用的，成品在总项目里） */
 async function runExport(body: Record<string, unknown>): Promise<ExportResult> {
-  const res = await fetch("/__export/graphic", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const root = currentRootId();
+  const res = await fetch("/__export/graphic", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(root ? { ...body, root } : body) });
   const text = await res.text();
   try {
     return JSON.parse(text) as ExportResult;

@@ -4,6 +4,7 @@ import { classNamesIn, splitClasses } from "./classstyles.ts";
 import { formatLength } from "./kinds.ts";
 import { allWindowIds, childrenOfNode, LAYOUT_TYPE_KINDS, unitOf, type Problem, type Project } from "./model.ts";
 import { coverWrapId, pageGeometry, pageLabel, sheetCount } from "./pages.ts";
+import { isValidPartPath, MAX_PART_DEPTH, partBoard, partRefOf, referencedParts } from "./parts.ts";
 
 /** 只有界面设计才有的节点类型，放进平面设计里没有意义。 */
 const UI_ONLY_TYPES = new Set(["Window", "Dialog", "Dock", "External", ...Object.keys(LAYOUT_TYPE_KINDS)]);
@@ -47,6 +48,10 @@ export function checkGraphic(project: Project): Problem[] {
       error(`节点 ${id} 的类型 ${node.type} 只在界面设计里有；平面设计里用页面（Page）、容器、文本框、图片、图形和项目自己的控件`, id);
       continue;
     }
+    if (node.type === "Part") {
+      checkPartNode(project, id, error, hint);
+      continue;
+    }
     if (node.type === "Page") {
       const raw = node.props?.sheets;
       if (raw !== undefined && (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1)) {
@@ -85,12 +90,45 @@ export function checkGraphic(project: Project): Problem[] {
   return problems;
 }
 
+/** 子项目节点：指向的子项目在不在、页面对不对、尺寸对不对得上 */
+function checkPartNode(project: Project, id: string, error: (m: string, n?: string) => void, hint: (m: string, n?: string) => void): void {
+  const node = project.scene.nodes[id];
+  if (childrenOfNode(node).length > 0) error(`子项目 ${id} 里不能直接放东西：打开子项目去加`, id);
+  const ref = partRefOf(node);
+  if (!ref) return error(`子项目 ${id} 没写是哪个子项目（props.part，形如 "parts/<名字>"）`, id);
+  if (!isValidPartPath(ref.part)) return error(`子项目 ${id} 的 part 写的是 ${JSON.stringify(ref.part)}，要写成 "parts/<名字>"，名字只用字母、数字、- 和 _`, id);
+  if (ref.part === project.partOf?.part) return error(`子项目 ${id} 指向的就是正在编辑的这个子项目 ${ref.part}，画不出来`, id);
+  const loaded = project.parts?.get(ref.part);
+  if (!loaded?.scene) return error(`子项目 ${id}：${loaded?.error ?? `找不到 ${ref.part}/ui/scene.json`}`, id);
+  const board = partBoard(loaded.scene, ref.board);
+  if (!board) return error(`子项目 ${id}：${ref.part} 里没有页面`, id);
+  if (ref.board && board !== ref.board) hint(`子项目 ${id}：${ref.part} 里没有页面“${ref.board}”，显示的是第一页 ${board}`, id);
+  // 子项目套子项目，绕回来了，或者套得太深：和画法（render.ts 的 renderPartContent）同一个规则，
+  // 沿着一路套下来的子项目往下走，碰到已经在路上的、或者路已经有 MAX_PART_DEPTH 层，就画不出来
+  const loops = (part: string, stack: string[]): boolean => {
+    if (stack.includes(part) || stack.length >= MAX_PART_DEPTH) return true;
+    const scene = project.parts?.get(part)?.scene;
+    return scene ? referencedParts(scene).some((child) => loops(child, [...stack, part])) : false;
+  };
+  if (loops(ref.part, project.partOf?.part ? [project.partOf.part] : [])) {
+    error(`子项目 ${id}：${ref.part} 里套了自己（或者从总项目算起套得超过 ${MAX_PART_DEPTH} 层），有一部分画不出来`, id);
+  }
+  const page = loaded.scene.nodes[board];
+  const unit = unitOf(project.scene);
+  if (page && (Math.abs(page.width - node.width) > 1e-6 || Math.abs(page.height - node.height) > 1e-6)) {
+    hint(
+      `子项目 ${id} 的方框是 ${formatLength(unit, node.width)}×${formatLength(unit, node.height)}${unit.css}，${ref.part} 的页面是 ${formatLength(unit, page.width)}×${formatLength(unit, page.height)}${unit.css}：超出方框的部分看不到`,
+      id,
+    );
+  }
+}
+
 /** 界面设计项目里出现了页面：提醒一下，免得误以为能用。 */
 export function checkUiKind(project: Project): Problem[] {
   const problems: Problem[] = [];
   for (const [id, node] of Object.entries(project.scene.nodes)) {
-    if (node.type === "Page") {
-      problems.push({ level: "error", message: `节点 ${id} 的类型 Page 只在平面设计里有；要做平面设计，把 project.json 的 kind 写成 "graphic"`, nodeId: id });
+    if (node.type === "Page" || node.type === "Part") {
+      problems.push({ level: "error", message: `节点 ${id} 的类型 ${node.type} 只在平面设计里有；要做平面设计，把 project.json 的 kind 写成 "graphic"`, nodeId: id });
     }
   }
   if (project.scene.unit === "mm") {
