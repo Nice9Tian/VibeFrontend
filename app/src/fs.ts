@@ -7,7 +7,25 @@ export interface DirEntry {
   isDir: boolean;
 }
 
-const inTauri = "__TAURI_INTERNALS__" in window;
+export interface WorkspaceProject {
+  id: string;
+  path: string;
+  name: string;
+  kind: "ui" | "graphic";
+  exists: boolean;
+  isDefault: boolean;
+  lastOpened?: string;
+}
+
+const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+let defaultProjectId: string | null = null;
+
+/** 当前网页地址栏里的 ?root=<项目 id>，默认项目时为 null。 */
+export function currentRootId(): string | null {
+  if (typeof location === "undefined") return null;
+  const root = new URLSearchParams(location.search).get("root");
+  return root || null;
+}
 
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -18,8 +36,16 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
 }
 
 async function devFetch(endpoint: string, path = "", init?: RequestInit, allow404 = false): Promise<Response> {
-  const res = await fetch(`/__fs/${endpoint}?path=${encodeURIComponent(path)}`, init);
-  if (!res.ok && !(allow404 && res.status === 404)) {
+  const params = new URLSearchParams({ path });
+  const root = currentRootId();
+  if (root) params.set("root", root);
+  const res = await fetch(`/__fs/${endpoint}?${params}`, init);
+  if (!res.ok) {
+    if (allow404 && res.status === 404) {
+      const detail = (await res.clone().text().catch(() => "")).trim();
+      if (!detail) return res;
+      throw new Error(detail);
+    }
     const detail = (await res.text().catch(() => "")).trim();
     throw new Error(detail || `${endpoint} ${path} 失败（HTTP ${res.status}）`);
   }
@@ -29,10 +55,13 @@ async function devFetch(endpoint: string, path = "", init?: RequestInit, allow40
 /**
  * 项目文件夹的网址，以 / 结尾。设计窗口拿它当基准地址：项目里的脚本、样式表、图片、字体
  * 用相对路径就能互相引用，和导出成网页之后一样。
- * 桌面窗口里走 Rust 注册的 vfproject 协议，浏览器里走 Vite 的 /__project/。
+ * 桌面窗口里走 Rust 注册的 vfproject 协议，浏览器里走 Vite 的 /__project/（或 /__p/<id>/）。
  */
 export function projectBaseUrl(): string {
-  if (!inTauri) return `${location.origin}/__project/`;
+  if (!inTauri) {
+    const root = currentRootId();
+    return root ? `${location.origin}/__p/${encodeURIComponent(root)}/` : `${location.origin}/__project/`;
+  }
   // Tauri 的自定义协议在 Windows 和 Android 上是 http://<协议名>.localhost/，其他平台是 <协议名>://localhost/
   return /Windows|Android/i.test(navigator.userAgent) ? "http://vfproject.localhost/" : "vfproject://localhost/";
 }
@@ -125,7 +154,9 @@ export function watchProject(onChange: (paths: string[]) => void): void {
   if (inTauri) {
     void listen<string[]>("project-changed", (event) => fire(event.payload));
   } else {
-    new EventSource("/__fs/watch?path=").onmessage = (event) => {
+    const root = currentRootId();
+    const watchUrl = root ? `/__fs/watch?root=${encodeURIComponent(root)}` : "/__fs/watch?path=";
+    new EventSource(watchUrl).onmessage = (event) => {
       let path: unknown = null;
       try {
         path = JSON.parse(String(event.data));
@@ -135,4 +166,94 @@ export function watchProject(onChange: (paths: string[]) => void): void {
       fire(path);
     };
   }
+}
+
+async function workspaceFetch<T>(endpoint: string, body?: unknown): Promise<T> {
+  const res = await fetch(
+    `/__workspace/${endpoint}`,
+    body === undefined
+      ? undefined
+      : {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+  );
+  const text = await res.text().catch(() => "");
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    // 非 JSON 说明
+  }
+  if (!res.ok) {
+    const msg =
+      data && typeof data === "object" && typeof (data as { message?: unknown }).message === "string"
+        ? (data as { message: string }).message
+        : text.trim();
+    throw new Error(msg || `workspace/${endpoint} 失败（HTTP ${res.status}）`);
+  }
+  return data as T;
+}
+
+/** 列出项目清单：默认项目在第一个，其余按最近打开时间排。 */
+export async function listWorkspaceProjects(): Promise<WorkspaceProject[]> {
+  if (inTauri) {
+    const root = await tauriInvoke<string>("project_root");
+    const configText = await readText("project.json").catch(() => null);
+    let name = root.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || root;
+    let kind: "ui" | "graphic" = "ui";
+    if (configText !== null) {
+      try {
+        const parsed = JSON.parse(configText) as { name?: unknown; kind?: unknown };
+        if (typeof parsed?.name === "string" && parsed.name.trim()) name = parsed.name;
+        if (parsed?.kind === "graphic") kind = "graphic";
+      } catch {
+        // project.json 损坏时用文件夹名兜底
+      }
+    }
+    defaultProjectId = "default";
+    return [{ id: "default", path: root, name, kind, exists: configText !== null, isDefault: true }];
+  }
+  const { projects } = await workspaceFetch<{ projects: WorkspaceProject[] }>("projects");
+  defaultProjectId = projects.find((p) => p.isDefault)?.id ?? null;
+  return projects;
+}
+
+/** 把已有设计项目加进清单（已存在则只刷新打开时间）。 */
+export async function addWorkspaceProject(path: string): Promise<WorkspaceProject> {
+  if (inTauri) throw new Error("桌面版还不能管理多个项目");
+  const item = await workspaceFetch<WorkspaceProject>("add", { path });
+  if (item.isDefault) defaultProjectId = item.id;
+  return item;
+}
+
+/** 从清单里移除一个项目（不删文件夹）。 */
+export async function removeWorkspaceProject(id: string): Promise<void> {
+  if (inTauri) throw new Error("桌面版还不能管理多个项目");
+  await workspaceFetch("remove", { id });
+}
+
+/** 把项目的最近打开时间更新为现在。 */
+export async function touchWorkspaceProject(id: string): Promise<void> {
+  if (inTauri) throw new Error("桌面版还不能管理多个项目");
+  await workspaceFetch("touch", { id });
+}
+
+/** 新建一个最小设计项目并加进清单。 */
+export async function createWorkspaceProject(options: { path: string; kind: "ui" | "graphic"; name: string }): Promise<WorkspaceProject> {
+  if (inTauri) throw new Error("桌面版还不能管理多个项目");
+  const item = await workspaceFetch<WorkspaceProject>("create", options);
+  if (item.isDefault) defaultProjectId = item.id;
+  return item;
+}
+
+/** 编辑器打开某个项目的网址：同源、同路径，默认项目不带 root，part 有值时带上 part。 */
+export function projectPageUrl(id: string | null, part?: string | null): string {
+  const base = typeof location !== "undefined" ? `${location.origin}${location.pathname}` : "/";
+  const params = new URLSearchParams();
+  if (id && id !== "default" && id !== defaultProjectId) params.set("root", id);
+  if (part) params.set("part", part);
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
 }
