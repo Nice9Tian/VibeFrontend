@@ -1,6 +1,7 @@
 // 编辑器自带的播放页入口（player.html）：告诉播放页项目文件夹在哪、每种控件在哪个文件夹里、预览设备上次选的是什么，然后启动它。
 // 导出的网页不用这个文件：项目文件夹和控件的位置导出时直接写进 index.html，预览设备存在看网页的浏览器里。
 import { listDir, projectBaseUrl, readText, writeText } from "../fs";
+import { sendPreviewSettingsToMain } from "../previewwindow";
 import type { PreviewSettings } from "./screen.ts";
 
 /** 和编辑器的预览共用：设备、手机型号、横竖（这台机器上的习惯，不进项目的设计） */
@@ -34,11 +35,15 @@ async function readPreviewSettings(): Promise<Record<string, unknown>> {
   }
 }
 
-/** 换过的设备存回去：先读一遍再合上，文件里编辑器自己记的别的东西不丢 */
+/**
+ * 换过的设备存回去：只写改了的那一项，先读一遍再合上，文件里别的窗口刚改的、编辑器自己记的别的东西都不丢。
+ * 桌面版的独立预览窗口不能写盘，交给编辑器的主窗口写。
+ */
 let saving: Promise<void> = Promise.resolve();
 function savePreviewSettings(patch: PreviewSettings): Promise<void> {
   saving = saving
     .then(async () => {
+      if (await sendPreviewSettingsToMain(patch)) return;
       const merged = { ...(await readPreviewSettings()), ...patch };
       await writeText(PREVIEW_SETTINGS_PATH, JSON.stringify(merged, null, 2) + "\n");
     })

@@ -12,6 +12,24 @@ import { partNodeElement } from "./render.ts";
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const CHANNEL_NAME = "vf-standalone-preview";
 const TAURI_EVENT = "vf-preview-select";
+const TAURI_SETTINGS_EVENT = "vf-preview-settings";
+
+/** 预览设备的一处改动（设备、手机型号、横竖），和 .designer/preview.json 一个格式 */
+export type PreviewSettingsPatch = { device?: string; phone?: string; landscape?: boolean };
+
+/**
+ * 桌面版的独立预览窗口不能写盘（src-tauri 的 ensure_writable_window），换了预览设备要交给主窗口写进 .designer/preview.json。
+ * 返回 false 表示不用转交（不在桌面版里），调用方自己写。
+ */
+export async function sendPreviewSettingsToMain(patch: PreviewSettingsPatch): Promise<boolean> {
+  if (!inTauri) return false;
+  try {
+    await emit(TAURI_SETTINGS_EVENT, patch);
+  } catch {
+    // 主窗口不在了就不存，这一次的选择只在独立预览窗口里有效
+  }
+  return true;
+}
 
 /** 当前窗口是不是独立预览窗口（URL 带 ?preview=1）。 */
 export function isStandalonePreview(): boolean {
@@ -97,6 +115,7 @@ export function initPreviewLauncher(
   getProject: () => Project,
   onSelectFromPreview: (id: string) => void,
   getDevice: () => string = () => "plain",
+  onPreviewSettings: (patch: PreviewSettingsPatch) => void = () => undefined,
 ): void {
   if (isStandalonePreview()) return;
 
@@ -131,6 +150,16 @@ export function initPreviewLauncher(
   if (inTauri) {
     void listen<{ id: string }>(TAURI_EVENT, (event) => {
       if (event.payload?.id) onSelectFromPreview(event.payload.id);
+    }).catch(() => {});
+    // 独立预览窗口换了预览设备（它自己不能写盘），由这里写
+    void listen<PreviewSettingsPatch>(TAURI_SETTINGS_EVENT, (event) => {
+      const p = event.payload;
+      if (!p || typeof p !== "object") return;
+      const patch: PreviewSettingsPatch = {};
+      if (typeof p.device === "string") patch.device = p.device;
+      if (typeof p.phone === "string") patch.phone = p.phone;
+      if (typeof p.landscape === "boolean") patch.landscape = p.landscape;
+      if (Object.keys(patch).length > 0) onPreviewSettings(patch);
     }).catch(() => {});
   }
 

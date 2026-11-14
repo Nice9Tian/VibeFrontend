@@ -398,7 +398,9 @@ async function start(state: PlayerState): Promise<void> {
   addStyle("vf-page-rules", pageRules(views.map((view) => view.size)));
 
   if (!printMode) {
-    const icon = (partConfig?.icon ?? config.icon)?.replace(/\\/g, "/").replace(/^\/+/, "");
+    // 和编辑器读 project.json 一样：不是字符串就当没写（编辑器的检查会提示），前后的空格去掉
+    const raw: unknown = partConfig?.icon ?? config.icon;
+    const icon = typeof raw === "string" ? raw.trim().replace(/\\/g, "/").replace(/^\/+/, "") : "";
     setupScreen({
       scene,
       boards,

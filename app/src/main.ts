@@ -34,7 +34,7 @@ import {
 import { focusMenuItemInEditor, initMenuEdit, renderMenuEditPane } from "./menuedit";
 import { initStateEdit, renderStateEditPane } from "./stateedit";
 import { initEventEdit, refreshEventPane, renderEventPane } from "./eventedit";
-import { addPage, coverWrapId, movePage, pageGeometry, pageGuideRects, pageIds, pageLabel, removePage, sheetPageNumbers, subtreeIds } from "./pages";
+import { addPage, coverWrapId, movePage, pageGeometry, pageGuideRects, pageIds, pageLabel, removePage, subtreeIds } from "./pages";
 import { openGraphicExportModal } from "./graphicexport";
 import { initPropsEdit, invalidatePropsAssets, renderPropsPane } from "./propsedit";
 import { serializeEdited } from "./richtext";
@@ -43,7 +43,7 @@ import { initAssetBrowser } from "./assetbrowser";
 import { registerCommand } from "./commands";
 import { initMenuBar, openCommandPalette, openShortcutSheet } from "./menubar";
 import { createWorkspace, type Workspace } from "./workspace";
-import { initPreviewLauncher, initStandalonePreviewWindow, isStandalonePreview, notifyMainWindowSelect, syncStandalonePreviewTitle } from "./previewwindow";
+import { initPreviewLauncher, initStandalonePreviewWindow, isStandalonePreview, notifyMainWindowSelect, sendPreviewSettingsToMain, syncStandalonePreviewTitle } from "./previewwindow";
 import {
   allSceneMenuIds,
   allWindowIds,
@@ -182,7 +182,7 @@ import {
 import { snapMove, snapPoint, snapResize, type Guide, type SnapOptions } from "./snap";
 import { activePage, hiddenPages, pagesToReveal } from "./stackview";
 import { centerView, onZoomChange, panToSelection, restoreViewState, setSelectionRectSource, setZoom, viewState, viewZoom, zoomToFit, zoomToRect, zoomToSelection } from "./viewport";
-import { bookViewIndexOfBoard, bookViews, deviceViews, screenIndexForAnchor, sheetPiece as bookSheetPiece, type ScreenView } from "./bookview";
+import { boardAnchor, bookViewIndexOfBoard, bookViews, deviceViews, screenIndexForAnchor, sheetPiece as bookSheetPiece, type ScreenView } from "./bookview";
 import { DEVICE_LABELS, defaultDevice, isDeviceId, PHONE_MODELS, phoneModel, type DeviceId } from "./devices";
 import { iconColorFor, mountBook, mountDesktop, mountPhone, placeSheets, playSlide, playTurn, turnSnapshot, type DeviceStage } from "./deviceframe";
 import { boardGap, boardWorldBounds } from "./boardlayout";
@@ -1665,10 +1665,18 @@ function renderStage(): void {
   $("stage-frame").classList.toggle("spread", spreadOut());
   $("stage-frame").classList.toggle("device", device !== "plain");
   // 独立预览窗口套外框时，设备按窗口缩放（和编辑器的预览一样由 viewport.ts 摆）；原样时照旧 1:1 摆在正中
+  const wasFramed = document.body.classList.contains("standalone-device");
   document.body.classList.toggle("standalone-device", isStandalonePreview() && device !== "plain");
   if (device !== "plain") {
     renderDeviceStage(stageCanvas, device);
     return;
+  }
+  // 原样：下次再套外框时重新缩放到装下整个设备（中间可能缩放、平移过，独立预览窗口里排法也换了）
+  fittedDevice = "";
+  if (wasFramed) {
+    // 独立预览窗口从外框换回原样：外框时为了居中滚过去的位置不能留着，从左上角看起
+    $("stage-scroll").scrollLeft = 0;
+    $("stage-scroll").scrollTop = 0;
   }
   sizeStageTo(stageWorld());
   if (spreadOut()) {
@@ -1789,7 +1797,11 @@ function buildRootBoard(host: HTMLElement, rootId: string): void {
 /** 网页的文档类型（这个文件里的 Document 是 YAML 库的） */
 type DomDocument = typeof document;
 
-/** 预览时用的设备和它的选项。存在 .designer/preview.json（这台机器上的预览设置，不进项目的设计） */
+/**
+ * 预览时用的设备和它的选项。存在 .designer/preview.json（这台机器上的预览设置，不进项目的设计）。
+ * 这个文件有几个窗口在写：编辑器、界面设计的独立预览窗口、平面设计的播放页（player/host.ts）。
+ * 所以存的时候先读文件再只改动过的那几项；文件被别的窗口改了，这里跟着换（预览中按同一页重画）。
+ */
 interface PreviewSettings {
   device?: DeviceId | "plain";
   phone?: string;
@@ -1797,23 +1809,67 @@ interface PreviewSettings {
 }
 const PREVIEW_SETTINGS_PATH = ".designer/preview.json";
 let previewSettings: PreviewSettings = {};
+/** 存设置排着队一个一个写 */
+let previewSettingsWrite: Promise<void> = Promise.resolve();
+/** 这个窗口开始写设置的次数：读文件期间又写了，读到的可能是旧的，不拿它盖内存 */
+let previewSettingsWrites = 0;
 
-async function loadPreviewSettings(): Promise<void> {
+async function readPreviewSettingsFile(): Promise<PreviewSettings & Record<string, unknown>> {
   try {
     const text = await readText(PREVIEW_SETTINGS_PATH);
-    previewSettings = text ? (JSON.parse(text) as PreviewSettings) : {};
+    const parsed = text ? (JSON.parse(text) as unknown) : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as PreviewSettings & Record<string, unknown>) : {};
   } catch {
-    previewSettings = {};
+    return {};
   }
 }
 
-async function savePreviewSettings(patch: PreviewSettings): Promise<void> {
-  previewSettings = { ...previewSettings, ...patch };
-  try {
-    await writeText(PREVIEW_SETTINGS_PATH, JSON.stringify(previewSettings, null, 2) + "\n");
-  } catch (e) {
-    toast(`预览设置没存上：${(e as Error).message}`);
+async function loadPreviewSettings(): Promise<void> {
+  previewSettings = await readPreviewSettingsFile();
+}
+
+/** 内存里的设置换成 next；在预览中而设备、型号、横竖变了，就按同一页重画 */
+function adoptPreviewSettings(next: PreviewSettings): void {
+  const same = next.device === previewSettings.device && next.phone === previewSettings.phone && Boolean(next.landscape) === Boolean(previewSettings.landscape);
+  if (same || !project || mode !== "preview") {
+    previewSettings = next;
+    return;
   }
+  const before = previewDevice();
+  const anchor = previewViews(before)[previewIndex];
+  previewSettings = next;
+  const device = previewDevice();
+  if (device !== before) {
+    previewIndex = anchor ? previewIndexForAnchor(device, anchor) : previewIndexForFocus(device);
+    desktopState.minimized = false;
+  }
+  renderStage();
+  renderBoardBar();
+}
+
+/** 文件被别的窗口改了：读进来。这个窗口自己还有没写完的就等写完；读的期间这里又写了就不管这一次（那次写完会再来） */
+async function refreshPreviewSettings(): Promise<void> {
+  const writes = previewSettingsWrites;
+  await previewSettingsWrite;
+  const next = await readPreviewSettingsFile();
+  if (writes !== previewSettingsWrites) return;
+  adoptPreviewSettings(next);
+}
+
+/** 存一处改动（只写改了的那几项）。桌面版的独立预览窗口不能写盘，交给主窗口写 */
+function savePreviewSettings(patch: PreviewSettings): Promise<void> {
+  previewSettings = { ...previewSettings, ...patch };
+  previewSettingsWrites++;
+  previewSettingsWrite = previewSettingsWrite.then(async () => {
+    if (isStandalonePreview() && (await sendPreviewSettingsToMain(patch))) return;
+    try {
+      const merged = { ...(await readPreviewSettingsFile()), ...patch };
+      await writeText(PREVIEW_SETTINGS_PATH, JSON.stringify(merged, null, 2) + "\n");
+    } catch (e) {
+      toast(`预览设置没存上：${(e as Error).message}`);
+    }
+  });
+  return previewSettingsWrite;
 }
 
 /** 预览用哪种设备：平面设计默认是书，界面设计默认是电脑；“原样”是不套外框、1:1。独立预览窗口和这里用同一份设置 */
@@ -1831,8 +1887,8 @@ function previewViews(device: DeviceId | "plain"): PreviewView[] {
     const piece = bookSheetPiece(project.scene, root, 0);
     return [{ label: boardTitle(root), left: null, right: piece, board: root, pages: [] }];
   }
-  const numbers = sheetPageNumbers(project.scene);
-  if (device === "plain") return pageIds(project.scene).map((id) => ({ label: boardTitle(id), left: null, right: null, board: id, pages: numbers.get(id) ?? [] }));
+  // 原样的一屏是一个页面；页码从小到大，包封换到书上时落在封面
+  if (device === "plain") return pageIds(project.scene).map((id) => ({ label: boardTitle(id), left: null, right: null, ...boardAnchor(project.scene, id) }));
   // 配页和播放页（独立预览、导出的网页）是同一份：书和电脑一屏两页，手机一屏一页
   return deviceViews(project.scene, device);
 }
@@ -4121,13 +4177,15 @@ function openPageSettings(): void {
   showRightTab("props");
 }
 
-// 独立预览窗口套着外框时，窗口大小变了就重新缩放到装下整个设备
+// 独立预览窗口套着外框时，放设计窗口的地方大小变了（窗口变了、打开事件记录、收起工具条）就重新缩放到装下整个设备
 let standaloneRefit = 0;
-window.addEventListener("resize", () => {
-  if (!project || !isStandalonePreview() || mode !== "preview" || previewDevice() === "plain") return;
-  cancelAnimationFrame(standaloneRefit);
-  standaloneRefit = requestAnimationFrame(() => zoomToFit());
-});
+if (isStandalonePreview()) {
+  new ResizeObserver(() => {
+    if (!project || mode !== "preview" || !document.body.classList.contains("standalone-device")) return;
+    cancelAnimationFrame(standaloneRefit);
+    standaloneRefit = requestAnimationFrame(() => zoomToFit());
+  }).observe($("stage-scroll"));
+}
 
 // PageUp / PageDown 翻页
 document.addEventListener("keydown", (e) => {
@@ -7680,6 +7738,15 @@ async function main(): Promise<void> {
       }
     },
     previewDevice,
+    // 桌面版的独立预览窗口换了预览设备，交给这里写
+    (patch) => {
+      const typed: PreviewSettings = {};
+      if (patch.device === "plain" || isDeviceId(patch.device)) typed.device = patch.device;
+      if (patch.phone !== undefined) typed.phone = patch.phone;
+      if (patch.landscape !== undefined) typed.landscape = patch.landscape;
+      adoptPreviewSettings({ ...previewSettings, ...typed });
+      void savePreviewSettings(typed);
+    },
   );
   restoreBoard();
   syncRightTabs();
@@ -7691,6 +7758,8 @@ async function main(): Promise<void> {
     enterPreviewMode: () => setMode("preview"),
   });
   watchProject((paths) => {
+    // 别的窗口（独立预览、播放页）换了预览设备
+    if (paths.includes(PREVIEW_SETTINGS_PATH)) void refreshPreviewSettings();
     // 项目里的脚本（控件、效果和它们引用的别的脚本）变了，设计窗口要换一个干净的环境才读得到新的
     if (paths.some((path) => /\.m?js$/i.test(path) && !path.startsWith(".designer/"))) stageRealmStale = true;
     invalidatePropsAssets();

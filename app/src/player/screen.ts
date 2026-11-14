@@ -8,12 +8,12 @@
 // 换设备时网址参数跟着改：刷新、把网址发给别人，看到的还是这个设备。
 //
 // 页面只画一次（在 player/main.ts 里），换设备、翻页时把画好的页面元素挪进外框的屏幕，控件不重新创建，动画接着动。
-import { deviceViews, screenIndexForAnchor, type ScreenView } from "../bookview.ts";
+import { boardAnchor, deviceViews, playingViews, screenIndexForAnchor, type ScreenView } from "../bookview.ts";
 import { iconColorFor, mountBook, mountDesktop, mountPhone, placeSheets, playSlide, playTurn, turnSnapshot, type DeviceStage } from "../deviceframe.ts";
 import { DEVICE_LABELS, defaultDevice, fitScale, isDeviceId, PHONE_MODELS, phoneModel, type DeviceId } from "../devices.ts";
 import { toPx } from "../kinds.ts";
 import { unitOf, type Scene } from "../model.ts";
-import { coverWrapId, pageLabel, sheetPageNumbers } from "../pages.ts";
+import { coverWrapId, pageLabel } from "../pages.ts";
 
 export type PreviewChoice = DeviceId | "plain";
 
@@ -164,7 +164,8 @@ html.vf-device-mode body {
 `;
 
 const params = new URLSearchParams(location.search);
-const STORAGE_KEY = `vf-player-preview:${location.pathname}`;
+// 同一个导出的网页用 /网页/ 和 /网页/index.html 打开时是同一份设置
+const STORAGE_KEY = `vf-player-preview:${location.pathname.replace(/index\.html$/i, "")}`;
 
 function readStored(): PreviewSettings {
   if (window.VF_PREVIEW_SETTINGS) return { ...window.VF_PREVIEW_SETTINGS };
@@ -213,7 +214,6 @@ export function setupScreen(options: ScreenOptions): void {
   let index = 0;
   let stage: DeviceStage | null = null;
   const desktop = { maximized: false, minimized: false };
-  const numbers = sheetPageNumbers(scene);
   const playing = new Set(boards);
 
   const view = document.createElement("div");
@@ -224,7 +224,8 @@ export function setupScreen(options: ScreenOptions): void {
   view.append(fitBox);
   document.body.append(view);
 
-  const save = () => {
+  /** 存一处改动。编辑器里只把改了的那一项交给 host.ts（另一项可能刚在编辑器里改过，不能用这里开始时的旧值盖掉） */
+  const save = (patch: PreviewSettings) => {
     const current: PreviewSettings = { device, phone: settings.phone, landscape: settings.landscape };
     // 网址跟着改：刷新、发给别人还是这个设备
     const url = new URL(location.href);
@@ -238,7 +239,7 @@ export function setupScreen(options: ScreenOptions): void {
     }
     history.replaceState(history.state, "", url.href);
     if (window.VF_SAVE_PREVIEW_SETTINGS) {
-      void Promise.resolve(window.VF_SAVE_PREVIEW_SETTINGS(current)).catch(() => undefined);
+      void Promise.resolve(window.VF_SAVE_PREVIEW_SETTINGS(patch)).catch(() => undefined);
       return;
     }
     try {
@@ -255,10 +256,7 @@ export function setupScreen(options: ScreenOptions): void {
   const deviceScreens = (choice: DeviceId): ScreenView[] => {
     let screens = screensCache.get(choice);
     if (!screens) {
-      screens = deviceViews(scene, choice)
-        .map((v) => ({ ...v, left: v.left && playing.has(v.left.board) ? v.left : null, right: v.right && playing.has(v.right.board) ? v.right : null }))
-        .filter((v) => v.left || v.right)
-        .map((v) => ({ ...v, board: (v.left ?? v.right)!.board }));
+      screens = playingViews(deviceViews(scene, choice), playing);
       screensCache.set(choice, screens);
     }
     return screens;
@@ -282,10 +280,7 @@ export function setupScreen(options: ScreenOptions): void {
 
   /** 现在在看哪一页（换设备时停在同一页） */
   const anchor = (): { pages: number[]; board: string } => {
-    if (shown === "plain") {
-      const board = boards[currentFrame()] ?? boards[0];
-      return { board, pages: numbers.get(board) ?? [] };
-    }
+    if (shown === "plain") return boardAnchor(scene, boards[currentFrame()] ?? boards[0]);
     const v = deviceScreens(shown)[index];
     return v ? { board: v.board, pages: v.pages } : { board: boards[0], pages: [] };
   };
@@ -458,7 +453,7 @@ export function setupScreen(options: ScreenOptions): void {
       const at = anchor();
       device = id;
       desktop.minimized = false;
-      save();
+      save({ device: id });
       layout(device, at);
     });
     delete b.dataset.board;
@@ -474,12 +469,12 @@ export function setupScreen(options: ScreenOptions): void {
   modelSelect.value = settings.phone;
   modelSelect.addEventListener("change", () => {
     settings.phone = phoneModel(modelSelect.value).id;
-    save();
+    save({ phone: settings.phone });
     if (shown === "phone") renderDevice("phone");
   });
   const rotate = button("横放", "横过来看 / 竖过来看", "rotate", () => {
     settings.landscape = !settings.landscape;
-    save();
+    save({ landscape: settings.landscape });
     if (shown === "phone") renderDevice("phone");
     sync();
   });
@@ -554,5 +549,6 @@ export function setupScreen(options: ScreenOptions): void {
     layout(device, at);
   });
 
-  layout(device, { board: boards[0], pages: numbers.get(boards[0]) ?? [] });
+  // 从第一个页面开始；包封是从封面开始，不是封底
+  layout(device, boardAnchor(scene, boards[0]));
 }

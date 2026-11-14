@@ -365,7 +365,8 @@ export function initViewport(): void {
           const pt = toOuterXY(e.clientX, e.clientY);
           const factor = Math.exp(-e.deltaY * (Math.abs(e.deltaY) < 40 ? 0.01 : 0.0015));
           setZoom(zoom * factor, pt.x, pt.y);
-        } else {
+        } else if (!document.body.classList.contains("standalone-device")) {
+          // 独立预览窗口套着外框时设备总是装在窗口里：滚轮只给软件自己（列表、手机屏幕里滚动），不推着整个设备跑
           scroll.scrollLeft += e.shiftKey ? e.deltaY : e.deltaX;
           scroll.scrollTop += e.shiftKey ? 0 : e.deltaY;
         }

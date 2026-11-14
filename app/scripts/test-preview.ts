@@ -150,6 +150,11 @@ async function graphicTests(): Promise<void> {
       assert.ok(book.gutter, "两页中间有书脊的阴影");
       assert.deepEqual(book.boards, ["spread1"], "跨页的两面是同一块，跨过中缝的东西连着");
       assert.ok(book.coverTitle, "页面里的东西画在书里");
+      const fonts = await cdp.evaluate<[string, string]>(`(() => {
+        const doc = document.getElementById("stage-iframe").contentDocument;
+        return [getComputedStyle(doc.querySelector(".vf-dev-slot")).fontFamily, getComputedStyle(doc.getElementById("stage-canvas")).fontFamily];
+      })()`);
+      assert.equal(fonts[0], fonts[1], "外框不给页面换字体：页面没写字体的地方用设计窗口的字体（排版和编辑、导出一样）");
     });
 
     await test("翻页：纸从书脊翻过去（翻的时候有一张纸在转，翻完收掉）；键盘 ← → 也能翻；最后一屏是第 3 页", async () => {
@@ -297,6 +302,32 @@ async function graphicTests(): Promise<void> {
       await wait(600);
       assert.equal((await bar()).label, "封底", "换回书还是封底");
     });
+
+    await test("包封：原样看着包封（封底 + 封面）换成书，停在封面，不是封底", async () => {
+      await cdp.evaluate(`document.querySelector('#board-bar [data-device="plain"]').click()`);
+      await wait(600);
+      assert.equal((await bar()).label, "封底 + 封面");
+      await cdp.evaluate(`document.querySelector('#board-bar [data-device="book"]').click()`);
+      await wait(600);
+      assert.equal((await bar()).label, "封面");
+    });
+
+    await test("别的窗口（独立预览、播放页）改了 .designer/preview.json：编辑器的预览跟着换、停在同一页；编辑器再存时只改自己动的那一项，别的不丢", async () => {
+      const settingsPath = path.join(dir, ".designer/preview.json");
+      fs.writeFileSync(settingsPath, JSON.stringify({ device: "phone", phone: "pixel-8", landscape: false, other: 1 }));
+      let state = await bar();
+      for (let k = 0; k < 40 && state.devices.phone !== "true"; k++) {
+        await wait(100);
+        state = await bar();
+      }
+      assert.deepEqual([state.devices.phone, state.label], ["true", "封面"], "跟着换成手机，还是封面");
+      assert.ok(await cdp.evaluate<boolean>(`Boolean(${stageQuery(".vf-dev-punch")})`), "Pixel 8 的挖孔屏");
+      await cdp.evaluate(`document.querySelector('#board-bar [data-device="desktop"]').click()`);
+      await wait(600);
+      assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, "utf8")), { device: "desktop", phone: "pixel-8", landscape: false, other: 1 });
+      await wait(600);
+      assert.equal((await bar()).devices.desktop, "true", "自己写的文件读回来不来回跳");
+    });
   });
 }
 
@@ -434,6 +465,9 @@ async function playerDeviceTests(cdp: Cdp, where: string): Promise<void> {
     const book = await cdp.evaluate<{
       gutter: boolean;
       boards: string[];
+      clips: number[];
+      bookWidth: number;
+      fonts: [string, string];
       title: boolean;
       listShown: boolean;
       mode: boolean;
@@ -445,6 +479,9 @@ async function playerDeviceTests(cdp: Cdp, where: string): Promise<void> {
       return {
         gutter: Boolean(document.querySelector(".vf-dev-gutter")),
         boards: [...document.querySelectorAll(".vf-dev-slot > [data-vf-board]")].map((b) => b.dataset.vfBoard),
+        clips: [...document.querySelectorAll(".vf-dev-book > .vf-dev-clip")].map((c) => c.offsetWidth),
+        bookWidth: document.querySelector(".vf-dev-book").offsetWidth,
+        fonts: [getComputedStyle(document.querySelector(".vf-dev-slot")).fontFamily, getComputedStyle(document.body).fontFamily],
         title: Boolean(document.querySelector('.vf-dev-slot [data-vf-id="coverTitle"]')),
         listShown: getComputedStyle(document.getElementById("vf-book")).display !== "none",
         mode: document.documentElement.classList.contains("vf-device-mode"),
@@ -455,6 +492,8 @@ async function playerDeviceTests(cdp: Cdp, where: string): Promise<void> {
     })()`);
     assert.ok(book.gutter, "两页中间有书脊的阴影");
     assert.deepEqual(book.boards, ["spread1"], "跨页的两面是同一块，跨过中缝的东西连着");
+    assert.deepEqual(book.clips, [book.bookWidth], "跨页只有一块、横跨整本书（两面各一块时左边会是空的）");
+    assert.equal(book.fonts[0], book.fonts[1], "书里的页面用网页自己的字体，不用外框的字体（排版和打印、导出 PDF 一样）");
     assert.ok(book.title, "页面里的东西画在书里");
     assert.equal(book.listShown, false, "原样的那一列藏起来了");
     assert.ok(book.mode);
@@ -529,15 +568,18 @@ async function playerDeviceTests(cdp: Cdp, where: string): Promise<void> {
     await wait(700);
     const state = await playerBar(cdp);
     assert.deepEqual([state.devices.desktop, state.label, state.phoneOpts], ["true", "第 1–2 页", false]);
-    const desk = await cdp.evaluate<{ title: string; taskbar: boolean; app: boolean; boards: number }>(`(() => ({
+    const desk = await cdp.evaluate<{ title: string; taskbar: boolean; app: boolean; boards: number; clips: number[]; slotWidth: number }>(`(() => ({
       title: document.querySelector(".vf-dev-title")?.textContent ?? "",
       taskbar: Boolean(document.querySelector(".vf-dev-taskbar")),
       app: Boolean(document.querySelector(".vf-dev-tb-btn.app.active")),
       boards: document.querySelectorAll(".vf-dev-window .vf-dev-screen-slot [data-vf-board]").length,
+      clips: [...document.querySelectorAll(".vf-dev-window .vf-dev-screen-slot > div")].map((c) => c.offsetWidth),
+      slotWidth: document.querySelector(".vf-dev-window .vf-dev-screen-slot").offsetWidth,
     }))()`);
     assert.equal(desk.title, "平面设计示例 — 第 1–2 页");
     assert.ok(desk.taskbar && desk.app);
     assert.equal(desk.boards, 1, "窗口里是第 1–2 页这个跨页");
+    assert.deepEqual(desk.clips, [desk.slotWidth], "跨页在窗口里是一整块");
     await clickIn(cdp, ".vf-dev-control.min");
     await wait(400);
     assert.ok(await cdp.evaluate<boolean>(`Boolean(document.querySelector(".vf-dev-window.minimized"))`), "最小化了");
@@ -565,6 +607,7 @@ async function playerDeviceTests(cdp: Cdp, where: string): Promise<void> {
       frames: [...document.querySelectorAll("#vf-book > .vf-board-frame")].map((f) => [...f.children].map((c) => c.dataset.vfBoard).join(",")),
     }))()`);
     assert.deepEqual(plain, { device: false, mode: false, frames: ["spread1", "page3"] });
+    assert.equal(await cdp.evaluate<string>(`document.querySelector('#vf-book > .vf-board-frame > [data-vf-board="spread1"]').__vfMark ?? ""`), "same", "回到框里的还是同一个元素，没有重画");
     assert.match((await playerBar(cdp)).label, /^第 1–2 页/);
     await pressKey(cdp, "ArrowRight", 39);
     await wait(900);
@@ -623,6 +666,24 @@ async function playerTests(): Promise<void> {
         assert.equal((await playerBar(cdp)).devices.plain, "true");
         assert.equal(await cdp.evaluate<boolean>(`Boolean(document.querySelector(".vf-dev"))`), false);
       });
+
+      await test("独立预览：包封的书打开时停在封面（不是封底）；原样看着包封再换成书，也是封面", async () => {
+        const scenePath = path.join(dir, "ui/scene.json");
+        fs.writeFileSync(scenePath, JSON.stringify({ ...JSON.parse(fs.readFileSync(scenePath, "utf8")), cover: "wrap" }, null, 2));
+        await open("/player.html?device=book");
+        let state = await playerBar(cdp);
+        assert.deepEqual([state.label, state.prev, state.next], ["封面", false, true]);
+        assert.ok(await cdp.evaluate<boolean>(`Boolean(document.querySelector(".vf-dev-book.closed.front"))`), "合着的书，看见封面");
+        await clickIn(cdp, '#vf-player-ui [data-device="plain"]');
+        await wait(500);
+        assert.match((await playerBar(cdp)).label, /^封底 \+ 封面/);
+        await clickIn(cdp, '#vf-player-ui [data-device="book"]');
+        await wait(600);
+        state = await playerBar(cdp);
+        assert.equal(state.label, "封面");
+        await open("/player.html?device=phone");
+        assert.equal((await playerBar(cdp)).label, "封面", "手机也从封面开始");
+      });
     },
     { page: "/player.html", width: 1280, height: 900, ready: playerReady },
   );
@@ -630,22 +691,35 @@ async function playerTests(): Promise<void> {
 
 async function exportedWebTests(): Promise<void> {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vf-preview-web-"));
-  const dir = path.join(tmp, "design");
-  fs.cpSync(path.resolve(appRoot, "../examples/graphic/design"), dir, { recursive: true });
-  // 编辑器这台机器上的预览设置不进设计，也不跟着导出
-  fs.mkdirSync(path.join(dir, ".designer"), { recursive: true });
-  fs.writeFileSync(path.join(dir, ".designer/preview.json"), JSON.stringify({ device: "phone" }));
-  const report = await exportWeb(dir, path.join(tmp, "web"));
-  const served = await serveFolder(path.join(tmp, "web"));
-  const page = await openHeadless("about:blank", { width: 1280, height: 900 });
-  const { cdp } = page;
-  const requested: string[] = [];
-  const open = async (query = "") => {
-    await cdp.send("Page.navigate", { url: `${served.url}index.html${query}` });
-    await wait(300);
-    await playerReady(cdp);
-  };
+  let served: Awaited<ReturnType<typeof serveFolder>> | null = null;
+  let page: HeadlessPage | null = null;
   try {
+    const dir = path.join(tmp, "design");
+    fs.cpSync(path.resolve(appRoot, "../examples/graphic/design"), dir, { recursive: true });
+    // 编辑器这台机器上的预览设置不进设计，也不跟着导出
+    fs.mkdirSync(path.join(dir, ".designer"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".designer/preview.json"), JSON.stringify({ device: "phone" }));
+    // 软件图标（电脑的标题栏和任务栏用）：项目里的一张图片，导出后也从导出的文件夹里取
+    const configPath = path.join(dir, "project.json");
+    fs.writeFileSync(configPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(configPath, "utf8")), icon: " assets/grid.svg " }, null, 2));
+    const report = await exportWeb(dir, path.join(tmp, "web"));
+    served = await serveFolder(path.join(tmp, "web"));
+    const origin = served.url;
+    page = await openHeadless("about:blank", { width: 1280, height: 900 });
+    const { cdp } = page;
+    const requested: string[] = [];
+    const open = async (query = "") => {
+      await cdp.send("Page.navigate", { url: `${origin}index.html${query}` });
+      await wait(300);
+      await playerReady(cdp);
+    };
+    /** 到现在为止要过的东西都在导出的文件夹里：不连编辑器的开发服务器，不上网 */
+    const assertOffline = () => {
+      const outside = requested.filter((url) => !url.startsWith(origin) && !url.startsWith("data:") && !url.startsWith("blob:") && !url.startsWith("about:"));
+      assert.deepEqual(outside, [], "向导出的文件夹以外要了东西");
+      const editorOnly = requested.filter((url) => url.startsWith(origin) && /^\/(src|@vite|__project|__p|__fs)\//.test(new URL(url).pathname));
+      assert.deepEqual(editorOnly, [], "没有向开发服务器要东西");
+    };
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
     await cdp.send("Network.enable");
     cdp.on("Network.requestWillBeSent", (params) => requested.push((params as { request: { url: string } }).request.url));
@@ -653,14 +727,25 @@ async function exportedWebTests(): Promise<void> {
 
     await test("导出的网页只从导出的文件夹里取东西（外框和翻页都打包在 vf-player.js 里），不连编辑器、不上网；预览设置不跟着导出", async () => {
       assert.ok(!report.files.some((f) => f.startsWith(".designer")), "预览设置不跟着导出");
-      const outside = requested.filter((url) => !url.startsWith(served.url) && !url.startsWith("data:") && !url.startsWith("blob:"));
-      assert.deepEqual(outside, []);
+      assertOffline();
       assert.ok(requested.some((url) => url.endsWith("/vf-player.js")));
-      const editorOnly = requested.filter((url) => url.startsWith(served.url) && /^\/(src|@vite|__project|__p|__fs)\//.test(new URL(url).pathname));
-      assert.deepEqual(editorOnly, [], "没有向开发服务器要东西");
     });
 
     await playerDeviceTests(cdp, "导出的网页：");
+
+    await test("导出的网页：电脑的标题栏和任务栏上是项目的图标（project.json 的 icon，前后的空格不算），换过所有设备、翻过页也没有向别处要东西", async () => {
+      await clickIn(cdp, '#vf-player-ui [data-device="desktop"]');
+      await wait(500);
+      const icons = await cdp.evaluate<Array<{ src: string; loaded: boolean }>>(
+        `[...document.querySelectorAll("img.vf-dev-title-icon, img.vf-dev-tb-app-icon")].map((img) => ({ src: img.src, loaded: img.complete && img.naturalWidth > 0 }))`,
+      );
+      assert.equal(icons.length, 2, "标题栏和任务栏各一个");
+      for (const icon of icons) {
+        assert.equal(icon.src, `${origin}assets/grid.svg`);
+        assert.ok(icon.loaded, `图标加载出来了：${icon.src}`);
+      }
+      assertOffline();
+    });
 
     await test("导出的网页：换的设备记在网址和这个浏览器里，刷新后还在；手机的型号、横放也在网址里", async () => {
       assert.equal(await cdp.evaluate<string>(`new URL(location.href).searchParams.get("device")`), "desktop");
@@ -687,11 +772,16 @@ async function exportedWebTests(): Promise<void> {
         `({ device: Boolean(document.querySelector(".vf-dev")), ui: Boolean(document.getElementById("vf-player-ui")), frames: document.querySelectorAll(".vf-board-frame > .vf-board").length })`,
       );
       assert.deepEqual(print, { device: false, ui: false, frames: 2 });
+      assertOffline();
     });
   } finally {
-    await page.close();
-    await served.close();
-    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await page?.close();
+    await served?.close();
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch {
+      // 浏览器的文件偶尔释放得慢
+    }
   }
 }
 
@@ -755,7 +845,6 @@ async function standaloneUiTests(): Promise<void> {
         await wait(700);
         const plain = await cdp.evaluate<{ device: boolean; framed: boolean; transform: string; frameLeft: number; scrollLeft: number; iframeWidth: number }>(`(() => {
           const iframe = document.getElementById("stage-iframe"), scroll = document.getElementById("stage-scroll");
-          scroll.scrollLeft = 0;
           return {
             device: Boolean(iframe.contentDocument.querySelector(".vf-dev")),
             framed: document.body.classList.contains("standalone-device"),
@@ -766,12 +855,41 @@ async function standaloneUiTests(): Promise<void> {
           };
         })()`);
         assert.deepEqual([plain.device, plain.framed, plain.transform, plain.iframeWidth], [false, false, "none", 1280], "原样 1:1，主窗口是设计的宽度");
-        assert.ok(plain.frameLeft >= plain.scrollLeft, `滚到最左边时看得见设计窗口的左边：${plain.frameLeft} vs ${plain.scrollLeft}`);
+        assert.ok(plain.frameLeft >= plain.scrollLeft, `换回原样时从左上角看起，设计窗口的左边没有滚出去：${plain.frameLeft} vs ${plain.scrollLeft}`);
+      });
+
+      await test("独立预览窗口从原样再换回电脑：重新缩放到装下整个桌面（不沿用原样时的滚动位置）", async () => {
+        await clickIn(cdp, '#board-bar [data-device="desktop"]');
+        await wait(700);
+        const fits = await stageFits();
+        assert.ok(inside(fits), `换回电脑后整个桌面在窗口里：${JSON.stringify(fits)}`);
+      });
+
+      await test("独立预览窗口打开事件记录（放设计窗口的地方变矮了）：设备跟着缩小，还是整个放得下", async () => {
+        await clickIn(cdp, "#preview-toggle-log");
+        await wait(600);
+        const fits = await stageFits();
+        assert.ok(inside(fits), `打开事件记录后还在窗口里：${JSON.stringify(fits)}`);
+        await clickIn(cdp, "#preview-toggle-log");
+        await wait(600);
+        assert.ok(inside(await stageFits()), "收起事件记录后也在窗口里");
+      });
+
+      await test("独立预览窗口套着外框时，在软件里滚滚轮不推着整个设备跑", async () => {
+        const before = await stageFits();
+        const center = { x: (before.frame[0] + before.frame[2]) / 2, y: (before.frame[1] + before.frame[3]) / 2 };
+        for (let i = 0; i < 4; i++) {
+          await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: center.x, y: center.y, deltaX: 0, deltaY: 240 });
+          await wait(60);
+        }
+        await wait(300);
+        const after = await stageFits();
+        assert.deepEqual(after.frame.map(Math.round), before.frame.map(Math.round), "设备没有挪");
       });
 
       await test("独立预览窗口的设备选择和编辑器共用 .designer/preview.json", async () => {
         const saved = JSON.parse(fs.readFileSync(path.join(dir, ".designer/preview.json"), "utf8")) as { device: string };
-        assert.equal(saved.device, "plain");
+        assert.equal(saved.device, "desktop");
       });
     },
     { page: "/?preview=1", width: 1280, height: 900 },

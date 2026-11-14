@@ -557,8 +557,11 @@ function ensureStyles(doc: Document): void {
 }
 
 export const DEVICE_CSS = `
-.${NS} { position: relative; box-sizing: border-box; font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; }
-.${NS} *, .${NS} *::before, .${NS} *::after { box-sizing: border-box; }
+/* 外框里的页面和软件不能被外框的样式影响：字体只给外框自己的字（标题栏、任务栏、状态栏、缩略图的标题），
+   box-sizing 用 :where 不占优先级，项目和控件自己写的照样算数 */
+.${NS} { position: relative; box-sizing: border-box; }
+:where(.${NS}) *, :where(.${NS}) *::before, :where(.${NS}) *::after { box-sizing: border-box; }
+.${NS}-titlebar, .${NS}-taskbar, .${NS}-peek-head, .${NS}-status, .${NS}-monogram { font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; }
 .${NS}-slot, .${NS}-screen-slot { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 .${NS}-monogram { display: inline-flex; align-items: center; justify-content: center; border-radius: 22%; color: #fff; font-weight: 650; line-height: 1; flex: none; }
 

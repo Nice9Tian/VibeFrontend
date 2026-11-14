@@ -121,6 +121,35 @@ export function deviceViews(scene: Scene, device: DeviceId): ScreenView[] {
   );
 }
 
+/**
+ * 一个页面当“在看的地方”：页码从小到大。换设备时按第一个页码找那一屏，
+ * 所以包封（左封底、右封面，页码是 [最后一页, 1]）落在封面那一屏，不是封底。
+ */
+export function boardAnchor(scene: Scene, board: string): { board: string; pages: number[] } {
+  return { board, pages: [...(sheetPageNumbers(scene).get(board) ?? [])].sort((a, b) => a - b) };
+}
+
+/**
+ * 只放其中几个页面时（播放页的 ?board=）的每一屏：别的页面那一面换成空白，没有要放的页面的屏去掉；
+ * 只剩一面的屏，页码和名字跟着只剩的那一面（“第 2–3 页”只放第 3 页时叫“第 3 页”）。
+ */
+export function playingViews(views: ScreenView[], playing: ReadonlySet<string>): ScreenView[] {
+  const out: ScreenView[] = [];
+  for (const v of views) {
+    const left = v.left && playing.has(v.left.board) ? v.left : null;
+    const right = v.right && playing.has(v.right.board) ? v.right : null;
+    if (!left && !right) continue;
+    if (left === v.left && right === v.right) {
+      out.push(v);
+      continue;
+    }
+    // 原来两面都有（pages 是 [左, 右]），去掉了一面
+    const page = left ? v.pages[0] : v.pages[v.pages.length - 1];
+    out.push({ label: page === undefined ? v.label : `第 ${page} 页`, left, right, board: (left ?? right)!.board, pages: page === undefined ? [] : [page] });
+  }
+  return out;
+}
+
 /** 换设备时停在同一页：先按页码找，找不到再按页面找；都找不到返回 0 */
 export function screenIndexForAnchor(views: ScreenView[], anchor: { pages: number[]; board: string }): number {
   const page = anchor.pages[0];

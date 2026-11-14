@@ -1,7 +1,7 @@
 // 页面画布排布（boardlayout）、翻书分屏（bookview）与预览设备几何（devices）的纯函数测试。
 import assert from "node:assert/strict";
 import { boardGap, boardWorldBounds, boardWorldLayout, boardWorldOrigin } from "../src/boardlayout.ts";
-import { bookViewIndexOfBoard, bookViewIndexOfPage, bookViews, deviceViews, screenIndexForAnchor, sheetPiece } from "../src/bookview.ts";
+import { boardAnchor, bookViewIndexOfBoard, bookViewIndexOfPage, bookViews, deviceViews, playingViews, screenIndexForAnchor, sheetPiece } from "../src/bookview.ts";
 import {
   defaultDevice,
   DESKTOP_SCREEN,
@@ -319,6 +319,39 @@ async function bookViewTests(): Promise<void> {
     assert.deepEqual(deviceViews(wrap, "phone").map((v) => v.label), ["封面", "第 2 页", "第 3 页", "封底"]);
     const uiScene: Scene = { version: 1, root: "main", nodes: { main: { type: "Window", width: 1024, height: 768 } } };
     assert.deepEqual(deviceViews(uiScene, "phone"), []);
+  });
+
+  await test("bookview：boardAnchor 页码从小到大，包封（[最后一页, 1]）换到书、电脑、手机时落在封面，不是封底", () => {
+    const P = (width: number, sheets: number) => ({ type: "Page", width, height: 297, props: { sheets } });
+    const wrap: Scene = { version: 1, unit: "mm", cover: "wrap", root: "c", boards: ["c", "s", "p"], nodes: { c: P(420, 2), s: P(420, 2), p: P(210, 1) } };
+    // 2 + 2 + 1 张纸共 5 页：包封是 [5, 1]
+    assert.deepEqual(boardAnchor(wrap, "c"), { board: "c", pages: [1, 5] });
+    assert.deepEqual(boardAnchor(wrap, "p"), { board: "p", pages: [4] });
+    assert.deepEqual(boardAnchor(wrap, "gone"), { board: "gone", pages: [] });
+    for (const device of ["book", "desktop", "phone"] as const) {
+      const views = deviceViews(wrap, device);
+      assert.equal(views[screenIndexForAnchor(views, boardAnchor(wrap, "c"))].label, "封面", `${device} 从包封开始是封面`);
+    }
+  });
+
+  await test("bookview：playingViews 只放几个页面时，别的页面那一面空着；只剩一面的屏，页码和名字跟着那一面", () => {
+    const P = (width: number, sheets: number) => ({ type: "Page", width, height: 297, props: { sheets } });
+    // 四个单页：第 1 页单独在右，第 2–3 页一屏，第 4 页单独在左
+    const singles: Scene = { version: 1, unit: "mm", root: "p1", boards: ["p1", "p2", "p3", "p4"], nodes: { p1: P(210, 1), p2: P(210, 1), p3: P(210, 1), p4: P(210, 1) } };
+    const book = deviceViews(singles, "book");
+    assert.deepEqual(book.map((v) => v.label), ["第 1 页", "第 2–3 页", "第 4 页"]);
+    const onlyP3 = playingViews(book, new Set(["p3"]));
+    assert.deepEqual(onlyP3.map((v) => [v.label, v.board, v.pages, v.left, v.right?.board]), [["第 3 页", "p3", [3], null, "p3"]]);
+    const onlyP2 = playingViews(book, new Set(["p2"]));
+    assert.deepEqual(onlyP2.map((v) => [v.label, v.board, v.pages, v.left?.board, v.right]), [["第 2 页", "p2", [2], "p2", null]]);
+    // 全都放：原样不动（同一个对象）
+    const all = playingViews(book, new Set(["p1", "p2", "p3", "p4"]));
+    assert.equal(all.length, 3);
+    all.forEach((v, i) => assert.equal(v, book[i]));
+    // 跨页的两面是同一个页面：要么都在、要么都不在
+    const P2 = (width: number, sheets: number) => ({ type: "Page", width, height: 297, props: { sheets } });
+    const spread: Scene = { version: 1, unit: "mm", root: "s", boards: ["s", "p"], nodes: { s: P2(420, 2), p: P2(210, 1) } };
+    assert.deepEqual(playingViews(deviceViews(spread, "book"), new Set(["s"])).map((v) => v.label), ["第 1–2 页"]);
   });
 }
 
