@@ -352,6 +352,24 @@ async function uiTests(): Promise<void> {
       assert.equal(desk.flip, false, "界面设计只有一个主窗口，不用翻页");
     });
 
+    await test("外框不改软件自己的样式：屏幕里元素的 ::before / ::after 还是浏览器默认的 content-box（界面设计的基础样式只管元素本身）", async () => {
+      const sizing = await cdp.evaluate<{ inside: string; outside: string }>(`(() => {
+        const doc = document.getElementById("stage-iframe").contentDocument;
+        const style = doc.createElement("style");
+        style.textContent = ".vf-probe::before { content: ''; display: block; width: 10px; border: 2px solid red; }";
+        doc.head.append(style);
+        const make = (parent) => { const el = doc.createElement("div"); el.className = "vf-probe"; parent.append(el); return el; };
+        const a = make(doc.querySelector(".vf-dev-screen-slot"));
+        const b = make(doc.body);
+        const out = { inside: getComputedStyle(a, "::before").boxSizing, outside: getComputedStyle(b, "::before").boxSizing };
+        a.remove();
+        b.remove();
+        style.remove();
+        return out;
+      })()`);
+      assert.equal(sizing.inside, sizing.outside, `外框里 ${sizing.inside}，外框外 ${sizing.outside}`);
+    });
+
     await test("窗口里的控件照样能点（逻辑照常跑，事件记录里有）", async () => {
       const before = await cdp.evaluate<number>(`document.querySelectorAll("#log .log-entry").length`);
       const p = await cdp.evaluate<{ x: number; y: number }>(`(() => {
@@ -684,6 +702,24 @@ async function playerTests(): Promise<void> {
         await open("/player.html?device=phone");
         assert.equal((await playerBar(cdp)).label, "封面", "手机也从封面开始");
       });
+
+      await test("独立预览开着的时候编辑器改了手机型号，在独立预览里换设备只存设备这一项，不拿它开始时的型号盖回去", async () => {
+        fs.writeFileSync(settingsPath, JSON.stringify({ device: "phone", phone: "iphone-se" }));
+        await open("/player.html");
+        assert.equal(await cdp.evaluate<string>(`document.querySelector('#vf-player-ui [data-board="phone-model"]').value`), "iphone-se");
+        // 编辑器（另一个窗口）这时换了型号
+        fs.writeFileSync(settingsPath, JSON.stringify({ device: "phone", phone: "pixel-8", other: 2 }));
+        await clickIn(cdp, '#vf-player-ui [data-device="book"]');
+        await wait(600);
+        assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, "utf8")), { device: "book", phone: "pixel-8", other: 2 });
+      });
+
+      await test("独立预览：project.json 的 icon 写错了（不是字符串）也照常打开、套外框，电脑上用名字的第一个字当图标", async () => {
+        const configPath = path.join(dir, "project.json");
+        fs.writeFileSync(configPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(configPath, "utf8")), icon: 42 }, null, 2));
+        await open("/player.html?device=desktop");
+        assert.ok(await cdp.evaluate<boolean>(`Boolean(document.querySelector(".vf-dev-window .vf-dev-titlebar .vf-dev-monogram"))`), "名字的第一个字做的图标");
+      });
     },
     { page: "/player.html", width: 1280, height: 900, ready: playerReady },
   );
@@ -762,6 +798,11 @@ async function exportedWebTests(): Promise<void> {
       // 不带参数打开：用这个浏览器里存的
       await open();
       assert.equal((await playerBar(cdp)).devices.phone, "true");
+      // 用文件夹的网址（不写 index.html）打开是同一个网页，用同一份设置
+      await cdp.send("Page.navigate", { url: origin });
+      await wait(300);
+      await playerReady(cdp);
+      assert.equal((await playerBar(cdp)).devices.phone, "true", "/ 和 /index.html 是同一份设置");
     });
 
     await test("导出的网页：网址参数 ?device= 优先；?print=1（导出 PDF 和图片用）照旧按纸排，不套外框、没有播放条", async () => {
@@ -858,7 +899,12 @@ async function standaloneUiTests(): Promise<void> {
         assert.ok(plain.frameLeft >= plain.scrollLeft, `换回原样时从左上角看起，设计窗口的左边没有滚出去：${plain.frameLeft} vs ${plain.scrollLeft}`);
       });
 
-      await test("独立预览窗口从原样再换回电脑：重新缩放到装下整个桌面（不沿用原样时的滚动位置）", async () => {
+      await test("独立预览窗口电脑 → 原样 → 电脑：换回同一个设备也重新缩放到装下整个桌面（不沿用原样时的滚动位置）", async () => {
+        await clickIn(cdp, '#board-bar [data-device="desktop"]');
+        await wait(700);
+        assert.ok(inside(await stageFits()), "先是电脑");
+        await clickIn(cdp, '#board-bar [data-device="plain"]');
+        await wait(700);
         await clickIn(cdp, '#board-bar [data-device="desktop"]');
         await wait(700);
         const fits = await stageFits();

@@ -6,6 +6,7 @@
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { emit, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { currentPart, currentRootId } from "./fs.ts";
 import type { Project } from "./project.ts";
 import { partNodeElement } from "./render.ts";
 
@@ -24,7 +25,8 @@ export type PreviewSettingsPatch = { device?: string; phone?: string; landscape?
 export async function sendPreviewSettingsToMain(patch: PreviewSettingsPatch): Promise<boolean> {
   if (!inTauri) return false;
   try {
-    await emit(TAURI_SETTINGS_EVENT, patch);
+    // 带上是哪个项目、哪个子项目的：主窗口这时可能已经换到别的（子）项目，那就不替它存
+    await emit(TAURI_SETTINGS_EVENT, { patch, root: currentRootId(), part: currentPart() });
   } catch {
     // 主窗口不在了就不存，这一次的选择只在独立预览窗口里有效
   }
@@ -152,8 +154,10 @@ export function initPreviewLauncher(
       if (event.payload?.id) onSelectFromPreview(event.payload.id);
     }).catch(() => {});
     // 独立预览窗口换了预览设备（它自己不能写盘），由这里写
-    void listen<PreviewSettingsPatch>(TAURI_SETTINGS_EVENT, (event) => {
-      const p = event.payload;
+    void listen<{ patch?: PreviewSettingsPatch; root?: string | null; part?: string | null }>(TAURI_SETTINGS_EVENT, (event) => {
+      const sent = event.payload;
+      if (!sent || typeof sent !== "object" || (sent.root ?? null) !== currentRootId() || (sent.part ?? null) !== currentPart()) return;
+      const p = sent.patch;
       if (!p || typeof p !== "object") return;
       const patch: PreviewSettingsPatch = {};
       if (typeof p.device === "string") patch.device = p.device;

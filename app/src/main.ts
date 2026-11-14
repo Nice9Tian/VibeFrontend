@@ -1847,21 +1847,31 @@ function adoptPreviewSettings(next: PreviewSettings): void {
   renderBoardBar();
 }
 
-/** 文件被别的窗口改了：读进来。这个窗口自己还有没写完的就等写完；读的期间这里又写了就不管这一次（那次写完会再来） */
+/**
+ * 桌面版的独立预览窗口交给主窗口写、还没在文件里看到的改动。主窗口写得比这里读得慢时，
+ * 读到的文件还是旧的，不能拿它把用户刚选的盖回去；文件里出现了就不再等它。
+ */
+let previewSettingsForwarded: PreviewSettings = {};
+
+/** 文件可能被别的窗口改了：读进来。这个窗口自己还有没写完的就等写完；读的期间这里又写了就不管这一次（那次写完会再来） */
 async function refreshPreviewSettings(): Promise<void> {
   const writes = previewSettingsWrites;
   await previewSettingsWrite;
   const next = await readPreviewSettingsFile();
   if (writes !== previewSettingsWrites) return;
-  adoptPreviewSettings(next);
+  const waiting = previewSettingsForwarded as Record<string, unknown>;
+  for (const key of Object.keys(waiting)) if ((next as Record<string, unknown>)[key] === waiting[key]) delete waiting[key];
+  adoptPreviewSettings({ ...next, ...previewSettingsForwarded });
 }
 
 /** 存一处改动（只写改了的那几项）。桌面版的独立预览窗口不能写盘，交给主窗口写 */
 function savePreviewSettings(patch: PreviewSettings): Promise<void> {
   previewSettings = { ...previewSettings, ...patch };
   previewSettingsWrites++;
+  const forward = isStandalonePreview() && isInTauri();
+  if (forward) previewSettingsForwarded = { ...previewSettingsForwarded, ...patch };
   previewSettingsWrite = previewSettingsWrite.then(async () => {
-    if (isStandalonePreview() && (await sendPreviewSettingsToMain(patch))) return;
+    if (forward && (await sendPreviewSettingsToMain(patch))) return;
     try {
       const merged = { ...(await readPreviewSettingsFile()), ...patch };
       await writeText(PREVIEW_SETTINGS_PATH, JSON.stringify(merged, null, 2) + "\n");
@@ -7758,8 +7768,9 @@ async function main(): Promise<void> {
     enterPreviewMode: () => setMode("preview"),
   });
   watchProject((paths) => {
-    // 别的窗口（独立预览、播放页）换了预览设备
-    if (paths.includes(PREVIEW_SETTINGS_PATH)) void refreshPreviewSettings();
+    // 别的窗口（独立预览、播放页）可能换了预览设备。系统有时不说是哪个文件变了（一批里混着没名字的），
+    // 所以每次都读一下这个小文件，没变就什么都不做
+    void refreshPreviewSettings();
     // 项目里的脚本（控件、效果和它们引用的别的脚本）变了，设计窗口要换一个干净的环境才读得到新的
     if (paths.some((path) => /\.m?js$/i.test(path) && !path.startsWith(".designer/"))) stageRealmStale = true;
     invalidatePropsAssets();
