@@ -2012,22 +2012,30 @@ body.standalone-preview.preview-bar-collapsed .preview-expand-btn {
   display: inline-block;
 }
 
-body.standalone-preview #stage-scroll {
+/* 原样（不套外框）：设计窗口 1:1 摆在正中，放不下就滚动 */
+body.standalone-preview:not(.standalone-device) #stage-scroll {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  /* safe：设计窗口比独立预览窗口大时靠左上对齐，能滚到左边和上边，不被居中裁掉 */
+  align-items: safe center;
+  justify-content: safe center;
   padding: 16px;
   overflow: auto;
   background: var(--bg);
 }
 
-body.standalone-preview #stage-space {
+body.standalone-preview:not(.standalone-device) #stage-space {
   width: auto !important;
   height: auto !important;
   position: static !important;
 }
 
-body.standalone-preview #stage-space > #stage-frame {
+/* 套着设备外框：设备缩放到装下整个窗口（viewport.ts 摆），不出滚动条 */
+body.standalone-preview.standalone-device #stage-scroll {
+  overflow: hidden;
+  background: var(--bg);
+}
+
+body.standalone-preview:not(.standalone-device) #stage-space > #stage-frame {
   position: relative !important;
   left: auto !important;
   top: auto !important;

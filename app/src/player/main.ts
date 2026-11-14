@@ -1,10 +1,14 @@
 // 播放页：不带编辑器，把一个平面设计项目按页画出来。
 // 编辑器的“独立预览”打开的是它，导出的网页里跑的也是它，导出 PDF 和图片时无头浏览器打开的还是它。
+// 屏幕上看时可以套设备外框（书、电脑、手机）或原样一页页排开，见 screen.ts。
 //
-// 它只读项目文件，不写。项目文件夹的网址由页面先放在 window.VF_PROJECT_BASE 里（以 / 结尾）：
+// 它只读项目文件，不写（编辑器里 host.ts 会把换过的预览设备存回 .designer/preview.json）。
+// 项目文件夹的网址由页面先放在 window.VF_PROJECT_BASE 里（以 / 结尾）：
 // 编辑器里是 /__project/ 或 vfproject 协议，导出的网页里是 "./"。
 //
 // 网址参数：
+//   ?device=book|desktop|phone|plain  屏幕上看时套哪种外框（不写就用存下来的，再没有就是书），见 screen.ts
+//   &phone=<型号>&landscape=1          手机的型号、横放
 //   ?print=1      按纸张的原大排版，控件只画静帧，画布换成图片。导出 PDF 和图片用它
 //   ?autoprint=1  加载完就弹出打印对话框（和 print=1 一起用）
 //   ?still=1      不动，但仍按屏幕的方式排版
@@ -13,12 +17,13 @@
 //   ?split=1      和 print=1 一起用：跨页按纸拆开，一张纸一页（每张纸各画一遍整个跨页，只露出自己那一半）
 import { GRAPHIC_COMPONENTS } from "../../standard/graphic.ts";
 import { scopeComponentCss } from "../cssscope.ts";
-import { cssLength, toPx } from "../kinds.ts";
+import { cssLength } from "../kinds.ts";
 import { allWindowIds, childrenOfNode, unitOf, type ComponentCreate, type ComponentDecl, type ComponentInstance, type Scene } from "../model.ts";
 import { pageLabel, sheetCount, sheetPageNumbers } from "../pages.ts";
 import { isValidPartPath, MAX_PART_DEPTH, referencedParts } from "../parts.ts";
 import { renderNode, type RenderContext } from "../render.ts";
 import { applyBoard, createStageServices, createWaitTracker, GRAPHIC_STAGE_CSS } from "../stage.ts";
+import { setupScreen } from "./screen.ts";
 
 declare global {
   interface Window {
@@ -296,79 +301,6 @@ function pageRules(sizes: Array<{ width: string; height: string }>): string {
   return css;
 }
 
-function setupScreen(scene: Scene, boards: string[], frames: HTMLElement[]): void {
-  const unit = unitOf(scene);
-  // 每一页缩放到刚好放进窗口（宽和高都放得下），最多放大到原大的 1.6 倍
-  const fit = () => {
-    if (document.documentElement.classList.contains("vf-print")) return;
-    frames.forEach((frame, index) => {
-      const node = scene.nodes[boards[index]];
-      const width = toPx(unit, node.width);
-      const height = toPx(unit, node.height);
-      const zoom = Math.min((window.innerWidth - 32) / width, (window.innerHeight - 96) / height, 1.6);
-      frame.style.setProperty("zoom", String(Math.max(0.05, zoom)));
-    });
-  };
-  fit();
-  window.addEventListener("resize", fit);
-
-  const ui = document.createElement("div");
-  ui.id = "vf-player-ui";
-  const where = document.createElement("span");
-  where.className = "where";
-  const button = (text: string, title: string, onClick: () => void) => {
-    const el = document.createElement("button");
-    el.type = "button";
-    el.textContent = text;
-    el.title = title;
-    el.addEventListener("click", onClick);
-    return el;
-  };
-  const current = () => {
-    const middle = window.innerHeight / 2;
-    let best = 0;
-    let bestDistance = Infinity;
-    frames.forEach((frame, index) => {
-      const rect = frame.getBoundingClientRect();
-      const distance = Math.abs((rect.top + rect.bottom) / 2 - middle);
-      if (distance < bestDistance) {
-        best = index;
-        bestDistance = distance;
-      }
-    });
-    return best;
-  };
-  const go = (index: number) => frames[Math.max(0, Math.min(frames.length - 1, index))]?.scrollIntoView({ behavior: "smooth", block: "center" });
-  const sync = () => {
-    where.textContent = `${pageLabel(scene, boards[current()])}　共 ${boards.length} 个页面`;
-  };
-  ui.append(
-    button("←", "上一页（←）", () => go(current() - 1)),
-    where,
-    button("→", "下一页（→）", () => go(current() + 1)),
-    button("打印", "按纸张原大打印，或者存成 PDF（纸张选“默认”，边距选“无”，勾上“背景图形”）", () => {
-      const url = new URL(location.href);
-      url.searchParams.set("print", "1");
-      url.searchParams.set("autoprint", "1");
-      location.assign(url.href);
-    }),
-  );
-  document.body.append(ui);
-  sync();
-  window.addEventListener("scroll", sync, { passive: true });
-  window.addEventListener("keydown", (e) => {
-    const target = e.target as HTMLElement | null;
-    if (target && (target.matches("input, textarea, select") || target.isContentEditable)) return;
-    if (e.key === "ArrowRight" || e.key === "PageDown") {
-      e.preventDefault();
-      go(current() + 1);
-    } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
-      e.preventDefault();
-      go(current() - 1);
-    }
-  });
-}
-
 async function start(state: PlayerState): Promise<void> {
   const base = projectBase();
   // 项目里的脚本和内容用相对路径取图片、数据：让它们相对于项目文件夹，而不是这个页面
@@ -384,7 +316,7 @@ async function start(state: PlayerState): Promise<void> {
   const partParam = (params.get("part") ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
   const part = partParam && isValidPartPath(partParam) ? partParam : "";
   const own = (path: string) => (part ? `${part}/${path}` : path);
-  type Config = { name?: string; kind?: string; styles?: string[] };
+  type Config = { name?: string; kind?: string; styles?: string[]; icon?: string };
   const config = (await fetchJson<Config>(base, "project.json")) ?? {};
   const partConfig = part ? await fetchJson<Config>(base, own("project.json")) : null;
   const scene = await fetchJson<Scene>(base, own("ui/scene.json"));
@@ -424,6 +356,8 @@ async function start(state: PlayerState): Promise<void> {
   const numbers = sheetPageNumbers(scene);
   // 平时一个页面一个框；按纸拆开时，跨页的每张纸各一个框，框里是整个跨页，只露出这张纸
   const views: Array<{ frame: HTMLElement; size: { width: string; height: string }; order: number }> = [];
+  // 屏幕上看时每个页面画好的元素：换设备、翻页时挪进外框，不重新画
+  const boardEls = new Map<string, HTMLElement>();
   for (const id of boards) {
     const node = scene.nodes[id];
     const sheets = sheetCount(node);
@@ -444,6 +378,7 @@ async function start(state: PlayerState): Promise<void> {
         board.style.marginLeft = cssLength(unit, -s * sheetWidth);
       }
       frame.append(board);
+      if (!split) boardEls.set(id, board);
       views.push({
         frame,
         size: { width: cssLength(unit, split ? sheetWidth : node.width), height: cssLength(unit, node.height) },
@@ -462,7 +397,17 @@ async function start(state: PlayerState): Promise<void> {
   });
   addStyle("vf-page-rules", pageRules(views.map((view) => view.size)));
 
-  if (!printMode) setupScreen(scene, boards, frames);
+  if (!printMode) {
+    const icon = (partConfig?.icon ?? config.icon)?.replace(/\\/g, "/").replace(/^\/+/, "");
+    setupScreen({
+      scene,
+      boards,
+      boardEls,
+      frames,
+      book,
+      app: { name: name ?? "未命名项目", icon: icon ? base + icon.split("/").map(encodeURIComponent).join("/") : undefined },
+    });
+  }
 
   // 字体、图片、控件自己声明的异步加载都到位，才算准备好
   await document.fonts.ready;

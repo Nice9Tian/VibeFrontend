@@ -1,7 +1,7 @@
 // 页面画布排布（boardlayout）、翻书分屏（bookview）与预览设备几何（devices）的纯函数测试。
 import assert from "node:assert/strict";
 import { boardGap, boardWorldBounds, boardWorldLayout, boardWorldOrigin } from "../src/boardlayout.ts";
-import { bookViewIndexOfBoard, bookViewIndexOfPage, bookViews } from "../src/bookview.ts";
+import { bookViewIndexOfBoard, bookViewIndexOfPage, bookViews, deviceViews, screenIndexForAnchor, sheetPiece } from "../src/bookview.ts";
 import {
   defaultDevice,
   DESKTOP_SCREEN,
@@ -282,6 +282,43 @@ async function bookViewTests(): Promise<void> {
     assert.deepEqual(bookViews(notWrap).map((v) => v.label), ["第 1 页", "第 2–3 页"]);
     const uiScene: Scene = { version: 1, root: "main", nodes: { main: { type: "Window", width: 1024, height: 768 } } };
     assert.deepEqual(bookViews(uiScene), []);
+  });
+
+  await test("bookview：deviceViews 是编辑器预览和播放页共用的一屏一屏：书和电脑一屏两页，手机一屏一页，纸的尺寸是 CSS 像素；换设备按页码停在同一页", () => {
+    const P = (width: number, sheets: number) => ({ type: "Page", width, height: 297, props: { sheets } });
+    const example: Scene = { version: 1, unit: "mm", root: "spread1", boards: ["spread1", "page3"], nodes: { spread1: P(420, 2), page3: P(210, 1) } };
+    const a4 = { width: (210 * 96) / 25.4, height: (297 * 96) / 25.4 };
+    const piece = sheetPiece(example, "spread1", 1)!;
+    assert.equal(piece.board, "spread1");
+    assert.equal(piece.sheet, 1);
+    assert.ok(Math.abs(piece.width - a4.width) < 1e-6 && Math.abs(piece.height - a4.height) < 1e-6, `一张 A4 是 ${piece.width}×${piece.height}`);
+    assert.equal(sheetPiece(example, "nope", 0), null);
+
+    const book = deviceViews(example, "book");
+    assert.deepEqual(book.map((v) => [v.label, v.board, v.pages, v.left?.sheet ?? null, v.right?.sheet ?? null]), [
+      ["第 1–2 页", "spread1", [1, 2], 0, 1],
+      ["第 3 页", "page3", [3], null, 0],
+    ]);
+    assert.deepEqual(deviceViews(example, "desktop"), book, "电脑和书一样一屏两页");
+    const phone = deviceViews(example, "phone");
+    assert.deepEqual(phone.map((v) => [v.label, v.board, v.pages, v.left, v.right?.sheet]), [
+      ["第 1 页", "spread1", [1], null, 0],
+      ["第 2 页", "spread1", [2], null, 1],
+      ["第 3 页", "page3", [3], null, 0],
+    ]);
+    // 书停在第 1–2 页换成手机：第 1 页；手机停在第 2 页换回书：第 1–2 页那一屏
+    assert.equal(screenIndexForAnchor(phone, book[0]), 0);
+    assert.equal(screenIndexForAnchor(book, phone[1]), 0);
+    assert.equal(screenIndexForAnchor(book, phone[2]), 1);
+    // 没有页码（原样里一个画板）时按页面找；都找不到回到第一屏
+    assert.equal(screenIndexForAnchor(phone, { pages: [], board: "page3" }), 2);
+    assert.equal(screenIndexForAnchor(phone, { pages: [], board: "gone" }), 0);
+    // 包封：封面单独在第一屏右边，封底单独在最后一屏左边；手机上同样是封面、封底
+    const wrap: Scene = { version: 1, unit: "mm", cover: "wrap", root: "c", boards: ["c", "s"], nodes: { c: P(420, 2), s: P(420, 2) } };
+    assert.deepEqual(deviceViews(wrap, "book").map((v) => v.label), ["封面", "第 2–3 页", "封底"]);
+    assert.deepEqual(deviceViews(wrap, "phone").map((v) => v.label), ["封面", "第 2 页", "第 3 页", "封底"]);
+    const uiScene: Scene = { version: 1, root: "main", nodes: { main: { type: "Window", width: 1024, height: 768 } } };
+    assert.deepEqual(deviceViews(uiScene, "phone"), []);
   });
 }
 

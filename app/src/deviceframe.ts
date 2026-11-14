@@ -1,6 +1,7 @@
 // 预览时的设备外框：书（翻开的书，一屏两页，翻页时纸从书脊翻过去）、电脑（16:9 桌面、底部任务栏、软件窗口）、
 // 手机（机身、刘海或挖孔、状态栏、底部横条）。只画外框和“屏幕”在哪，屏幕里的东西由调用方放（编辑器放设计窗口里的画板，
-// 以后播放页也可以用同一套）。外框画在设计窗口自己的文档里，所以翻页时拍的快照、任务栏上的缩略图和项目的样式表是同一个文档里的东西。
+// 播放页——独立预览和导出的网页——放它画好的页面）。外框画在放页面的那个文档里（编辑器是设计窗口自己的文档），
+// 所以翻页时拍的快照、任务栏上的缩略图和项目的样式表是同一个文档里的东西。
 //
 // 尺寸都是 CSS 像素。几何（多大、放哪、缩放多少）在 devices.ts，这里只管画。
 import { DESKTOP_SCREEN, desktopWindowPlacement, phoneScreenPlacement, type PhoneModel, type Size } from "./devices.ts";
@@ -499,6 +500,29 @@ export function mountPhone(doc: Document, model: PhoneModel, options: { content:
     el(doc, "span", `${NS}-classic-home`, body);
   }
   return { root, size, slots: new Map([["screen", slot]]), faces: { left: null, right: null }, destroy() {} };
+}
+
+/**
+ * 电脑的窗口、手机的屏幕里放一屏的几面纸：并排摆，同一个画板的相邻两面合成一块（跨过中缝的东西连着）。
+ * boardFor 给出画板的元素（左上角对齐画板的左上角），这里只把它挪到这一面纸露出来的位置。
+ */
+export function placeSheets(doc: Document, parent: HTMLElement, view: { left: SheetPiece | null; right: SheetPiece | null }, boardFor: (board: string) => HTMLElement): void {
+  const leftW = view.left?.width ?? 0;
+  const pieces: Array<{ piece: SheetPiece; x: number; width: number }> = [];
+  if (view.left && view.right && view.left.board === view.right.board && view.right.sheet === view.left.sheet + 1) {
+    pieces.push({ piece: view.left, x: 0, width: view.left.width + view.right.width });
+  } else {
+    if (view.left) pieces.push({ piece: view.left, x: 0, width: view.left.width });
+    if (view.right) pieces.push({ piece: view.right, x: leftW, width: view.right.width });
+  }
+  for (const { piece, x, width } of pieces) {
+    const clip = doc.createElement("div");
+    clip.style.cssText = `position:absolute;left:${x}px;top:0;width:${width}px;height:${piece.height}px;overflow:hidden;`;
+    const board = boardFor(piece.board);
+    board.style.left = `${-piece.sheet * piece.width}px`;
+    clip.append(board);
+    parent.append(clip);
+  }
 }
 
 /** 电脑、手机换一屏：新的一屏从翻页方向滑进来 */

@@ -1,9 +1,12 @@
 // 预览时像翻书一样一屏一屏看：哪几面纸在同一屏、谁在左谁在右。
 // 跨页（两张纸拼成的页面）按设计的样子一屏看完；单页按页码配对，奇数页在右、偶数页在左，像装订好的书；
 // 包封（scene.cover = "wrap"）的封面单独在第一屏的右边，封底单独在最后一屏的左边。
-// 纯数据计算，不碰网页和文件系统，预览界面和命令行测试共用。
-import type { Scene } from "./model.ts";
-import { coverWrapId, pageIds, sheetPageNumbers } from "./pages.ts";
+// 纯数据计算，不碰网页和文件系统，编辑器的预览、播放页（独立预览和导出的网页）和命令行测试共用。
+import type { SheetPiece } from "./deviceframe.ts";
+import type { DeviceId } from "./devices.ts";
+import { toPx } from "./kinds.ts";
+import { unitOf, type Scene } from "./model.ts";
+import { coverWrapId, pageIds, sheetCount, sheetPageNumbers } from "./pages.ts";
 
 export interface BookLeaf {
   /** 所在的页面 ID */
@@ -76,6 +79,57 @@ export function bookViews(scene: Scene): BookView[] {
   flush();
   if (wrapId) push({ board: wrapId, sheet: 0, page: numbers.get(wrapId)?.[0] ?? lastPage }, null);
   return views;
+}
+
+/** 套着设备外框时的一屏：书和电脑一屏两页（跨页），手机一屏一页 */
+export interface ScreenView {
+  label: string;
+  left: SheetPiece | null;
+  right: SheetPiece | null;
+  /** 这一屏主要是哪个页面 */
+  board: string;
+  /** 这一屏的页码，换设备时按它停在同一页 */
+  pages: number[];
+}
+
+/** 一面纸：页面里从左数第几张纸、多大（CSS 像素） */
+export function sheetPiece(scene: Scene, board: string, sheet: number): SheetPiece | null {
+  const node = scene.nodes[board];
+  if (!node) return null;
+  const unit = unitOf(scene);
+  const sheets = node.type === "Page" ? sheetCount(node) : 1;
+  return { board, sheet, width: toPx(unit, node.width / sheets), height: toPx(unit, node.height) };
+}
+
+/**
+ * 平面设计套着设备外框时一屏一屏怎么看：书和电脑按 bookViews 配页（一屏两页），手机把每一屏拆开、一屏一页。
+ * 没有页面（界面设计）时返回空数组。
+ */
+export function deviceViews(scene: Scene, device: DeviceId): ScreenView[] {
+  const book = bookViews(scene).map((v) => ({
+    label: v.label,
+    left: v.left ? sheetPiece(scene, v.left.board, v.left.sheet) : null,
+    right: v.right ? sheetPiece(scene, v.right.board, v.right.sheet) : null,
+    board: (v.left ?? v.right)!.board,
+    pages: [v.left?.page, v.right?.page].filter((n): n is number => n !== undefined),
+  }));
+  if (device !== "phone") return book;
+  return book.flatMap((v) =>
+    [v.left, v.right]
+      .filter((piece): piece is SheetPiece => piece !== null)
+      .map((piece, i) => ({ label: v.left && v.right ? `第 ${v.pages[i]} 页` : v.label, left: null, right: piece, board: piece.board, pages: [v.pages[i]] })),
+  );
+}
+
+/** 换设备时停在同一页：先按页码找，找不到再按页面找；都找不到返回 0 */
+export function screenIndexForAnchor(views: ScreenView[], anchor: { pages: number[]; board: string }): number {
+  const page = anchor.pages[0];
+  if (page !== undefined) {
+    const byPage = views.findIndex((v) => v.pages.includes(page));
+    if (byPage >= 0) return byPage;
+  }
+  const byBoard = views.findIndex((v) => v.board === anchor.board || v.left?.board === anchor.board || v.right?.board === anchor.board);
+  return byBoard >= 0 ? byBoard : 0;
 }
 
 /** 第一个含有这个页面的视图；找不到返回 0。 */
