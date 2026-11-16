@@ -10,7 +10,7 @@
 // 页面只画一次（在 player/main.ts 里），换设备、翻页时把画好的页面元素挪进外框的屏幕，控件不重新创建，动画接着动。
 import { boardAnchor, deviceViews, playingViews, screenIndexForAnchor, type ScreenView } from "../bookview.ts";
 import { iconColorFor, mountBook, mountDesktop, mountPhone, placeSheets, playSlide, playTurn, turnSnapshot, type DeviceStage } from "../deviceframe.ts";
-import { fitScale, PHONE_MODELS, phoneModel, previewChoiceLabel, previewChoices, resolvePreviewChoice, type DeviceId, type PreviewChoice, type Rect } from "../devices.ts";
+import { fitScale, pdfPageInView, pdfPageScale, PHONE_MODELS, phoneModel, previewChoiceLabel, previewChoices, resolvePreviewChoice, type DeviceId, type PreviewChoice, type Rect } from "../devices.ts";
 import { toPx } from "../kinds.ts";
 import { unitOf, type Scene } from "../model.ts";
 import { coverWrapId, pageLabel } from "../pages.ts";
@@ -275,18 +275,13 @@ export function setupScreen(options: ScreenOptions): void {
 
   /** 原样时现在看的是第几个页面：离窗口中线最近的那个 */
   const currentFrame = () => {
-    const middle = window.innerHeight / 2;
-    let best = 0;
-    let bestDistance = Infinity;
-    frames.forEach((frame, i) => {
+    // 和编辑器预览里的 PDF 同一个算法：滚到最上面、最下面是第一页、最后一页，中间按离窗口正中最近的那一页
+    const pages = frames.map((frame) => {
       const rect = frame.getBoundingClientRect();
-      const distance = Math.abs((rect.top + rect.bottom) / 2 - middle);
-      if (distance < bestDistance) {
-        best = i;
-        bestDistance = distance;
-      }
+      return { y: rect.top, height: rect.height };
     });
-    return best;
+    const root = document.scrollingElement ?? document.documentElement;
+    return Math.max(0, pdfPageInView(pages, window.innerHeight / 2, { top: root.scrollTop, max: root.scrollHeight - root.clientHeight }));
   };
 
   /** 现在在看哪一页（换设备时停在同一页） */
@@ -317,8 +312,9 @@ export function setupScreen(options: ScreenOptions): void {
         if (!node) return;
         const width = toPx(unit, node.width);
         const height = toPx(unit, node.height);
-        const zoom = Math.min((window.innerWidth - 32) / width, (window.innerHeight - 96) / height, 1.6);
-        frame.style.setProperty("zoom", String(Math.max(0.05, zoom)));
+        // 和编辑器预览里的 PDF 是同一个算法（devices.ts 的 pdfPageScale）
+        const zoom = pdfPageScale({ width, height }, { width: window.innerWidth - 32, height: window.innerHeight - 96 });
+        frame.style.setProperty("zoom", String(zoom));
       });
       return;
     }

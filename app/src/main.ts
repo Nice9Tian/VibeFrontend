@@ -183,7 +183,7 @@ import { snapMove, snapPoint, snapResize, type Guide, type SnapOptions } from ".
 import { activePage, hiddenPages, pagesToReveal } from "./stackview";
 import { centerView, onZoomChange, panToSelection, restoreViewState, setSelectionRectSource, setZoom, viewState, viewZoom, zoomToFit, zoomToRect, zoomToSelection } from "./viewport";
 import { boardAnchor, bookViewIndexOfBoard, bookViews, deviceViews, screenIndexForAnchor, sheetPiece as bookSheetPiece, type ScreenView } from "./bookview";
-import { desktopClient, desktopWorkArea, isDeviceId, PHONE_MODELS, phoneModel, previewChoiceLabel, previewChoices, resolvePreviewChoice, type DeviceId, type PreviewChoice, type Rect as DeviceRect, type Size } from "./devices";
+import { desktopClient, desktopWorkArea, isDeviceId, pdfPageGap, pdfPageInView, pdfPageScale, PHONE_MODELS, phoneModel, previewChoiceLabel, previewChoices, resolvePreviewChoice, type DeviceId, type PreviewChoice, type Rect as DeviceRect, type Size } from "./devices";
 import { iconColorFor, mountBook, mountDesktop, mountPhone, placeSheets, playSlide, playTurn, turnSnapshot, type DeviceStage } from "./deviceframe";
 import { boardGap, boardWorldBounds } from "./boardlayout";
 import { presetsPath } from "./loader";
@@ -1679,6 +1679,17 @@ function renderStage(): void {
   const device = mode === "preview" ? previewDevice() : "plain";
   $("stage-frame").classList.toggle("spread", spreadOut());
   $("stage-frame").classList.toggle("device", device !== "plain");
+  // 平面设计预览选 PDF：全部页面竖着排开，跟着滚动条上下滚
+  const pdf = mode === "preview" && device === "plain" && kind().board.arrange === "spread";
+  const wasPdf = document.body.classList.contains("pdf-stack");
+  $("stage-frame").classList.toggle("pdf", pdf);
+  document.body.classList.toggle("pdf-stack", pdf);
+  if (!pdf) {
+    pdfStack = null;
+    releasePdfScrollTarget();
+    // 从 PDF 换到不锁视角的原样（项目换成了界面设计）：设计窗口重新摆在正中
+    if (wasPdf && mode === "preview" && device === "plain") requestAnimationFrame(() => centerView());
+  }
   // 独立预览窗口套外框时，设备按窗口缩放（和编辑器的预览一样由 viewport.ts 摆）；原样时照旧 1:1 摆在正中
   const wasFramed = document.body.classList.contains("standalone-device");
   document.body.classList.toggle("standalone-device", isStandalonePreview() && device !== "plain");
@@ -1692,6 +1703,10 @@ function renderStage(): void {
     // 独立预览窗口从外框换回原样：外框时为了居中滚过去的位置不能留着，从左上角看起
     $("stage-scroll").scrollLeft = 0;
     $("stage-scroll").scrollTop = 0;
+  }
+  if (pdf) {
+    renderPdfStack(stageCanvas, wasPdf);
+    return;
   }
   sizeStageTo(stageWorld());
   if (spreadOut()) {
@@ -2107,9 +2122,224 @@ function renderDeviceStage(canvas: HTMLElement, device: DeviceId): void {
   }
 }
 
+// ---------- 平面设计预览的 PDF：全部页面竖着排开，像在浏览器里看 PDF ----------
+
+/** 现在是不是按 PDF 看平面设计 */
+function pdfStackShown(): boolean {
+  return mode === "preview" && kind().board.arrange === "spread" && previewDevice() === "plain";
+}
+
+/** 排好的 PDF：每一页在设计窗口（iframe）里的上边和高度；viewport 是排的时候滚动区多大 */
+let pdfStack: { pages: Array<{ id: string; y: number; height: number }>; viewport: Size; inset: number } | null = null;
+/** ◀ ▶、选中别页的东西时在滚过去的那一页：滚的途中经过的页不算“在看” */
+let pdfScrollTarget: number | null = null;
+let pdfScrollTargetTimer = 0;
+
+/** 悬浮在画布顶上的那一栏有多高：第一页从它下面开始，“正中”按它下面的地方算 */
+function pdfTopInset(): number {
+  const bar = document.getElementById("center-bar");
+  return bar && getComputedStyle(bar).position === "absolute" ? bar.offsetHeight : 0;
+}
+
+/** 设计窗口（iframe）的上边在滚动区的内容里有多高 */
+function pdfStackTop(): number {
+  const scroll = $("stage-scroll");
+  return $("stage-iframe").getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop;
+}
+
+/**
+ * 看页面的地方（悬浮栏下面）正中，在设计窗口里有多高。viewHeight 是滚动区的高度：
+ * 滚动区刚变了大小、还没按新的大小重排时，传排的时候的高度，按用户刚才看着的正中算
+ */
+function pdfViewMiddle(viewHeight = $("stage-scroll").clientHeight): number {
+  const scroll = $("stage-scroll");
+  const inset = pdfTopInset();
+  return scroll.scrollTop + inset + (viewHeight - inset) / 2 - pdfStackTop();
+}
+
+/** middle 那里（默认是现在正中）是第几页：页的中心离它最近的那一页 */
+function pdfPageAtCenter(middle = pdfViewMiddle()): number {
+  if (!pdfStack || pdfStack.pages.length === 0) return -1;
+  let best = 0;
+  let bestDistance = Infinity;
+  pdfStack.pages.forEach((page, i) => {
+    const distance = Math.abs(page.y + page.height / 2 - middle);
+    if (distance < bestDistance) {
+      best = i;
+      bestDistance = distance;
+    }
+  });
+  return best;
+}
+
+/** 滚动停在哪一页，预览栏的页码、“在看”的页就是哪一页 */
+/** 滚动条现在停的地方“正在看”的是第几页（滚到最上面、最下面是第一页、最后一页，页很矮时也一样） */
+function pdfPageInViewNow(): number {
+  if (!pdfStack) return -1;
+  const scroll = $("stage-scroll");
+  return pdfPageInView(pdfStack.pages, pdfViewMiddle(), { top: scroll.scrollTop, max: scroll.scrollHeight - scroll.clientHeight });
+}
+
+function syncPdfPageFromScroll(): void {
+  if (!pdfStack || !pdfStackShown() || pdfScrollTarget !== null) return;
+  const at = pdfPageInViewNow();
+  if (at < 0 || at === previewIndex) return;
+  previewIndex = at;
+  syncFocusFromPreview();
+  renderBoardBar();
+}
+
+/** 不再等滚向某一页（滚到了、被用户打断、离开了 PDF） */
+function releasePdfScrollTarget(): void {
+  pdfScrollTarget = null;
+  window.clearTimeout(pdfScrollTargetTimer);
+}
+
+/** 滚到第 index 页，摆在看页面的地方正中 */
+function scrollPdfTo(index: number, behavior: ScrollBehavior): void {
+  if (!pdfStack) return;
+  const i = Math.max(0, Math.min(pdfStack.pages.length - 1, index));
+  const page = pdfStack.pages[i];
+  if (!page) return;
+  const scroll = $("stage-scroll");
+  const top = scroll.scrollTop + page.y + page.height / 2 - pdfViewMiddle();
+  if (behavior === "smooth") {
+    // 滚的途中经过的页不改页码；滚到了才照滚动来。一秒还没滚到（被用户的滚轮打断了），就按停下来的地方定页码
+    releasePdfScrollTarget();
+    pdfScrollTarget = i;
+    pdfScrollTargetTimer = window.setTimeout(() => {
+      pdfScrollTarget = null;
+      syncPdfPageFromScroll();
+    }, 1000);
+  } else {
+    releasePdfScrollTarget();
+  }
+  scroll.scrollTo({ top: Math.max(0, top), behavior });
+}
+
+/**
+ * 平面设计预览选 PDF：全部页面按页序竖着排开，一页一个框，用滚轮上下滚着看（和播放页的 PDF 一样）。
+ * 每页的大小、页和页之间的空和播放页是同一个算法（devices.ts 的 pdfPageScale、pdfPageGap）；
+ * 设计窗口这时不缩放、不平移，宽度就是滚动区的宽度，跟着滚动条走。
+ * keep 为真（本来就在按 PDF 看，窗口大小变了、文件改了重画）：重画前后停在同一个地方；否则滚到 previewIndex 那一页。
+ */
+function renderPdfStack(canvas: HTMLElement, keep: boolean): void {
+  const doc = canvas.ownerDocument;
+  const scroll = $("stage-scroll");
+  // 重画前在哪：正滚向某一页时就是那一页；否则按重排前的大小找正中那一页、看到它的什么位置
+  let anchor: { index: number; fraction: number } | null = null;
+  if (keep && pdfStack && pdfScrollTarget === null) {
+    const middle = pdfViewMiddle(pdfStack.viewport.height);
+    const index = pdfPageAtCenter(middle);
+    const page = pdfStack.pages[index];
+    if (page) anchor = { index, fraction: (middle - page.y) / Math.max(1, page.height) };
+  }
+  // 页数可能变了（文件里删了页）
+  previewIndex = Math.max(0, Math.min(pageIds(project.scene).length - 1, previewIndex));
+  syncFocusFromPreview();
+  scroll.scrollLeft = 0;
+  canvas.removeAttribute("class");
+  delete canvas.dataset.vfBoard;
+  delete canvas.dataset.vfType;
+  canvas.classList.add("vf-pdf-stack");
+  const inset = pdfTopInset();
+  const width = Math.max(320, scroll.clientWidth);
+  const viewHeight = Math.max(240, scroll.clientHeight - inset);
+  const gap = pdfPageGap(viewHeight);
+  const room = { width: width - 32, height: viewHeight - gap * 2 };
+  const pages: Array<{ id: string; y: number; height: number }> = [];
+  let y = inset + gap;
+  for (const id of pageIds(project.scene)) {
+    const page = node(id);
+    if (!page) continue;
+    const size = { width: toPx(unit(), page.width), height: toPx(unit(), page.height) };
+    const scale = pdfPageScale(size, room);
+    const w = size.width * scale;
+    const h = size.height * scale;
+    const frame = doc.createElement("div");
+    frame.className = "vf-pdf-page";
+    frame.dataset.vfPdfPage = id;
+    frame.style.cssText = `position:absolute;left:${Math.round((width - w) / 2)}px;top:${Math.round(y)}px;width:${w}px;height:${h}px;box-shadow:0 10px 32px rgba(0,0,0,0.2),0 0 0 1px rgba(0,0,0,0.05);`;
+    const board = doc.createElement("div");
+    applyBoard(board, id, page, unit());
+    board.style.position = "absolute";
+    board.style.left = "0";
+    board.style.top = "0";
+    board.style.transform = `scale(${scale})`;
+    board.style.transformOrigin = "0 0";
+    frame.append(board);
+    canvas.append(frame);
+    boardEls.set(id, board);
+    pages.push({ id, y: Math.round(y), height: h });
+    y += h + gap;
+  }
+  const total = Math.ceil(y);
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${total}px`;
+  const stage = $("stage");
+  stage.style.width = `${width}px`;
+  stage.style.height = `${total}px`;
+  syncOverlayScale();
+  $("stage-title").hidden = true;
+  pdfStack = { pages, viewport: { width: scroll.clientWidth, height: scroll.clientHeight }, inset };
+  boardHost = canvas;
+  for (const [id, el] of boardEls) for (const child of childrenOf(node(id))) buildNode(child, el);
+  applyViews();
+  if (anchor && pages[anchor.index]) {
+    const page = pages[anchor.index];
+    scroll.scrollTop = scroll.scrollTop + page.y + anchor.fraction * page.height - pdfViewMiddle();
+  } else {
+    scrollPdfTo(previewIndex, pdfScrollTarget !== null ? "smooth" : "auto");
+  }
+}
+
+// 按 PDF 看：滚到哪一页，预览栏的页码、回到编辑时“在看”的页跟着变
+let pdfScrollFrame = 0;
+$("stage-scroll").addEventListener(
+  "scroll",
+  () => {
+    if (!pdfStack) return;
+    cancelAnimationFrame(pdfScrollFrame);
+    pdfScrollFrame = requestAnimationFrame(() => {
+      if (!pdfStack || !pdfStackShown()) return;
+      if (pdfScrollTarget !== null) {
+        // 滚向某一页的途中：到了才放开
+        if (pdfPageInViewNow() !== pdfScrollTarget) return;
+        releasePdfScrollTarget();
+      }
+      syncPdfPageFromScroll();
+    });
+  },
+  { passive: true },
+);
+// 按 PDF 看时滚动区的大小变了（窗口、面板）：每页重新按新的大小排，停在同一个地方
+let pdfResizeFrame = 0;
+const pdfResizeObserver = new ResizeObserver(() => {
+  if (!pdfStack || !pdfStackShown()) return;
+  const scroll = $("stage-scroll");
+  // 滚动区的大小没变、悬浮在顶上的预览栏也没变高（进预览时它是后填的，可能换成两行）：不用重排
+  if (Math.abs(scroll.clientWidth - pdfStack.viewport.width) < 1 && Math.abs(scroll.clientHeight - pdfStack.viewport.height) < 1 && Math.abs(pdfTopInset() - pdfStack.inset) < 1) return;
+  cancelAnimationFrame(pdfResizeFrame);
+  pdfResizeFrame = requestAnimationFrame(() => {
+    if (pdfStackShown()) renderStage();
+  });
+});
+pdfResizeObserver.observe($("stage-scroll"));
+pdfResizeObserver.observe($("center-bar"));
+
 /** 翻到下一屏（delta 为 1）或上一屏（-1）：书是纸从书脊翻过去，电脑和手机是新的一屏滑进来 */
 function flipPreview(delta: number): void {
   if (mode !== "preview") return;
+  if (pdfStackShown()) {
+    // 按 PDF 看：◀ ▶ 和 PageUp / PageDown 是滚到上一页、下一页
+    const next = Math.max(0, Math.min(previewViews("plain").length - 1, previewIndex + delta));
+    if (next === previewIndex) return;
+    previewIndex = next;
+    syncFocusFromPreview();
+    renderBoardBar();
+    scrollPdfTo(next, "smooth");
+    return;
+  }
   const device = previewDevice();
   const views = previewViews(device);
   const next = previewIndex + delta;
@@ -2128,6 +2358,8 @@ function flipPreview(delta: number): void {
 function renderPreviewBar(bar: HTMLElement): void {
   const device = previewDevice();
   const views = previewViews(device);
+  // 页数可能刚变了（文件里删了页），重画设计窗口之前先画了这一栏
+  if (views.length > 0) previewIndex = Math.max(0, Math.min(views.length - 1, previewIndex));
   const segmented = document.createElement("div");
   segmented.className = "segmented device-switch";
   segmented.setAttribute("role", "group");
@@ -2136,7 +2368,7 @@ function renderPreviewBar(bar: HTMLElement): void {
     book: "翻开的书，一屏两页，像翻书一样翻页",
     desktop: "16:9 的电脑桌面：软件的窗口（拖边、拖角改大小）、底部任务栏（图标停一下看缩略图）",
     phone: "手机：软件在屏幕里，按屏幕宽度缩放",
-    plain: kindName() === "graphic" ? "不套外框，按纸张原大一页一页看（和导出的 PDF 一样）" : "不套外框，按设计的尺寸 1:1 看",
+    plain: kindName() === "graphic" ? "不套外框，全部页面按页序竖着排开，用滚轮上下滚着看（和导出的 PDF 一样）" : "不套外框，按设计的尺寸 1:1 看",
   };
   // 项目在 project.json 的 preview.devices 里限定了看法时只列那几种，按它写的顺序
   const choices = previewChoices(project.previewDevices);
@@ -2202,11 +2434,12 @@ function renderPreviewBar(bar: HTMLElement): void {
     label.className = "preview-page-label";
     label.dataset.board = "label";
     label.textContent = `${views[previewIndex]?.label ?? ""}`;
-    label.title = `共 ${views.length} 屏`;
+    const pdf = pdfStackShown();
+    label.title = pdf ? `共 ${views.length} 个页面，滚轮上下滚着看` : `共 ${views.length} 屏`;
     parts.push(
-      button("◀", "上一屏（← 或 PageUp）", previewIndex > 0, () => flipPreview(-1), "prev"),
+      button("◀", pdf ? "滚到上一页（← 或 PageUp）" : "上一屏（← 或 PageUp）", previewIndex > 0, () => flipPreview(-1), "prev"),
       label,
-      button("▶", "下一屏（→ 或 PageDown）", previewIndex < views.length - 1, () => flipPreview(1), "next"),
+      button("▶", pdf ? "滚到下一页（→ 或 PageDown）" : "下一屏（→ 或 PageDown）", previewIndex < views.length - 1, () => flipPreview(1), "next"),
     );
   }
   bar.replaceChildren(...parts);
@@ -6141,6 +6374,17 @@ function followSelectionToBoard(): boolean {
     previewIndex = index;
     return true;
   }
+  // 按 PDF 看平面设计：全部页面都在，滚到它那一页就好，不重画
+  if (mode === "preview" && pdfStackShown()) {
+    currentBoardId = board;
+    const index = pageIds(project.scene).indexOf(board);
+    if (index >= 0 && index !== previewIndex) {
+      previewIndex = index;
+      renderBoardBar();
+      scrollPdfTo(index, "smooth");
+    }
+    return false;
+  }
   if (board === stageRootId()) return false;
   // 摊开时全部页面都在画布上，不用翻页重画：只换“在看”的页
   if (spreadOut()) {
@@ -6175,7 +6419,14 @@ function select(id: string | null, additive = false): void {
     selectedIds = selectedIds.includes(id) ? selectedIds.filter((each) => each !== id) : [...selectedIds, id];
     selectedId = selectedIds[selectedIds.length - 1] ?? null;
   } else {
-    if (id === selectedId && selectedIds.length <= 1) return;
+    if (id === selectedId && selectedIds.length <= 1) {
+      // 预览里翻（滚）走了以后再点一下已经选中的东西：回到它那一页
+      if (mode === "preview" && followSelectionToBoard()) {
+        renderStage();
+        renderBoardBar();
+      }
+      return;
+    }
     selectedId = id;
     selectedIds = id && !isBoardRoot(id) ? [id] : [];
   }

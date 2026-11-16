@@ -1,6 +1,7 @@
 import "./test-env.ts";
 // 预览的设备外框（书、电脑、手机、原样）的测试（无头浏览器）：
-// 1) 编辑器的预览，平面设计：书一屏两页、翻页时纸从书脊翻过去、键盘翻页；手机一屏一页；电脑窗口里看跨页；原样一个画板一个画板地看；
+// 1) 编辑器的预览，平面设计：书一屏两页、翻页时纸从书脊翻过去、键盘翻页；手机一屏一页；电脑窗口里看跨页；
+//    PDF 全部页面竖着排开、滚轮上下滚、页码跟着滚、◀ ▶ 是滚动；
 //    设备选择存进 .designer/preview.json，刷新后还在；切回编辑时编辑的视角原样回来。
 // 2) 编辑器的预览，界面设计：默认是电脑，软件的窗口在桌面中间，标题栏、任务栏、缩略图、最小化和还原、最大化；窗口里的控件照样能点。
 // 3) 播放页（平面设计的独立预览 player.html）：同样的书、电脑、手机、原样和翻页，页面不重画；选择和编辑器共用 .designer/preview.json。
@@ -147,6 +148,17 @@ async function dragWindowHandle(cdp: Cdp, inStage: boolean, edge: string, dx: nu
 /** 拖动是在缩小了的设计窗口里用屏幕坐标拖的，屏幕上差 1 像素在桌面里是 2 像素多：留 2.5 的余量 */
 const near = (a: number, b: number, tolerance = 2.5) => Math.abs(a - b) <= tolerance;
 
+/** 一直读 read()，直到 ok 为真（最多 timeout 毫秒），返回最后读到的 */
+async function waitFor<T>(read: () => Promise<T>, ok: (value: T) => boolean, timeout = 3000): Promise<T> {
+  const deadline = Date.now() + timeout;
+  let value = await read();
+  while (!ok(value) && Date.now() < deadline) {
+    await wait(50);
+    value = await read();
+  }
+  return value;
+}
+
 async function graphicTests(): Promise<void> {
   await withEditor("graphic", async ({ cdp, dir, reload }) => {
     const bar = () => cdp.evaluate<{ devices: Record<string, string>; label: string; prev: boolean; next: boolean }>(`(() => ({
@@ -272,11 +284,116 @@ async function graphicTests(): Promise<void> {
       assert.ok(desk.boards >= 1);
     });
 
-    await test("原样：不套外框，一个画板一个画板地看", async () => {
+    await test("PDF：不套外框，全部页面按页序竖着排开（和播放页一样），设计窗口不缩放、没有缩放条", async () => {
       await cdp.evaluate(`document.querySelector('#board-bar [data-device="plain"]').click()`);
-      await wait(600);
+      await wait(700);
       assert.equal(await cdp.evaluate<boolean>(`Boolean(${stageQuery(".vf-dev")})`), false);
-      assert.equal(await cdp.evaluate<string>(`document.getElementById("stage-iframe").contentDocument.getElementById("stage-canvas").dataset.vfBoard ?? ""`), "spread1");
+      const stack = await cdp.evaluate<{ pages: string[]; boards: string[]; zoomBar: string; transform: string; top: number }>(`(() => {
+        const doc = document.getElementById("stage-iframe").contentDocument;
+        return {
+          pages: [...doc.querySelectorAll(".vf-pdf-page")].map((p) => p.dataset.vfPdfPage),
+          boards: [...doc.querySelectorAll(".vf-pdf-page > [data-vf-board]")].map((b) => b.dataset.vfBoard),
+          zoomBar: getComputedStyle(document.getElementById("zoom-bar")).display,
+          transform: getComputedStyle(document.getElementById("stage-frame")).transform,
+          top: document.getElementById("stage-scroll").scrollTop,
+        };
+      })()`);
+      assert.deepEqual([stack.pages, stack.boards], [["spread1", "page3"], ["spread1", "page3"]], "两个页面都在，一页一个框");
+      assert.deepEqual([stack.zoomBar, stack.transform], ["none", "none"]);
+      assert.equal((await bar()).label, "第 1–2 页", "从“在看”的第 1–2 页开始");
+      assert.ok(await cdp.evaluate<boolean>(`Boolean(${stageQuery('.vf-pdf-page [data-vf-id="page3Title"]')})`), "第 3 页的东西也画出来了");
+    });
+
+    await test("PDF：滚轮上下滚着看（滚一格就是一格，不翻倍），预览栏的页码跟着滚到的那一页变；◀ ▶、PageUp / PageDown 是滚到上一页、下一页", async () => {
+      const scrollTop = () => cdp.evaluate<number>(`document.getElementById("stage-scroll").scrollTop`);
+      const p = await cdp.evaluate<{ x: number; y: number }>(`(() => { const r = document.getElementById("stage-scroll").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+      const wheel = async (dy: number) => {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: p.x, y: p.y, deltaX: 0, deltaY: dy });
+        await wait(120);
+      };
+      const start = await scrollTop();
+      await wheel(100);
+      await wait(300);
+      assert.ok(Math.abs((await scrollTop()) - start - 100) <= 2, `滚一格 100：${start} → ${await scrollTop()}`);
+      for (let k = 0; k < 30 && (await bar()).label !== "第 3 页"; k++) await wheel(120);
+      await wait(400);
+      assert.equal((await bar()).label, "第 3 页", "滚到下面，页码是第 3 页");
+      const max = await cdp.evaluate<number>(`(() => { const s = document.getElementById("stage-scroll"); return s.scrollHeight - s.clientHeight; })()`);
+      for (let k = 0; k < 10; k++) await wheel(200);
+      await wait(300);
+      assert.ok(Math.abs((await scrollTop()) - max) <= 1, "滚得到最后一页的底下");
+      const top = () => waitFor(scrollTop, () => false, 0);
+      const settleAt = async (where: "top" | "bottom") => waitFor(scrollTop, (t) => (where === "top" ? t < 2 : t > max - 2));
+      await cdp.evaluate(`document.querySelector('#board-bar [data-board="prev"]').click()`);
+      assert.ok((await settleAt("top")) < 2, `◀ 是滚上去的（滚动条到了最上面），不是换了一屏：${await top()}`);
+      assert.equal((await bar()).label, "第 1–2 页", "◀ 滚回上一页");
+      assert.equal((await bar()).prev, false);
+      await cdp.evaluate(`document.querySelector('#board-bar [data-board="next"]').click()`);
+      assert.ok((await settleAt("bottom")) > max - 2, "▶ 滚到下一页");
+      assert.equal((await bar()).label, "第 3 页");
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "PageUp", code: "PageUp", windowsVirtualKeyCode: 33 });
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "PageUp", code: "PageUp", windowsVirtualKeyCode: 33 });
+      assert.ok((await settleAt("top")) < 2, "PageUp 滚回上一页");
+      assert.equal((await bar()).label, "第 1–2 页");
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "PageDown", code: "PageDown", windowsVirtualKeyCode: 34 });
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "PageDown", code: "PageDown", windowsVirtualKeyCode: 34 });
+      assert.ok((await settleAt("bottom")) > max - 2, "PageDown 滚到下一页");
+      assert.equal((await bar()).label, "第 3 页");
+      // ◀ 滚的途中用滚轮往回滚、停在第 3 页：页码按停下来的那一页，不卡在 ◀ 要去的第 1–2 页
+      await cdp.evaluate(`document.querySelector('#board-bar [data-board="prev"]').click()`);
+      await wait(60);
+      for (let k = 0; k < 6; k++) await wheel(400);
+      await settleAt("bottom");
+      const label = await waitFor(bar, (b) => b.label === "第 3 页", 2500);
+      assert.equal(label.label, "第 3 页", "被滚轮打断后，页码是停下来的第 3 页");
+    });
+
+    await test("PDF：页面上的控件照常运行；按住 Alt 点哪一页上的东西都能选中；在图层里选别的页上的东西，滚到那一页", async () => {
+      const d = `document.getElementById("stage-iframe").contentDocument.querySelector(".wave-line-0").getAttribute("d")`;
+      const a = await cdp.evaluate<string>(d);
+      await wait(400);
+      assert.notEqual(await cdp.evaluate<string>(d), a, "波形图在动");
+      const click = await cdp.evaluate<{ x: number; y: number }>(`(() => {
+        const iframe = document.getElementById("stage-iframe"), f = iframe.getBoundingClientRect();
+        const r = iframe.contentDocument.querySelector('[data-vf-id="page3Title"]').getBoundingClientRect();
+        return { x: f.left + r.left + r.width / 2, y: f.top + r.top + r.height / 2 };
+      })()`);
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: click.x, y: click.y, button: "left", clickCount: 1, modifiers: 1 });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: click.x, y: click.y, button: "left", clickCount: 1, modifiers: 1 });
+      await wait(500);
+      assert.equal(await cdp.evaluate<string>(`document.getElementById("selection-id").value`), "page3Title", "Alt+点第 3 页上的标题，选中了它");
+      assert.equal((await bar()).label, "第 3 页", "已经在第 3 页，不动");
+      const scrollTop = () => cdp.evaluate<number>(`document.getElementById("stage-scroll").scrollTop`);
+      await cdp.evaluate(`document.getElementById("stage-iframe").contentDocument.querySelector('.vf-pdf-page[data-vf-pdf-page="spread1"]').__vfMark = "same"`);
+      const clickLayer = () => cdp.evaluate(`[...document.querySelectorAll(".layer")].find((r) => r.dataset.id === "coverTitle").click()`);
+      await clickLayer();
+      assert.ok((await waitFor(scrollTop, (t) => t < 2)) < 2, "滚到了第 1–2 页（最上面）");
+      assert.equal(await cdp.evaluate<string>(`document.getElementById("selection-id").value`), "coverTitle");
+      assert.equal((await bar()).label, "第 1–2 页");
+      assert.equal(await cdp.evaluate<string>(`document.getElementById("stage-iframe").contentDocument.querySelector('.vf-pdf-page[data-vf-pdf-page="spread1"]').__vfMark ?? ""`), "same", "没有重画排好的页面");
+      // 滚走了以后再点一下已经选中的东西：滚回它那一页
+      await cdp.evaluate(`document.querySelector('#board-bar [data-board="next"]').click()`);
+      await waitFor(scrollTop, (t) => t > 100);
+      await waitFor(bar, (b) => b.label === "第 3 页");
+      await clickLayer();
+      assert.ok((await waitFor(scrollTop, (t) => t < 2)) < 2, "再点一下已经选中的 coverTitle，滚回第 1–2 页");
+      assert.equal((await bar()).label, "第 1–2 页");
+    });
+
+    await test("PDF：滚到第 3 页回到编辑，“在看”的是第 3 页；再进预览从第 3 页开始", async () => {
+      await cdp.evaluate(`document.querySelector('#board-bar [data-board="next"]').click()`);
+      await waitFor(() => cdp.evaluate<number>(`document.getElementById("stage-scroll").scrollTop`), (t) => t > 100);
+      await wait(400);
+      assert.equal((await bar()).label, "第 3 页");
+      await cdp.evaluate(`document.getElementById("mode-edit").click()`);
+      await wait(700);
+      assert.equal(await cdp.evaluate<string>(`document.querySelector('#board-bar [data-board="select"]').value`), "page3", "编辑的翻页条上是第 3 页");
+      assert.equal(await cdp.evaluate<boolean>(`document.body.classList.contains("pdf-stack")`), false, "编辑时设计窗口照旧能缩放、平移");
+      await cdp.evaluate(`document.getElementById("mode-preview").click()`);
+      await wait(900);
+      assert.equal((await bar()).label, "第 3 页", "再进预览从第 3 页开始");
+      const end = await cdp.evaluate<{ top: number; max: number }>(`(() => { const s = document.getElementById("stage-scroll"); return { top: s.scrollTop, max: s.scrollHeight - s.clientHeight }; })()`);
+      assert.ok(end.top > end.max / 2, `滚到了第 3 页：${end.top} / ${end.max}`);
     });
 
     await test("设备的选择存在 .designer/preview.json，刷新后还在；切回编辑时编辑的视角原样回来", async () => {

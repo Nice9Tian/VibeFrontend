@@ -14,6 +14,9 @@ import {
   DEVICE_IDS,
   DEVICE_LABELS,
   fitScale,
+  pdfPageGap,
+  pdfPageInView,
+  pdfPageScale,
   isDeviceId,
   parsePreviewDevices,
   PHONE_MODELS,
@@ -520,6 +523,35 @@ async function deviceTests(): Promise<void> {
   });
 }
 
+async function pdfTests(): Promise<void> {
+  await test("devices：按 PDF 看时一页纸的缩放（宽和高都放得下、最多 1.6 倍）和页间距（高度的 4%），播放页和编辑器同一个算法", () => {
+    const a4 = { width: 793.7, height: 1122.5 };
+    assert.ok(Math.abs(pdfPageScale(a4, { width: 1568, height: 804 }) - 804 / 1122.5) < 1e-9, "竖的 A4 按高放");
+    const spread = { width: 1587.4, height: 1122.5 };
+    assert.ok(Math.abs(pdfPageScale(spread, { width: 1000, height: 804 }) - 1000 / 1587.4) < 1e-9, "跨页按宽放");
+    assert.equal(pdfPageScale({ width: 100, height: 100 }, { width: 4000, height: 4000 }), 1.6, "最多放大 1.6 倍");
+    assert.equal(pdfPageScale({ width: 100000, height: 100 }, { width: 100, height: 100 }), 0.05, "最小 0.05");
+    assert.equal(pdfPageScale({ width: 0, height: 100 }, { width: 100, height: 100 }), 1);
+    assert.equal(pdfPageGap(900), 36);
+    assert.equal(pdfPageGap(0), 0);
+  });
+
+  await test("devices：按 PDF 往下滚时“正在看”的页——滚到最上面是第一页、最下面是最后一页（页很矮时中心到不了正中），中间按离正中最近的那一页", () => {
+    // 四张名片，每张 150 高、间距 30，看页面的地方 700 高：第一张和最后一张的中心永远到不了正中
+    const cards = [0, 1, 2, 3].map((i) => ({ y: 30 + i * 180, height: 150 }));
+    const max = 30 + 4 * 180 - 700;
+    assert.equal(pdfPageInView(cards, 0 + 350, { top: 0, max }), 0, "最上面：第一张，不是中心离正中更近的第二张");
+    assert.equal(pdfPageInView(cards, max + 350, { top: max, max }), 3, "最下面：最后一张");
+    assert.equal(pdfPageInView(cards, 30 + 350, { top: 30, max }), 2, "中间：按离正中最近的（第三张的中心 465 离 380 最近）");
+    // 放得下、滚不动：是第一页
+    assert.equal(pdfPageInView(cards.slice(0, 2), 350, { top: 0, max: 0 }), 0);
+    assert.equal(pdfPageInView([], 350, { top: 0, max: 0 }), -1);
+    // 正常的 A4：中间那一页
+    const a4 = [0, 1, 2].map((i) => ({ y: 40 + i * 900, height: 860 }));
+    assert.equal(pdfPageInView(a4, 900 + 400, { top: 900, max: 1800 }), 1);
+  });
+}
+
 async function dockTests(): Promise<void> {
   await test("dock：电脑预览里窗口拖过大小后拖停靠区里上下叠放的分隔条，分栏按实际排版的窗口高度算（不跳），设计尺寸不变", () => {
     const layout: DockLayoutSpec = {
@@ -560,6 +592,7 @@ async function main(): Promise<void> {
   await bookViewTests();
   await deviceTests();
   await dockTests();
+  await pdfTests();
   console.log(`\n全部 ${passed} 项画布排布与预览几何测试通过。`);
 }
 

@@ -202,6 +202,40 @@ export function desktopWindowPlacement(
   };
 }
 
+/**
+ * 按 PDF 看（不套外框）时一页纸缩放多少：宽和高都放得进 room（看页面的地方去掉四周的空），最多放大到原大的 1.6 倍。
+ * 播放页和编辑器的预览用同一个缩放规则（两边四周让出的地方不同：播放页底下有播放条，编辑器顶上有预览栏）。
+ */
+export function pdfPageScale(page: Size, room: Size): number {
+  if (!(page.width > 0) || !(page.height > 0)) return 1;
+  return Math.max(0.05, Math.min(room.width / page.width, room.height / page.height, 1.6));
+}
+
+/** 按 PDF 看时页和页之间、第一页上面和最后一页下面留多少：看页面的地方高度的 4%（播放页的 CSS 是 4vh，同一个比例） */
+export function pdfPageGap(viewHeight: number): number {
+  return Math.round(viewHeight * 0.04);
+}
+
+/**
+ * 按 PDF 往下滚时“正在看”的是第几页：滚到最上面是第一页、滚到最下面是最后一页（页很矮时它们的中心永远到不了正中），
+ * 中间按页的中心离看页面的地方正中最近的那一页。pages 是每页的上边和高度，middle 是正中，都在同一个坐标里。
+ */
+export function pdfPageInView(pages: ReadonlyArray<{ y: number; height: number }>, middle: number, scroll: { top: number; max: number }): number {
+  if (pages.length === 0) return -1;
+  if (scroll.top <= 1) return 0;
+  if (scroll.max > 1 && scroll.top >= scroll.max - 1) return pages.length - 1;
+  let best = 0;
+  let bestDistance = Infinity;
+  pages.forEach((page, i) => {
+    const distance = Math.abs(page.y + page.height / 2 - middle);
+    if (distance < bestDistance) {
+      best = i;
+      bestDistance = distance;
+    }
+  });
+  return best;
+}
+
 /** 电脑桌面上能放窗口的地方：去掉底部任务栏 */
 export function desktopWorkArea(screen: { width: number; height: number; taskbar: number } = DESKTOP_SCREEN): Rect {
   return { x: 0, y: 0, width: screen.width, height: screen.height - screen.taskbar };

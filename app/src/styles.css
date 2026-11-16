@@ -3837,6 +3837,48 @@ body.preview:not(.standalone-preview) #stage-frame.device {
   border-radius: 0;
 }
 
+/* 平面设计预览按 PDF 看：全部页面竖着排开，设计窗口不缩放、不平移，跟着滚动条上下滚（像在浏览器里看 PDF） */
+body.pdf-stack #stage-space {
+  width: auto !important;
+  height: auto !important;
+  position: static !important;
+}
+
+body.pdf-stack #stage-space > #stage-frame {
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  transform: none !important;
+  margin: 0;
+}
+
+#stage-frame.pdf,
+body.preview:not(.standalone-preview) #stage-frame.pdf {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+#stage-frame.pdf {
+  border-width: 0;
+}
+
+#stage-frame.pdf #stage {
+  overflow: visible;
+  border-radius: 0;
+}
+
+body.pdf-stack #stage-scroll {
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+/* 每页按看页面的地方自己缩放，不用缩放条 */
+body.pdf-stack #zoom-bar {
+  display: none !important;
+}
+
 #board-bar .device-switch button {
   padding: 3px 10px;
 }
