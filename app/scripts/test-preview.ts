@@ -144,7 +144,8 @@ async function dragWindowHandle(cdp: Cdp, inStage: boolean, edge: string, dx: nu
   await wait(300);
 }
 
-const near = (a: number, b: number, tolerance = 1.5) => Math.abs(a - b) <= tolerance;
+/** 拖动是在缩小了的设计窗口里用屏幕坐标拖的，屏幕上差 1 像素在桌面里是 2 像素多：留 2.5 的余量 */
+const near = (a: number, b: number, tolerance = 2.5) => Math.abs(a - b) <= tolerance;
 
 async function graphicTests(): Promise<void> {
   await withEditor("graphic", async ({ cdp, dir, reload }) => {
@@ -366,6 +367,23 @@ async function graphicTests(): Promise<void> {
     const writePreview = (preview: unknown) => fs.writeFileSync(configPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(configPath, "utf8")), preview }, null, 2));
     const deviceButtons = () => cdp.evaluate<Array<[string, string]>>(`[...document.querySelectorAll("#board-bar [data-device]")].map((b) => [b.dataset.device, b.textContent])`);
 
+    await test("预览中 project.json 改了能用的看法（手机不让用了）：自己换成书，停在同一页", async () => {
+      await cdp.evaluate(`document.querySelector('#board-bar [data-device="phone"]').click()`);
+      await wait(600);
+      for (let k = 0; k < 4 && (await bar()).label !== "第 3 页"; k++) {
+        await cdp.evaluate(`document.querySelector('#board-bar [data-board="next"]').click()`);
+        await wait(500);
+      }
+      assert.equal((await bar()).label, "第 3 页");
+      writePreview({ devices: ["book", "pdf"] });
+      let state = await bar();
+      for (let k = 0; k < 60 && state.devices.book !== "true"; k++) {
+        await wait(100);
+        state = await bar();
+      }
+      assert.deepEqual([state.devices.book, state.label], ["true", "第 2–3 页"], "第 3 页在书上是第 2–3 页那一屏");
+    });
+
     await test("项目在 project.json 里写了 preview.devices（书籍 + PDF）：预览栏只列这两种；存下来的是电脑（这个项目不让用）就用写的第一个", async () => {
       await cdp.evaluate(`document.getElementById("mode-edit").click()`);
       await wait(400);
@@ -431,7 +449,7 @@ async function uiTests(): Promise<void> {
 
     await test("电脑：拖窗口的右下角改大小，软件按新的宽高重新排版（右边的停靠面板跟着右边走、状态栏跟着变窄）；换了设备再回来还是这个大小", async () => {
       const measure = () =>
-        cdp.evaluate<{ win: number[]; host: number[]; status: number; inspector: number; layers: number }>(`(() => {
+        cdp.evaluate<{ win: number[]; host: number[]; status: number; statusBottom: number; timelineTop: number; inspector: number; layers: number }>(`(() => {
           const doc = document.getElementById("stage-iframe").contentDocument;
           const w = doc.querySelector(".vf-dev-window");
           const host = doc.querySelector(".vf-dev-screen-slot > div");
@@ -440,6 +458,8 @@ async function uiTests(): Promise<void> {
             win: [w.offsetLeft, w.offsetTop, w.offsetWidth, w.offsetHeight],
             host: [host.offsetWidth, host.offsetHeight],
             status: box("statusBar").offsetWidth,
+            statusBottom: box("statusBar").offsetTop + box("statusBar").offsetHeight,
+            timelineTop: box("timelineDock").offsetTop,
             inspector: box("inspectorDock").offsetLeft,
             layers: box("layersDock").offsetLeft,
           };
@@ -453,7 +473,9 @@ async function uiTests(): Promise<void> {
       assert.ok(near(after.win[2], 1080) && near(after.win[3], 712), `窗口变成 1080×712：${after.win}`);
       assert.ok(near(after.host[0], 1080) && near(after.host[1], 680), `软件按内容区 1080×680 排版：${after.host}`);
       assert.ok(near(after.status, after.host[0]), `状态栏跟着窗口变窄：${after.status}`);
-      assert.ok(near(before.inspector - after.inspector, 200, 2), `右边的停靠面板往左挪了 200：${before.inspector} → ${after.inspector}`);
+      assert.ok(near(after.statusBottom, after.host[1]), `状态栏贴着新的底边：${after.statusBottom}`);
+      assert.ok(near(before.timelineTop - after.timelineTop, 120), `底部的时间轴跟着底边往上挪了 120：${before.timelineTop} → ${after.timelineTop}`);
+      assert.ok(near(before.inspector - after.inspector, 200), `右边的停靠面板往左挪了 200：${before.inspector} → ${after.inspector}`);
       assert.ok(near(after.layers, before.layers), "左边的停靠面板不动");
       assert.equal(await cdp.evaluate<string>(`${stageQuery(".vf-dev-screen-slot")}.style.transform`), "", "按新尺寸排版，不是缩放");
       await cdp.evaluate(`document.querySelector('#board-bar [data-device="phone"]').click()`);
@@ -462,6 +484,25 @@ async function uiTests(): Promise<void> {
       await wait(600);
       const again = await measure();
       assert.ok(near(again.win[2], 1080) && near(again.inspector, after.inspector), `换回电脑还是拖过的大小：${again.win}`);
+      // 拖边的把手在窗口外面一圈，不挡窗口里的东西（滚动条、状态栏贴着窗口边也点得到）
+      const outside = await cdp.evaluate<boolean>(`(() => {
+        const doc = document.getElementById("stage-iframe").contentDocument;
+        const w = doc.querySelector(".vf-dev-window").getBoundingClientRect();
+        return ["n", "s", "e", "w"].every((edge) => {
+          const r = doc.querySelector('.vf-dev-resize[data-edge="' + edge + '"]').getBoundingClientRect();
+          return r.right <= w.left + 0.5 || r.left >= w.right - 0.5 || r.bottom <= w.top + 0.5 || r.top >= w.bottom - 0.5;
+        });
+      })()`);
+      assert.ok(outside, "四条边的把手都在窗口外面");
+      // 回编辑再进预览：窗口按设计的尺寸摆，上次拖过的大小不留着
+      await cdp.evaluate(`document.getElementById("mode-edit").click()`);
+      await wait(500);
+      await cdp.evaluate(`document.getElementById("mode-preview").click()`);
+      await wait(900);
+      const fresh = await measure();
+      assert.deepEqual([fresh.win.slice(2), fresh.host], [[1280, 832], [1280, 800]], "重新进预览是设计的 1280×800");
+      // 后面的测试接着用拖过的窗口
+      await dragWindowHandle(cdp, true, "se", -200, -120);
     });
 
     await test("外框不改软件自己的样式：屏幕里元素的 ::before / ::after 还是浏览器默认的 content-box（界面设计的基础样式只管元素本身）", async () => {
@@ -868,8 +909,22 @@ async function playerTests(): Promise<void> {
         assert.equal((await playerBar(cdp)).devices.plain, "true", "网址里的手机也不算");
         await open("/player.html?device=book");
         assert.equal((await playerBar(cdp)).devices.book, "true", "网址里写的书可以用");
+        fs.writeFileSync(settingsPath, JSON.stringify({ device: "book" }));
         await open("/player.html?device=pdf");
-        assert.equal((await playerBar(cdp)).devices.plain, "true", "网址里写 pdf 就是 PDF");
+        assert.equal((await playerBar(cdp)).devices.plain, "true", "网址里写 pdf 就是 PDF（存着的是书，认不出 pdf 就会是书）");
+      });
+
+      await test("独立预览：项目只写了一种看法（书籍）：播放条上不放选看法的按钮，前面也不留一道分隔线", async () => {
+        const configPath = path.join(dir, "project.json");
+        fs.writeFileSync(configPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(configPath, "utf8")), preview: { devices: ["book"] } }, null, 2));
+        await open("/player.html");
+        const ui = await cdp.evaluate<{ seg: boolean; firstVisible: string }>(`(() => {
+          const ui = document.getElementById("vf-player-ui");
+          const visible = [...ui.children].filter((c) => getComputedStyle(c).display !== "none");
+          return { seg: Boolean(ui.querySelector(".vf-seg")), firstVisible: visible[0]?.dataset.board ?? visible[0]?.className ?? "" };
+        })()`);
+        assert.deepEqual(ui, { seg: false, firstVisible: "prev" }, "最前面就是 ◀");
+        assert.ok(await cdp.evaluate<boolean>(`Boolean(document.querySelector(".vf-dev-book"))`));
       });
     },
     { page: "/player.html", width: 1280, height: 900, ready: playerReady },

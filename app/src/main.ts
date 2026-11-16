@@ -788,7 +788,15 @@ async function reload(force = false): Promise<void> {
         continue;
       }
       if (!mustRender && !staleRealm && next.signature === project.signature) continue;
+      // 预览中项目换了能用的看法（project.json 的 preview.devices）：换过去时停在同一页
+      const deviceBefore = mode === "preview" ? previewDevice() : null;
+      const anchorBefore = deviceBefore ? previewViews(deviceBefore)[previewIndex] : undefined;
       project = next;
+      if (deviceBefore && previewDevice() !== deviceBefore) {
+        const device = previewDevice();
+        previewIndex = anchorBefore ? previewIndexForAnchor(device, anchorBefore) : previewIndexForFocus(device);
+        desktopState.minimized = false;
+      }
       designRuntime = new Runtime(project);
       previewRuntime?.adopt(project);
       if (selectedId && !node(selectedId)) selectedId = null;
@@ -1056,7 +1064,7 @@ function applyViews(): void {
       persistPreviewDockLayout("调整停靠区大小", commit);
     },
     onResizeSplit: (area, idx, size, commit = true) => {
-      previewRuntime?.dockResizeSplit(area, idx, size);
+      previewRuntime?.dockResizeSplit(area, idx, size, rootId, rootLayoutSize(rootNode));
       persistPreviewDockLayout("调整并排分栏大小", commit);
     },
   };
@@ -1116,8 +1124,10 @@ function applyViews(): void {
     if (box && n?.type !== "Line") {
       if (n?.type === "Dialog" && id !== project.scene.root && rootNode) {
         const windowSize = rootLayoutSize(rootNode);
-        const dx = Math.round((windowSize.width - box.width) / 2);
-        const dy = Math.round((windowSize.height - box.height) / 2);
+        // 电脑里把窗口拖得比对话框还小时，对话框从左上角摆，标题栏和按钮不被裁到窗口外面
+        const clampToWindow = previewRootSize && mode === "preview" ? (v: number) => Math.max(0, v) : (v: number) => v;
+        const dx = clampToWindow(Math.round((windowSize.width - box.width) / 2));
+        const dy = clampToWindow(Math.round((windowSize.height - box.height) / 2));
         Object.assign(entry.wrapper.style, {
           left: `${dx}px`,
           top: `${dy}px`,
@@ -1152,7 +1162,7 @@ function applyViews(): void {
       entry.wrapper.style.zIndex = view.props.floating ? "35" : "";
     }
     if (type === "Shape" || type === "Line") {
-      paintGraphic(id, entry, view.props);
+      paintGraphic(id, entry, view.props, box);
       continue;
     }
     try {
@@ -1932,7 +1942,8 @@ let deviceStage: DeviceStage | null = null;
 /** 主画板放在哪个元素里（设计窗口的画布，或外框里的屏幕） */
 let boardHost: HTMLElement | null = null;
 /** 电脑预览里窗口的状态 */
-const desktopState: { maximized: boolean; minimized: boolean; frame: DeviceRect | null } = { maximized: false, minimized: false, frame: null };
+/** frame：拖过大小的外框；design：拖的时候界面设计的主窗口多大（设计尺寸改了，拖过的就不算了） */
+const desktopState: { maximized: boolean; minimized: boolean; frame: DeviceRect | null; design: Size | null } = { maximized: false, minimized: false, frame: null, design: null };
 /** 上一次按哪种设备摆的视角：换设备、换手机型号、横竖切换时重新缩放到装下整个设备 */
 let fittedDevice = "";
 
@@ -2020,6 +2031,8 @@ function renderDeviceStage(canvas: HTMLElement, device: DeviceId): void {
     }
   } else {
     const design = contentOf(view);
+    // 界面设计的主窗口改了尺寸：拖过的大小不算了，按新的设计尺寸摆
+    if (!graphic && desktopState.frame && (desktopState.design?.width !== design.width || desktopState.design?.height !== design.height)) desktopState.frame = null;
     // 电脑里拖过窗口大小（或最大化）：界面设计按窗口的内容区重新排版，平面设计的纸按比例放进窗口
     const client = device === "desktop" ? (desktopState.maximized ? desktopClient(desktopWorkArea()) : desktopState.frame ? desktopClient(desktopState.frame) : null) : null;
     const relayout = !graphic && client !== null;
@@ -2038,6 +2051,7 @@ function renderDeviceStage(canvas: HTMLElement, device: DeviceId): void {
             // 拖边、拖角改窗口大小：界面设计每一帧按新的内容区重新排版（只挪位置、改尺寸，不重建控件）
             onResize: (next, done) => {
               desktopState.frame = next;
+              desktopState.design = design;
               if (graphic) return design;
               const size = desktopClient(next);
               previewRootSize = size;
@@ -2196,6 +2210,8 @@ function renderPreviewBar(bar: HTMLElement): void {
     );
   }
   bar.replaceChildren(...parts);
+  // 只有一种看法、又只有一屏：栏上什么都没有，不留一个空框
+  bar.hidden = parts.length === 0;
 }
 
 /** 摊开时每一页的画板元素（在设计窗口里） */
@@ -2398,7 +2414,10 @@ measureSvg.append(measurePath);
 document.body.append(measureSvg);
 const outlineCache = new Map<string, Point[]>();
 
-/** 节点外轮廓上的一圈点，相对于节点左上角。形状按真实轮廓（描边的中线），其余按方框。 */
+/**
+ * 节点外轮廓上的一圈点，相对于节点左上角。形状按真实轮廓（描边的中线），其余按方框。
+ * 尺寸按排出来的方框：放在排版容器里被拉伸的形状（或者电脑预览里拖过窗口大小），画出来的、挂线用的和导出的 Qt 是同一个轮廓。
+ */
 function outlineOf(id: string): Point[] {
   const n = node(id);
   if (!n) return [];
@@ -2406,14 +2425,17 @@ function outlineOf(id: string): Point[] {
   const kind = str(props.shape, "rectangle");
   const isShape = n.type === "Shape" && kind !== "text";
   const stroke = props.stroke === "none" ? 0 : num(props.strokeWidth, 2);
+  const laid = n.type === "Shape" ? absRect(id) : null;
+  const width = laid?.width ?? n.width;
+  const height = laid?.height ?? n.height;
   const key = isShape
-    ? JSON.stringify([kind, n.width, n.height, stroke, props.radius, props.sides, props.points, props.ratio])
-    : `box|${n.width}|${n.height}`;
+    ? JSON.stringify([kind, width, height, stroke, props.radius, props.sides, props.points, props.ratio])
+    : `box|${width}|${height}`;
   const cached = outlineCache.get(key);
   if (cached) return cached;
   let points: Point[];
   if (isShape) {
-    measurePath.setAttribute("d", shapeGeometry(kind, n.width, n.height, stroke, props).body);
+    measurePath.setAttribute("d", shapeGeometry(kind, width, height, stroke, props).body);
     const total = measurePath.getTotalLength();
     const count = Math.max(32, Math.min(800, Math.round(total / 2)));
     points = [];
@@ -2422,7 +2444,7 @@ function outlineOf(id: string): Point[] {
       points.push({ x: p.x, y: p.y });
     }
   } else {
-    points = [{ x: 0, y: 0 }, { x: n.width, y: 0 }, { x: n.width, y: n.height }, { x: 0, y: n.height }];
+    points = [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: height }, { x: 0, y: height }];
   }
   if (outlineCache.size > 500) outlineCache.clear();
   outlineCache.set(key, points);
@@ -2584,12 +2606,13 @@ function placeLine(id: string, layout: LineLayout): Point {
 }
 
 /** 画形状或线条。线条每次都按它挂着的节点重新算位置。 */
-function paintGraphic(id: string, entry: Mounted, props: Record<string, Value>): void {
+function paintGraphic(id: string, entry: Mounted, props: Record<string, Value>, box?: { width: number; height: number }): void {
   const n = node(id);
   if (!n) return;
   if (n.type === "Shape") {
-    // 形状的线宽、字号、圆角是按像素定的：把方框换成像素来画，毫米画布上线才不会粗好几倍
-    entry.hit = paintShape(entry.body, toPx(unit(), n.width), toPx(unit(), n.height), props);
+    // 形状的线宽、字号、圆角是按像素定的：把方框换成像素来画，毫米画布上线才不会粗好几倍。
+    // 放在排版容器里的形状按排出来的方框画（容器拉伸、电脑预览里拖过窗口大小时外框变了，图形跟着变）
+    entry.hit = paintShape(entry.body, toPx(unit(), box?.width ?? n.width), toPx(unit(), box?.height ?? n.height), props);
   } else {
     const layout = lineLayoutOf(id, props);
     const origin = placeLine(id, layout);
@@ -2609,6 +2632,17 @@ function refreshLines(): void {
 
 /** 写文件之前：线条的外框按当前位置重算，挂着节点的一头把位置记下来（被挂的节点删掉后，线停在这里）。 */
 function normalizeLines(): void {
+  // 写进文件的线条位置按设计的尺寸排版来算：电脑预览里拖过窗口大小时，排版是按窗口的大小，那些位置不能落盘
+  const resized = previewRootSize;
+  previewRootSize = null;
+  try {
+    normalizeLinesAtDesignSize();
+  } finally {
+    previewRootSize = resized;
+  }
+}
+
+function normalizeLinesAtDesignSize(): void {
   for (const [id, n] of Object.entries(project.scene.nodes)) {
     if (n.type !== "Line") continue;
     const props = designRuntime.view(id).props;
@@ -6924,6 +6958,8 @@ function setMode(next: "edit" | "preview"): void {
     editView = viewState();
     previewIndex = previewIndexForFocus(previewDevice());
     fittedDevice = "";
+    // 每次进预览，电脑里的窗口先按设计的尺寸摆（上次拖过的大小不留着）
+    desktopState.frame = null;
   }
   mode = next;
   document.body.classList.toggle("preview", mode === "preview");
@@ -7696,6 +7732,8 @@ async function main(): Promise<void> {
         }
       }
       if (sceneChanged) {
+        // 和 saveScene 一样先把线条按设计的尺寸整理好（预览里拖过窗口大小时，画的线是按窗口的大小摆的）
+        normalizeLines();
         const nextSceneText = JSON.stringify(project.scene, null, 2) + "\n";
         project.sceneText = nextSceneText;
         const failure = await writeFilesTogether([{ path: SCENE_PATH, next: nextSceneText, prev: prevSceneText }]);

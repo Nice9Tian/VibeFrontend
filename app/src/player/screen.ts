@@ -112,6 +112,9 @@ const SCREEN_CSS = `
   background: #23252b;
   color: #f2f2f0;
 }
+#vf-player-ui .sep[hidden] {
+  display: none;
+}
 #vf-player-ui .sep {
   flex: none;
   width: 1px;
@@ -513,14 +516,16 @@ export function setupScreen(options: ScreenOptions): void {
     url.searchParams.set("autoprint", "1");
     location.assign(url.href);
   });
-  // 只有一种看法时不用选
+  // 只有一种看法时不用选；左边什么都没有时（只有一种看法、又不是手机）第一道分隔线也不要
+  const leadSep = sep();
   if (choices.length > 1) ui.append(seg);
-  ui.append(phoneOpts, sep(), prev, where, next, sep(), print);
+  ui.append(phoneOpts, leadSep, prev, where, next, sep(), print);
   document.body.append(ui);
 
   function sync(): void {
     for (const b of seg.querySelectorAll<HTMLButtonElement>("[data-device]")) b.setAttribute("aria-pressed", String(b.dataset.device === device));
     phoneOpts.hidden = device !== "phone";
+    leadSep.hidden = choices.length <= 1 && phoneOpts.hidden;
     rotate.textContent = settings.landscape ? "竖放" : "横放";
     if (shown === "plain") {
       const at = currentFrame();

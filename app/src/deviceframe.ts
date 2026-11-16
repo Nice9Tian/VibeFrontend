@@ -351,6 +351,8 @@ export function mountDesktop(doc: Document, options: DesktopOptions): DeviceStag
   const screenSlot = el(doc, "div", `${NS}-screen-slot`, body);
   // 拖边、拖角的把手：放在窗口外面一层（窗口自己裁掉了伸出去的部分），透明，只有鼠标形状
   const resizer = options.onResize && !options.maximized && !options.minimized ? el(doc, "div", `${NS}-resizer`, desktop) : null;
+  /** 正在拖的那一次：外框拆掉时停掉它（不再改大小） */
+  let stopDrag: (() => void) | null = null;
   /** 按 place 摆窗口、内容和把手 */
   const applyPlace = () => {
     Object.assign(win.style, { left: `${place.frame.x}px`, top: `${place.frame.y}px`, width: `${place.frame.width}px`, height: `${place.frame.height}px` });
@@ -397,11 +399,16 @@ export function mountDesktop(doc: Document, options: DesktopOptions): DeviceStag
         let finished = false;
         const view = doc.defaultView ?? window;
         const apply = (done: boolean) => {
+          if (!root.isConnected) return;
           content = onResize(latest, done);
           place = desktopWindowPlacementIn(latest, content);
           applyPlace();
         };
+        let dragging = false;
         const move = (ev: PointerEvent) => {
+          // 按下后在屏幕上挪了 3 像素以上才算开始拖：点一下、手抖一下不改窗口大小
+          if (!dragging && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 3) return;
+          dragging = true;
           latest = resizeDesktopFrame(start.frame, edges, (ev.clientX - start.x) / k, (ev.clientY - start.y) / k);
           // 一帧只重排一次
           if (!frameRequest) {
@@ -411,9 +418,11 @@ export function mountDesktop(doc: Document, options: DesktopOptions): DeviceStag
             });
           }
         };
-        const end = () => {
+        /** 收拾这一次拖动；commit 为 false 时只停下，不改大小 */
+        const stop = (commit: boolean) => {
           if (finished) return;
           finished = true;
+          stopDrag = null;
           view.cancelAnimationFrame(frameRequest);
           handle.removeEventListener("pointermove", move);
           handle.removeEventListener("pointerup", end);
@@ -421,8 +430,11 @@ export function mountDesktop(doc: Document, options: DesktopOptions): DeviceStag
           handle.removeEventListener("lostpointercapture", end);
           win.classList.remove("resizing");
           root.classList.remove("resizing");
-          apply(true);
+          // 只按了一下、没挪：不算拖过（自动缩小摆着的窗口不会因此变成按 1:1 重新排版）
+          if (commit && latest !== start.frame) apply(true);
         };
+        const end = () => stop(true);
+        stopDrag = () => stop(false);
         win.classList.add("resizing");
         root.classList.add("resizing");
         root.dataset.resizeCursor = name;
@@ -517,6 +529,7 @@ export function mountDesktop(doc: Document, options: DesktopOptions): DeviceStag
     destroy() {
       clearInterval(timer);
       hidePeek();
+      stopDrag?.();
     },
   };
 }
@@ -696,20 +709,20 @@ export const DEVICE_CSS = `
 .${NS}-window { position: absolute; display: flex; flex-direction: column; overflow: hidden; border-radius: 8px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 26px 64px rgba(10, 20, 40, 0.32), 0 6px 16px rgba(10, 20, 40, 0.16); transition: opacity 0.18s ease, transform 0.22s ease; }
 .${NS}-window.maximized { border-radius: 0; }
 .${NS}-window.resizing { transition: none; }
-/* 拖边、拖角改窗口大小的把手：透明，跨在窗口的边上（里外各一半），角比边大一点 */
+/* 拖边、拖角改窗口大小的把手：透明，贴在窗口外面一圈（像系统窗口看不见的边框），不挡窗口里的东西；角稍微大一点 */
 .${NS}-resizer { position: absolute; z-index: 7; pointer-events: none; }
 .${NS}-resize { position: absolute; pointer-events: auto; touch-action: none; }
-.${NS}-resize.n, .${NS}-resize.s { left: 10px; right: 10px; height: 10px; cursor: ns-resize; }
-.${NS}-resize.n { top: -5px; }
-.${NS}-resize.s { bottom: -5px; }
-.${NS}-resize.e, .${NS}-resize.w { top: 10px; bottom: 10px; width: 10px; cursor: ew-resize; }
-.${NS}-resize.w { left: -5px; }
-.${NS}-resize.e { right: -5px; }
-.${NS}-resize.nw, .${NS}-resize.ne, .${NS}-resize.sw, .${NS}-resize.se { width: 16px; height: 16px; }
-.${NS}-resize.nw { left: -6px; top: -6px; cursor: nwse-resize; }
-.${NS}-resize.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
-.${NS}-resize.ne { right: -6px; top: -6px; cursor: nesw-resize; }
-.${NS}-resize.sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.${NS}-resize.n, .${NS}-resize.s { left: 0; right: 0; height: 8px; cursor: ns-resize; }
+.${NS}-resize.n { top: -8px; }
+.${NS}-resize.s { bottom: -8px; }
+.${NS}-resize.e, .${NS}-resize.w { top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
+.${NS}-resize.w { left: -8px; }
+.${NS}-resize.e { right: -8px; }
+.${NS}-resize.nw, .${NS}-resize.ne, .${NS}-resize.sw, .${NS}-resize.se { width: 14px; height: 14px; }
+.${NS}-resize.nw { left: -12px; top: -12px; cursor: nwse-resize; }
+.${NS}-resize.se { right: -12px; bottom: -12px; cursor: nwse-resize; }
+.${NS}-resize.ne { right: -12px; top: -12px; cursor: nesw-resize; }
+.${NS}-resize.sw { left: -12px; bottom: -12px; cursor: nesw-resize; }
 /* 拖的途中鼠标形状不随经过的东西变，也不选中文字 */
 .${NS}.resizing, .${NS}.resizing * { user-select: none; }
 .${NS}.resizing[data-resize-cursor="n"] *, .${NS}.resizing[data-resize-cursor="s"] * { cursor: ns-resize !important; }

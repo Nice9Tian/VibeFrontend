@@ -453,9 +453,10 @@ export class Runtime {
     this.notifyChanged();
   }
 
-  dockResizeSplit(area: DockArea, groupIndex: number, size: number, winId = this.project.scene.root): void {
+  /** windowSize：窗口这时按别的大小排版（编辑器预览里拖过电脑里窗口的大小），分栏按它算；不给就是设计的尺寸 */
+  dockResizeSplit(area: DockArea, groupIndex: number, size: number, winId = this.project.scene.root, windowSize?: { width: number; height: number }): void {
     const cur = this.getDockLayout(winId);
-    const next = dockResizeSplit(cur, this.project.scene, this.project.scene.nodes[winId], area, groupIndex, size);
+    const next = dockResizeSplit(cur, this.project.scene, this.project.scene.nodes[winId], area, groupIndex, size, windowSize);
     this.dockLayouts.set(winId, next);
     this.releaseDockedPointerStates();
     this.hooks.onLog({ title: `停靠区 ${area}`, lines: [`调整并排组 #${groupIndex} 尺寸为 ${Math.round(size)}px`] });

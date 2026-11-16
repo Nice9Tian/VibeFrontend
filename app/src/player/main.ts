@@ -400,7 +400,9 @@ async function start(state: PlayerState): Promise<void> {
 
   if (!printMode) {
     // 和编辑器读 project.json 一样：不是字符串就当没写（编辑器的检查会提示），前后的空格去掉
-    const raw: unknown = partConfig?.icon ?? config.icon;
+    // 子项目自己写了（哪怕写成 null）就用它的，和编辑器读 project.json 的规则一样
+    const own = (key: "icon" | "preview") => (partConfig && partConfig[key] !== undefined ? partConfig[key] : config[key]);
+    const raw: unknown = own("icon");
     const icon = typeof raw === "string" ? raw.trim().replace(/\\/g, "/").replace(/^\/+/, "") : "";
     setupScreen({
       scene,
@@ -410,7 +412,7 @@ async function start(state: PlayerState): Promise<void> {
       book,
       app: { name: name ?? "未命名项目", icon: icon ? base + icon.split("/").map(encodeURIComponent).join("/") : undefined },
       // 子项目没写就跟着总项目；写错的地方编辑器的检查会报，这里只用认得出来的
-      allowed: parsePreviewDevices(partConfig?.preview ?? config.preview).devices,
+      allowed: parsePreviewDevices(own("preview")).devices,
     });
   }
 

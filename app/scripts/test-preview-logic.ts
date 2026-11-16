@@ -26,6 +26,7 @@ import {
   resolvePreviewChoice,
   viewFit,
 } from "../src/devices.ts";
+import { computeDockWindowLayout, dockResizeSplit, type DockLayoutSpec } from "../src/dock.ts";
 import type { Scene } from "../src/model.ts";
 
 let passed = 0;
@@ -409,14 +410,18 @@ async function deviceTests(): Promise<void> {
     assert.deepEqual(resizeDesktopFrame(start, { right: true, bottom: true }, -200, -120), { x: 320, y: 100, width: 1080, height: 712 });
     // 左边往右拖：右边不动
     assert.deepEqual(resizeDesktopFrame(start, { left: true }, 100, 50), { x: 420, y: 100, width: 1180, height: 832 }, "只拖左边，竖着挪不算");
-    // 往外拖出工作区：停在工作区的边上
-    assert.deepEqual(resizeDesktopFrame(start, { top: true, left: true }, -1000, -1000), { x: 0, y: 0, width: 1600, height: 932 });
-    assert.deepEqual(resizeDesktopFrame(start, { right: true, bottom: true }, 5000, 5000), { x: 320, y: 100, width: 1600, height: 932 });
+    // 往外拖出工作区：左、上、右离屏幕边留 8px（把手在窗口外面，贴着屏幕边就够不着了），底边可以贴着任务栏
+    assert.deepEqual(resizeDesktopFrame(start, { top: true, left: true }, -1000, -1000), { x: 8, y: 8, width: 1592, height: 924 });
+    assert.deepEqual(resizeDesktopFrame(start, { right: true, bottom: true }, 5000, 5000), { x: 320, y: 100, width: 1592, height: 932 });
     // 往里拖得太多：内容区不小于最小尺寸
     const tiny = resizeDesktopFrame(start, { right: true, bottom: true }, -5000, -5000);
     assert.deepEqual(desktopClient(tiny), DESKTOP_MIN_CLIENT);
     const tinyLeft = resizeDesktopFrame(start, { left: true, top: true }, 5000, 5000);
     assert.deepEqual([tinyLeft.x + tinyLeft.width, tinyLeft.y + tinyLeft.height], [1600, 932], "从左上角缩到最小，右下角还在原处");
+    // 本来就比最小尺寸小的窗口：拖边不会一下子撑大，只是不能再缩
+    const small = { x: 800, y: 400, width: 200, height: 152 };
+    assert.deepEqual(resizeDesktopFrame(small, { left: true }, 1, 0), { x: 800, y: 400, width: 200, height: 152 }, "往里拖 1 像素：不跳");
+    assert.deepEqual(resizeDesktopFrame(small, { left: true }, -30, 0), { x: 770, y: 400, width: 230, height: 152 }, "往外拖照常变大");
     // 跟着窗口重新排版：内容就是内容区，缩放 1、正好铺满
     const relayout = desktopWindowPlacementIn({ x: 320, y: 100, width: 1080, height: 712 }, { width: 1080, height: 680 });
     assert.equal(relayout.scale, 1);
@@ -515,10 +520,46 @@ async function deviceTests(): Promise<void> {
   });
 }
 
+async function dockTests(): Promise<void> {
+  await test("dock：电脑预览里窗口拖过大小后拖停靠区里上下叠放的分隔条，分栏按实际排版的窗口高度算（不跳），设计尺寸不变", () => {
+    const layout: DockLayoutSpec = {
+      areas: {
+        left: { size: 240, groups: [{ tabs: ["a"], active: "a" }, { tabs: ["b"], active: "b" }] },
+        right: { groups: [] },
+        top: { groups: [] },
+        bottom: { groups: [] },
+      },
+      floating: [],
+    } as DockLayoutSpec;
+    const scene: Scene = {
+      version: 1,
+      root: "win",
+      nodes: {
+        win: { type: "Window", width: 1280, height: 800, docks: ["a", "b"], dockLayout: layout, children: ["a", "b"] },
+        a: { type: "Dock", width: 240, height: 280, title: "A" },
+        b: { type: "Dock", width: 240, height: 280, title: "B" },
+      },
+    } as unknown as Scene;
+    const win = scene.nodes.win;
+    const drawnA = (spec: DockLayoutSpec, h: number) => computeDockWindowLayout(scene, "win", win, 1280, 0, h, true, () => true, spec).dockBoxes.get("a")!.height;
+    for (const height of [500, 1000]) {
+      const before = drawnA(layout, height);
+      const resized = dockResizeSplit(layout, scene, win, "left", 0, before + 30, { width: 1280, height });
+      const after = drawnA(resized, height);
+      assert.ok(Math.abs(after - (before + 30)) <= 1, `窗口高 ${height}：分隔条往下拖 30，上面一格从 ${before} 变成 ${after}`);
+    }
+    // 不给窗口大小时照旧按设计尺寸（800）算
+    const at800 = drawnA(layout, 800);
+    const designOnly = dockResizeSplit(layout, scene, win, "left", 0, at800 + 30);
+    assert.ok(Math.abs(drawnA(designOnly, 800) - (at800 + 30)) <= 1);
+  });
+}
+
 async function main(): Promise<void> {
   await boardLayoutTests();
   await bookViewTests();
   await deviceTests();
+  await dockTests();
   console.log(`\n全部 ${passed} 项画布排布与预览几何测试通过。`);
 }
 

@@ -223,9 +223,13 @@ export interface ResizeEdges {
   bottom?: boolean;
 }
 
+/** 拖窗口改大小时，窗口的左、上、右边离屏幕边至少留多少：拖边的把手在窗口外面，贴着屏幕边就够不着了 */
+export const DESKTOP_RESIZE_INSET = 8;
+
 /**
  * 拖窗口的边、角改大小：从外框 start（桌面坐标）开始，拖的那几条边跟着鼠标挪 (dx, dy)（桌面像素），对边不动。
- * 外框不出桌面的工作区（任务栏上面），内容区不小于 DESKTOP_MIN_CLIENT。
+ * 外框不出桌面的工作区（任务栏上面），左、上、右边离屏幕边留 DESKTOP_RESIZE_INSET（底边可以贴着任务栏，把手盖在任务栏上），
+ * 内容区不小于 DESKTOP_MIN_CLIENT。
  */
 export function resizeDesktopFrame(
   start: Rect,
@@ -235,10 +239,13 @@ export function resizeDesktopFrame(
   options?: { titleBar?: number; screen?: { width: number; height: number; taskbar: number }; min?: Size },
 ): Rect {
   const titleBar = options?.titleBar ?? 32;
-  const work = desktopWorkArea(options?.screen);
+  const area = desktopWorkArea(options?.screen);
+  const inset = DESKTOP_RESIZE_INSET;
+  const work = { x: area.x + inset, y: area.y + inset, width: area.width - inset * 2, height: area.height - inset };
   const min = options?.min ?? DESKTOP_MIN_CLIENT;
-  const minW = min.width;
-  const minH = min.height + titleBar;
+  // 本来就比最小尺寸小的窗口（设计得很小）：拖的时候不把它一下子撑到最小尺寸，只是不能再缩
+  const minW = Math.min(min.width, start.width);
+  const minH = Math.min(min.height + titleBar, start.height);
   const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
   let left = start.x;
   let top = start.y;
