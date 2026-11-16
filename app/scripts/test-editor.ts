@@ -14,6 +14,7 @@ import { eventRowsFor } from "../src/eventedit.ts";
 import { controlReference, controlsReference } from "../src/refs.ts";
 import { clampPanels, DEFAULT_PANELS } from "../src/panels.ts";
 import { nodeIO } from "./node-io.ts";
+import { reorderTarget } from "../standard/index.ts";
 import {
   applyAddNodeToScene,
   applyDeleteFromScene,
@@ -984,6 +985,44 @@ test("旋转节点与旋转父容器内子节点的移动和缩放精度", () =>
   assert.equal(resizedChildScene.nodes.child1.height, 20);
   assert.equal(resizedChildScene.nodes.child1.x, 10, "在父容器局部系中拖右把手不应改变左边缘 x");
   assert.equal(resizedChildScene.nodes.child1.y, 10, "在父容器局部系中拖右把手不应改变上边缘 y");
+});
+
+// List / Tree 拖动重排：插入线画在第 p 行之前，放下后这一项就落在那里，而 reorder 事件的 to
+// 仍然是“移动之后所在的下标”（设计项目里 move 的 to、导出的 Qt 程序用的都是这个含义）。
+test("List / Tree 拖动重排：插入位置换算成 reorder 的 to，结果和插入线一致", () => {
+  const move = (items: string[], from: number, to: number): string[] => {
+    const next = items.slice();
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    return next;
+  };
+  for (let n = 1; n <= 6; n++) {
+    const items = Array.from({ length: n }, (_, i) => `row${i}`);
+    for (let from = 0; from < n; from++) {
+      // insertBefore = n 表示放到末尾（列表下方的空白处）
+      for (let insertBefore = 0; insertBefore <= n; insertBefore++) {
+        const to = reorderTarget(from, insertBefore);
+        assert.ok(to >= 0 && to < n, `to 应是合法下标：n=${n} from=${from} insertBefore=${insertBefore} to=${to}`);
+        const result = move(items, from, to);
+        const at = result.indexOf(items[from]);
+        const where = `n=${n} from=${from} insertBefore=${insertBefore}`;
+        if (insertBefore === from || insertBefore === from + 1) {
+          // 线画在这一项自己的上边或下边：原地不动，控件不会发 reorder
+          assert.equal(to, from, `${where}：线在自己旁边时不应移动`);
+          assert.deepEqual(result, items);
+        } else if (insertBefore === n) {
+          assert.equal(at, n - 1, `${where}：放到末尾`);
+        } else {
+          assert.equal(result[at + 1], items[insertBefore], `${where}：应正好落在插入线后面那一行之前`);
+        }
+        // 其余各行的先后不变
+        assert.deepEqual(result.filter((x) => x !== items[from]), items.filter((x) => x !== items[from]), `${where}：其余行的顺序不应变`);
+      }
+    }
+  }
+  // 原来只能落在行上时的两种结果没有变：向上拖落在目标行之前，向下拖落在目标行之后
+  assert.equal(reorderTarget(2, 0), 0);
+  assert.equal(reorderTarget(0, 2), 1);
 });
 
 // 14. [复审阻塞 3 回归] 重命名项目控件类型后同步更新历史栈快照，撤销/重做不会回退到已删除的旧控件类型

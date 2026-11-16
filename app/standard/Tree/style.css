@@ -1,4 +1,5 @@
 .vf-std-tree {
+  position: relative;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -84,4 +85,17 @@
   background: rgba(148, 163, 184, 0.2);
   font-size: 10px;
   flex-shrink: 0;
+}
+
+/* 拖动重排时的插入线：画在将要插入的两行之间，不挡鼠标事件 */
+.vf-std-tree-dropline {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-primary, #2563eb);
+  /* 选中的行和插入线是同一个颜色：加一圈底色的描边，线压在选中行边上时也看得见 */
+  box-shadow: 0 0 0 1px var(--color-surface, #ffffff);
+  pointer-events: none;
 }
