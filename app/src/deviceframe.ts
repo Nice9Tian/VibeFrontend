@@ -4,7 +4,7 @@
 // 所以翻页时拍的快照、任务栏上的缩略图和项目的样式表是同一个文档里的东西。
 //
 // 尺寸都是 CSS 像素。几何（多大、放哪、缩放多少）在 devices.ts，这里只管画。
-import { DESKTOP_SCREEN, desktopWindowPlacement, phoneScreenPlacement, type PhoneModel, type Size } from "./devices.ts";
+import { DESKTOP_SCREEN, desktopWindowPlacement, desktopWindowPlacementIn, desktopWorkArea, phoneScreenPlacement, resizeDesktopFrame, type PhoneModel, type Rect, type ResizeEdges, type Size } from "./devices.ts";
 
 /** 书的一屏里的一面纸：它属于哪个画板、是画板从左数第几张纸、纸多大 */
 export interface SheetPiece {
@@ -274,12 +274,23 @@ export function deepClone(node: HTMLElement): HTMLElement {
 
 export interface DesktopOptions {
   app: { title: string; icon: AppIcon };
+  /** 屏幕里放的内容多大（跟着窗口重新排版的界面设计是窗口内容区的大小，平面设计是这一屏的纸） */
   content: Size;
   maximized: boolean;
   minimized: boolean;
+  /** 用户拖过大小的窗口外框（含标题栏，桌面坐标）；没拖过是 null，窗口按 content 的大小摆在桌面正中 */
+  frame?: Rect | null;
+  /** 窗口里看的是纸（平面设计）：窗口比纸大时，纸外面露出来的地方是浅灰色 */
+  paper?: boolean;
   onMinimize(): void;
   onMaximize(): void;
   onRestore(): void;
+  /**
+   * 拖窗口的边、角改大小（不给就不能拖）。拖的途中每一帧调一次，松手时再调一次（done 为 true）；frame 是新的外框（桌面坐标）。
+   * 返回这时屏幕里的内容多大：跟着窗口重新排版的界面设计返回新的内容区大小（调用方同时把内容按它重排），
+   * 平面设计的纸不变就返回原来的大小，外框把它按比例缩放放进窗口。
+   */
+  onResize?(frame: Rect, done: boolean): Size;
 }
 
 /**
@@ -299,9 +310,11 @@ export function mountDesktop(doc: Document, options: DesktopOptions): DeviceStag
   Object.assign(desktop.style, { left: `${margin}px`, top: `${margin}px`, width: `${screen.width}px`, height: `${screen.height}px` });
   el(doc, "div", `${NS}-wallpaper`, desktop);
 
-  const place = desktopWindowPlacement(options.content, { maximized: options.maximized });
-  const win = el(doc, "div", `${NS}-window${options.maximized ? " maximized" : ""}${options.minimized ? " minimized" : ""}`, desktop);
-  Object.assign(win.style, { left: `${place.frame.x}px`, top: `${place.frame.y}px`, width: `${place.frame.width}px`, height: `${place.frame.height}px` });
+  // 窗口的外框：最大化铺满工作区，拖过大小的按拖的，都没有就按内容的大小摆在正中
+  const fixedFrame = options.maximized ? desktopWorkArea(screen) : (options.frame ?? null);
+  let place = fixedFrame ? desktopWindowPlacementIn(fixedFrame, options.content) : desktopWindowPlacement(options.content);
+  let content = options.content;
+  const win = el(doc, "div", `${NS}-window${options.maximized ? " maximized" : ""}${options.minimized ? " minimized" : ""}${options.paper ? " paper" : ""}`, desktop);
   const bar = el(doc, "div", `${NS}-titlebar`, win);
   bar.append(appIcon(doc, options.app.icon, 16, `${NS}-title-icon`));
   const title = el(doc, "span", `${NS}-title`, bar);
@@ -336,13 +349,90 @@ export function mountDesktop(doc: Document, options: DesktopOptions): DeviceStag
 
   const body = el(doc, "div", `${NS}-window-body`, win);
   const screenSlot = el(doc, "div", `${NS}-screen-slot`, body);
-  Object.assign(screenSlot.style, {
-    left: `${place.content.x - place.frame.x}px`,
-    top: `${place.content.y - place.frame.y - 32}px`,
-    width: `${options.content.width}px`,
-    height: `${options.content.height}px`,
-    transform: place.scale === 1 ? "" : `scale(${place.scale})`,
-  });
+  // 拖边、拖角的把手：放在窗口外面一层（窗口自己裁掉了伸出去的部分），透明，只有鼠标形状
+  const resizer = options.onResize && !options.maximized && !options.minimized ? el(doc, "div", `${NS}-resizer`, desktop) : null;
+  /** 按 place 摆窗口、内容和把手 */
+  const applyPlace = () => {
+    Object.assign(win.style, { left: `${place.frame.x}px`, top: `${place.frame.y}px`, width: `${place.frame.width}px`, height: `${place.frame.height}px` });
+    Object.assign(screenSlot.style, {
+      left: `${place.content.x - place.frame.x}px`,
+      top: `${place.content.y - place.frame.y - 32}px`,
+      width: `${content.width}px`,
+      height: `${content.height}px`,
+      transform: place.scale === 1 ? "" : `scale(${place.scale})`,
+    });
+    if (resizer) Object.assign(resizer.style, { left: `${place.frame.x}px`, top: `${place.frame.y}px`, width: `${place.frame.width}px`, height: `${place.frame.height}px` });
+  };
+  applyPlace();
+  if (resizer && options.onResize) {
+    const onResize = options.onResize;
+    const handles: Array<[string, ResizeEdges, string]> = [
+      ["n", { top: true }, "上边"],
+      ["s", { bottom: true }, "下边"],
+      ["w", { left: true }, "左边"],
+      ["e", { right: true }, "右边"],
+      ["nw", { top: true, left: true }, "左上角"],
+      ["ne", { top: true, right: true }, "右上角"],
+      ["sw", { bottom: true, left: true }, "左下角"],
+      ["se", { bottom: true, right: true }, "右下角"],
+    ];
+    for (const [name, edges, label] of handles) {
+      const handle = el(doc, "div", `${NS}-resize ${name}`, resizer);
+      handle.dataset.edge = name;
+      handle.title = `拖${label}改窗口大小`;
+      handle.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          handle.setPointerCapture(e.pointerId);
+        } catch {
+          // 拿不到也能拖，只是鼠标出了窗口就收不到
+        }
+        // 桌面可能整个被缩放过（播放页按窗口缩放外框）：屏幕上挪的距离换回桌面像素
+        const k = desktop.getBoundingClientRect().width / Math.max(1, desktop.offsetWidth) || 1;
+        const start = { x: e.clientX, y: e.clientY, frame: place.frame };
+        let latest = start.frame;
+        let frameRequest = 0;
+        let finished = false;
+        const view = doc.defaultView ?? window;
+        const apply = (done: boolean) => {
+          content = onResize(latest, done);
+          place = desktopWindowPlacementIn(latest, content);
+          applyPlace();
+        };
+        const move = (ev: PointerEvent) => {
+          latest = resizeDesktopFrame(start.frame, edges, (ev.clientX - start.x) / k, (ev.clientY - start.y) / k);
+          // 一帧只重排一次
+          if (!frameRequest) {
+            frameRequest = view.requestAnimationFrame(() => {
+              frameRequest = 0;
+              apply(false);
+            });
+          }
+        };
+        const end = () => {
+          if (finished) return;
+          finished = true;
+          view.cancelAnimationFrame(frameRequest);
+          handle.removeEventListener("pointermove", move);
+          handle.removeEventListener("pointerup", end);
+          handle.removeEventListener("pointercancel", end);
+          handle.removeEventListener("lostpointercapture", end);
+          win.classList.remove("resizing");
+          root.classList.remove("resizing");
+          apply(true);
+        };
+        win.classList.add("resizing");
+        root.classList.add("resizing");
+        root.dataset.resizeCursor = name;
+        handle.addEventListener("pointermove", move);
+        handle.addEventListener("pointerup", end);
+        handle.addEventListener("pointercancel", end);
+        handle.addEventListener("lostpointercapture", end);
+      });
+    }
+  }
 
   // 任务栏
   const taskbar = el(doc, "div", `${NS}-taskbar`, desktop);
@@ -385,10 +475,11 @@ export function mountDesktop(doc: Document, options: DesktopOptions): DeviceStag
       head.append(appIcon(doc, options.app.icon, 14, `${NS}-title-icon`));
       el(doc, "span", "", head).textContent = options.app.title;
       const thumbW = 236;
-      const scale = thumbW / Math.max(1, options.content.width);
+      // 窗口拖过大小以后内容也跟着变了：按现在的内容算
+      const scale = thumbW / Math.max(1, content.width);
       const thumb = el(doc, "div", `${NS}-peek-thumb`, peek);
       thumb.style.width = `${thumbW}px`;
-      thumb.style.height = `${Math.round(options.content.height * scale)}px`;
+      thumb.style.height = `${Math.round(content.height * scale)}px`;
       const copy = deepClone(screenSlot);
       Object.assign(copy.style, { left: "0", top: "0", transform: `scale(${scale})`, transformOrigin: "0 0" });
       thumb.append(copy);
@@ -604,6 +695,27 @@ export const DEVICE_CSS = `
     linear-gradient(180deg, #dfe6f3 0%, #b9c8e6 55%, #8fa5d8 100%); }
 .${NS}-window { position: absolute; display: flex; flex-direction: column; overflow: hidden; border-radius: 8px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 26px 64px rgba(10, 20, 40, 0.32), 0 6px 16px rgba(10, 20, 40, 0.16); transition: opacity 0.18s ease, transform 0.22s ease; }
 .${NS}-window.maximized { border-radius: 0; }
+.${NS}-window.resizing { transition: none; }
+/* 拖边、拖角改窗口大小的把手：透明，跨在窗口的边上（里外各一半），角比边大一点 */
+.${NS}-resizer { position: absolute; z-index: 7; pointer-events: none; }
+.${NS}-resize { position: absolute; pointer-events: auto; touch-action: none; }
+.${NS}-resize.n, .${NS}-resize.s { left: 10px; right: 10px; height: 10px; cursor: ns-resize; }
+.${NS}-resize.n { top: -5px; }
+.${NS}-resize.s { bottom: -5px; }
+.${NS}-resize.e, .${NS}-resize.w { top: 10px; bottom: 10px; width: 10px; cursor: ew-resize; }
+.${NS}-resize.w { left: -5px; }
+.${NS}-resize.e { right: -5px; }
+.${NS}-resize.nw, .${NS}-resize.ne, .${NS}-resize.sw, .${NS}-resize.se { width: 16px; height: 16px; }
+.${NS}-resize.nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.${NS}-resize.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.${NS}-resize.ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.${NS}-resize.sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+/* 拖的途中鼠标形状不随经过的东西变，也不选中文字 */
+.${NS}.resizing, .${NS}.resizing * { user-select: none; }
+.${NS}.resizing[data-resize-cursor="n"] *, .${NS}.resizing[data-resize-cursor="s"] * { cursor: ns-resize !important; }
+.${NS}.resizing[data-resize-cursor="e"] *, .${NS}.resizing[data-resize-cursor="w"] * { cursor: ew-resize !important; }
+.${NS}.resizing[data-resize-cursor="nw"] *, .${NS}.resizing[data-resize-cursor="se"] * { cursor: nwse-resize !important; }
+.${NS}.resizing[data-resize-cursor="ne"] *, .${NS}.resizing[data-resize-cursor="sw"] * { cursor: nesw-resize !important; }
 .${NS}-window.minimized { opacity: 0; transform: translateY(380px) scale(0.2); pointer-events: none; }
 .${NS}-titlebar { display: flex; flex: none; align-items: center; height: 32px; padding-left: 10px; background: #f3f3f3; color: #1b1b1b; font-size: 12px; user-select: none; }
 .${NS}-title-icon { flex: none; border-radius: 3px; }
@@ -614,6 +726,8 @@ export const DEVICE_CSS = `
 .${NS}-control.close:hover { background: #c42b1c; color: #fff; }
 .${NS}-glyph { display: flex; }
 .${NS}-window-body { position: relative; flex: 1; overflow: hidden; background: #fff; }
+/* 窗口里看的是纸（平面设计）：纸外面露出来的地方是浅灰色，看得出纸的边 */
+.${NS}-window.paper .${NS}-window-body { background: #e9eaee; }
 .${NS}-taskbar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; background: rgba(243, 243, 243, 0.86); backdrop-filter: blur(24px) saturate(1.4); border-top: 1px solid rgba(0, 0, 0, 0.08); }
 .${NS}-tb-center { display: flex; align-items: center; gap: 4px; }
 .${NS}-tb-btn { position: relative; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 6px; background: transparent; cursor: default; }

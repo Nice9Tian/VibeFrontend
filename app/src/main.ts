@@ -183,7 +183,7 @@ import { snapMove, snapPoint, snapResize, type Guide, type SnapOptions } from ".
 import { activePage, hiddenPages, pagesToReveal } from "./stackview";
 import { centerView, onZoomChange, panToSelection, restoreViewState, setSelectionRectSource, setZoom, viewState, viewZoom, zoomToFit, zoomToRect, zoomToSelection } from "./viewport";
 import { boardAnchor, bookViewIndexOfBoard, bookViews, deviceViews, screenIndexForAnchor, sheetPiece as bookSheetPiece, type ScreenView } from "./bookview";
-import { DEVICE_LABELS, defaultDevice, isDeviceId, PHONE_MODELS, phoneModel, type DeviceId } from "./devices";
+import { desktopClient, desktopWorkArea, isDeviceId, PHONE_MODELS, phoneModel, previewChoiceLabel, previewChoices, resolvePreviewChoice, type DeviceId, type PreviewChoice, type Rect as DeviceRect, type Size } from "./devices";
 import { iconColorFor, mountBook, mountDesktop, mountPhone, placeSheets, playSlide, playTurn, turnSnapshot, type DeviceStage } from "./deviceframe";
 import { boardGap, boardWorldBounds } from "./boardlayout";
 import { presetsPath } from "./loader";
@@ -392,6 +392,8 @@ function shownPage(stackId: string): string | null {
 function layoutHooks(runtime: Runtime) {
   const revealed = new Set(mode === "edit" ? revealedPages.values() : []);
   return {
+    // 电脑预览里拖过窗口大小（或最大化）：主窗口按窗口的内容区重新排版
+    ...(mode === "preview" && previewRootSize ? { rootSize: previewRootSize } : {}),
     isVisible: (nid: string) => runtime.view(nid).visible || revealed.has(nid),
     getProp: (nid: string, prop: string) =>
       prop === "currentPage" && mode === "edit" && revealedPages.has(nid) ? shownPage(nid) : (runtime.view(nid).props[prop] ?? null),
@@ -1019,7 +1021,7 @@ function applyViews(): void {
     getMode: () => mode,
     getScene: () => project.scene,
     getDockLayout: () => runtime.getDockLayout(rootId),
-    getWindowSize: () => ({ width: rootNode?.width ?? 1280, height: rootNode?.height ?? 800 }),
+    getWindowSize: () => rootLayoutSize(rootNode),
     getDockTitle: (did) => String(runtime.view(did).props.title ?? node(did)?.title ?? did),
     onActivateTab: (did) => {
       previewRuntime?.dockActivateTab(did);
@@ -1065,12 +1067,13 @@ function applyViews(): void {
     const statusVis = statusNode && rootNode.statusBar ? runtime.view(rootNode.statusBar).visible : false;
     const statusH = statusNode && statusVis ? Math.round(statusNode.height ?? 28) : 0;
     const midY = menuH;
-    const midH = Math.max(0, (rootNode.height ?? 800) - menuH - statusH);
+    const windowSize = rootLayoutSize(rootNode);
+    const midH = Math.max(0, windowSize.height - menuH - statusH);
     const dockRes = computeDockWindowLayout(
       project.scene,
       rootId,
       rootNode,
-      rootNode.width ?? 1280,
+      windowSize.width,
       midY,
       midH,
       true,
@@ -1112,8 +1115,9 @@ function applyViews(): void {
     }
     if (box && n?.type !== "Line") {
       if (n?.type === "Dialog" && id !== project.scene.root && rootNode) {
-        const dx = Math.round((rootNode.width - box.width) / 2);
-        const dy = Math.round((rootNode.height - box.height) / 2);
+        const windowSize = rootLayoutSize(rootNode);
+        const dx = Math.round((windowSize.width - box.width) / 2);
+        const dy = Math.round((windowSize.height - box.height) / 2);
         Object.assign(entry.wrapper.style, {
           left: `${dx}px`,
           top: `${dy}px`,
@@ -1650,6 +1654,7 @@ function renderStage(): void {
   deviceStage?.destroy();
   deviceStage = null;
   boardHost = null;
+  previewRootSize = null;
   const rootId = stageRootId();
   const root = node(rootId);
   const stage = $("stage");
@@ -1883,9 +1888,26 @@ function savePreviewSettings(patch: PreviewSettings): Promise<void> {
 }
 
 /** 预览用哪种设备：平面设计默认是书，界面设计默认是电脑；“原样”是不套外框、1:1。独立预览窗口和这里用同一份设置 */
-function previewDevice(): DeviceId | "plain" {
-  const chosen = previewSettings.device;
-  return chosen === "plain" || isDeviceId(chosen) ? chosen : defaultDevice(project.kind === "graphic" ? "graphic" : "ui");
+function previewDevice(): PreviewChoice {
+  // 项目在 project.json 里限定了看法时，选过的不在里面就用项目写的第一个
+  return resolvePreviewChoice(previewSettings.device, kindName(), project.previewDevices);
+}
+
+/** 设计类型的名字（预览设备那边只分平面设计和界面设计） */
+function kindName(): "ui" | "graphic" {
+  return project.kind === "graphic" ? "graphic" : "ui";
+}
+
+/**
+ * 电脑预览里拖过窗口大小（或最大化）时，界面设计的主窗口按窗口的内容区重新排版：这里记着内容区多大。
+ * 只在套着电脑外框时有，renderStage 每次先清掉，renderDeviceStage 再按需要设上。
+ */
+let previewRootSize: Size | null = null;
+
+/** 主窗口现在按多大排版：电脑预览里拖过大小（或最大化）时是窗口的内容区，平时是设计的尺寸 */
+function rootLayoutSize(rootNode: SceneNode | undefined): Size {
+  if (mode === "preview" && previewRootSize) return previewRootSize;
+  return { width: rootNode?.width ?? 1280, height: rootNode?.height ?? 800 };
 }
 
 /** 预览里的一屏：书和电脑是一屏两页（跨页）、手机是一页、原样是一个画板。board 是切回编辑时“在看”的画板 */
@@ -1910,7 +1932,7 @@ let deviceStage: DeviceStage | null = null;
 /** 主画板放在哪个元素里（设计窗口的画布，或外框里的屏幕） */
 let boardHost: HTMLElement | null = null;
 /** 电脑预览里窗口的状态 */
-const desktopState = { maximized: false, minimized: false };
+const desktopState: { maximized: boolean; minimized: boolean; frame: DeviceRect | null } = { maximized: false, minimized: false, frame: null };
 /** 上一次按哪种设备摆的视角：换设备、换手机型号、横竖切换时重新缩放到装下整个设备 */
 let fittedDevice = "";
 
@@ -1997,7 +2019,13 @@ function renderDeviceStage(canvas: HTMLElement, device: DeviceId): void {
       boardHost = host;
     }
   } else {
-    const content = contentOf(view);
+    const design = contentOf(view);
+    // 电脑里拖过窗口大小（或最大化）：界面设计按窗口的内容区重新排版，平面设计的纸按比例放进窗口
+    const client = device === "desktop" ? (desktopState.maximized ? desktopClient(desktopWorkArea()) : desktopState.frame ? desktopClient(desktopState.frame) : null) : null;
+    const relayout = !graphic && client !== null;
+    const content = relayout ? client : design;
+    previewRootSize = relayout ? client : null;
+    let host: HTMLElement | null = null;
     frame =
       device === "desktop"
         ? mountDesktop(doc, {
@@ -2005,6 +2033,22 @@ function renderDeviceStage(canvas: HTMLElement, device: DeviceId): void {
             content,
             maximized: desktopState.maximized,
             minimized: desktopState.minimized,
+            frame: desktopState.frame,
+            paper: graphic,
+            // 拖边、拖角改窗口大小：界面设计每一帧按新的内容区重新排版（只挪位置、改尺寸，不重建控件）
+            onResize: (next, done) => {
+              desktopState.frame = next;
+              if (graphic) return design;
+              const size = desktopClient(next);
+              previewRootSize = size;
+              if (host) {
+                host.style.width = `${size.width}px`;
+                host.style.height = `${size.height}px`;
+              }
+              applyViews();
+              if (done) renderBoardBar();
+              return size;
+            },
             onMinimize: () => {
               desktopState.minimized = true;
               renderStage();
@@ -2024,7 +2068,7 @@ function renderDeviceStage(canvas: HTMLElement, device: DeviceId): void {
       screen.style.background = "#fff";
       placeSheets(doc, screen, view, (board) => buildBoardElement(doc, board));
     } else {
-      const host = doc.createElement("div");
+      host = doc.createElement("div");
       host.style.cssText = `position:relative;width:${content.width}px;height:${content.height}px;`;
       screen.append(host);
       buildRootBoard(host, project.scene.root);
@@ -2074,13 +2118,17 @@ function renderPreviewBar(bar: HTMLElement): void {
   segmented.className = "segmented device-switch";
   segmented.setAttribute("role", "group");
   segmented.setAttribute("aria-label", "预览的设备");
-  const choices: Array<[DeviceId | "plain", string, string]> = [
-    ["book", DEVICE_LABELS.book, "翻开的书，一屏两页，像翻书一样翻页"],
-    ["desktop", DEVICE_LABELS.desktop, "16:9 的电脑桌面：软件的窗口、底部任务栏（图标停一下看缩略图）"],
-    ["phone", DEVICE_LABELS.phone, "手机：软件在屏幕里，按屏幕宽度缩放"],
-    ["plain", "原样", "不套外框，按设计的尺寸 1:1 看"],
-  ];
-  for (const [id, label, title] of choices) {
+  const titles: Record<PreviewChoice, string> = {
+    book: "翻开的书，一屏两页，像翻书一样翻页",
+    desktop: "16:9 的电脑桌面：软件的窗口（拖边、拖角改大小）、底部任务栏（图标停一下看缩略图）",
+    phone: "手机：软件在屏幕里，按屏幕宽度缩放",
+    plain: kindName() === "graphic" ? "不套外框，按纸张原大一页一页看（和导出的 PDF 一样）" : "不套外框，按设计的尺寸 1:1 看",
+  };
+  // 项目在 project.json 的 preview.devices 里限定了看法时只列那几种，按它写的顺序
+  const choices = previewChoices(project.previewDevices);
+  for (const id of choices) {
+    const label = previewChoiceLabel(id, kindName());
+    const title = titles[id];
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = label;
@@ -2098,7 +2146,8 @@ function renderPreviewBar(bar: HTMLElement): void {
     });
     segmented.append(b);
   }
-  const parts: HTMLElement[] = [segmented];
+  // 只有一种看法时不用选
+  const parts: HTMLElement[] = choices.length > 1 ? [segmented] : [];
   if (device === "phone") {
     const select = document.createElement("select");
     select.className = "tool-select";

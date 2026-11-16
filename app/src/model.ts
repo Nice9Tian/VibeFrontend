@@ -1,5 +1,6 @@
 // 设计项目的数据结构，以及只依赖这些数据的查找与排版计算函数。
 // 这里不碰网页和文件系统：工具界面、命令行导出和嵌进 Qt 的逻辑运行层共用这一份。
+import type { PreviewChoice } from "./devices.ts";
 import type { Value } from "./expr.ts";
 import { LINE_DECL, SHAPE_DECL, type ShapePreset } from "./shapes.ts";
 import { STANDARD_COMPONENTS } from "../standard/index.ts";
@@ -620,6 +621,11 @@ export interface Project extends RuntimeProject {
   styles?: Array<{ path: string; text: string }>;
   /** 软件的图标（project.json 的 icon，项目里一张图片的路径）：预览成电脑时窗口标题栏和任务栏上用它，没写就用名字的第一个字 */
   icon?: string;
+  /**
+   * 这个项目能用哪几种预览看法（project.json 的 preview.devices），按写的顺序列在预览栏和播放条上，第一个是默认；
+   * 没写是 undefined，四种都有（平面设计默认书，界面设计默认电脑）
+   */
+  previewDevices?: PreviewChoice[];
   /** 打开的是子项目时（它的 project.json 里写了 part）：它属于哪个总项目 */
   partOf?: { name: string; part: string | null } | null;
   /** 画布里的子项目节点用到的子项目（连同它们里面又用到的）：文件夹 parts/<名字> → 画布和名字 */

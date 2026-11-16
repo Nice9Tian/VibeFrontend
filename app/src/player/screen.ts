@@ -10,12 +10,12 @@
 // 页面只画一次（在 player/main.ts 里），换设备、翻页时把画好的页面元素挪进外框的屏幕，控件不重新创建，动画接着动。
 import { boardAnchor, deviceViews, playingViews, screenIndexForAnchor, type ScreenView } from "../bookview.ts";
 import { iconColorFor, mountBook, mountDesktop, mountPhone, placeSheets, playSlide, playTurn, turnSnapshot, type DeviceStage } from "../deviceframe.ts";
-import { DEVICE_LABELS, defaultDevice, fitScale, isDeviceId, PHONE_MODELS, phoneModel, type DeviceId } from "../devices.ts";
+import { fitScale, PHONE_MODELS, phoneModel, previewChoiceLabel, previewChoices, resolvePreviewChoice, type DeviceId, type PreviewChoice, type Rect } from "../devices.ts";
 import { toPx } from "../kinds.ts";
 import { unitOf, type Scene } from "../model.ts";
 import { coverWrapId, pageLabel } from "../pages.ts";
 
-export type PreviewChoice = DeviceId | "plain";
+export type { PreviewChoice };
 
 /** 预览设备的选择，和编辑器的 .designer/preview.json 是同一个格式 */
 export interface PreviewSettings {
@@ -45,6 +45,8 @@ export interface ScreenOptions {
   book: HTMLElement;
   /** 电脑的窗口和任务栏上的名字和图标（图标是网址，没有就用名字的第一个字） */
   app: { name: string; icon?: string };
+  /** 项目在 project.json 的 preview.devices 里限定的看法（按写的顺序，第一个是默认）；没写是 null，四种都有 */
+  allowed: PreviewChoice[] | null;
 }
 
 const SCREEN_CSS = `
@@ -179,11 +181,16 @@ function readStored(): PreviewSettings {
   }
 }
 
-/** 开始时用哪个设备：网址参数最优先，其次是存下来的，都没有就是书 */
-function initialSettings(): Required<PreviewSettings> {
+/**
+ * 开始时用哪个设备：网址参数最优先，其次是存下来的，都没有就是默认（项目写的第一个，没写是书）。
+ * 项目限定了看法时，网址或存下来的不在里面就不算。
+ */
+function initialSettings(allowed: PreviewChoice[] | null): Required<PreviewSettings> {
   const stored = readStored();
-  const fromUrl = params.get("device");
-  const device = fromUrl === "plain" || isDeviceId(fromUrl) ? fromUrl : stored.device === "plain" || isDeviceId(stored.device) ? stored.device : defaultDevice("graphic");
+  // 网址里写 pdf 和 plain 是一回事（播放条上叫“PDF”）
+  const fromUrl = params.get("device") === "pdf" ? "plain" : params.get("device");
+  const usable = (choice: unknown) => resolvePreviewChoice(choice, "graphic", allowed) === choice;
+  const device = usable(fromUrl) ? (fromUrl as PreviewChoice) : resolvePreviewChoice(stored.device, "graphic", allowed);
   const phone = phoneModel(params.get("phone") ?? stored.phone).id;
   const landscape = params.has("landscape") ? params.get("landscape") === "1" : Boolean(stored.landscape);
   return { device, phone, landscape };
@@ -207,13 +214,14 @@ export function setupScreen(options: ScreenOptions): void {
   style.textContent = SCREEN_CSS;
   document.head.append(style);
 
-  const settings = initialSettings();
+  const settings = initialSettings(options.allowed);
   let device: PreviewChoice = settings.device;
   /** 现在摆成哪种：平时就是 device，打印时临时换成原样 */
   let shown: PreviewChoice = "plain";
   let index = 0;
   let stage: DeviceStage | null = null;
-  const desktop = { maximized: false, minimized: false };
+  /** 电脑里窗口的状态；frame 是拖过大小的外框（桌面坐标），没拖过是 null */
+  const desktop: { maximized: boolean; minimized: boolean; frame: Rect | null } = { maximized: false, minimized: false, frame: null };
   const playing = new Set(boards);
 
   const view = document.createElement("div");
@@ -364,6 +372,13 @@ export function setupScreen(options: ScreenOptions): void {
               content,
               maximized: desktop.maximized,
               minimized: desktop.minimized,
+              frame: desktop.frame,
+              paper: true,
+              // 拖边、拖角改窗口大小：纸不变，按比例放进新的窗口
+              onResize: (next) => {
+                desktop.frame = next;
+                return content;
+              },
               onMinimize: () => {
                 desktop.minimized = true;
                 renderDevice(choice);
@@ -441,14 +456,16 @@ export function setupScreen(options: ScreenOptions): void {
   seg.className = "vf-seg";
   seg.setAttribute("role", "group");
   seg.setAttribute("aria-label", "看的设备");
-  const choices: Array<[PreviewChoice, string, string]> = [
-    ["book", DEVICE_LABELS.book, "翻开的书，一屏两页，像翻书一样翻页"],
-    ["desktop", DEVICE_LABELS.desktop, "16:9 的电脑桌面：窗口里看跨页，底部任务栏（图标停一下看缩略图）"],
-    ["phone", DEVICE_LABELS.phone, "手机：一屏一页，按屏幕宽度缩放"],
-    ["plain", "原样", "不套外框，一页页排开"],
-  ];
-  for (const [id, label, title] of choices) {
-    const b = button(label, title, "device", () => {
+  const titles: Record<PreviewChoice, string> = {
+    book: "翻开的书，一屏两页，像翻书一样翻页",
+    desktop: "16:9 的电脑桌面：窗口里看跨页（拖边、拖角改窗口大小），底部任务栏（图标停一下看缩略图）",
+    phone: "手机：一屏一页，按屏幕宽度缩放",
+    plain: "不套外框，按纸张一页页排开（和导出的 PDF 一样）",
+  };
+  // 项目在 project.json 的 preview.devices 里限定了看法时只列那几种，按它写的顺序
+  const choices = previewChoices(options.allowed);
+  for (const id of choices) {
+    const b = button(previewChoiceLabel(id, "graphic"), titles[id], "device", () => {
       if (device === id) return;
       const at = anchor();
       device = id;
@@ -496,7 +513,9 @@ export function setupScreen(options: ScreenOptions): void {
     url.searchParams.set("autoprint", "1");
     location.assign(url.href);
   });
-  ui.append(seg, phoneOpts, sep(), prev, where, next, sep(), print);
+  // 只有一种看法时不用选
+  if (choices.length > 1) ui.append(seg);
+  ui.append(phoneOpts, sep(), prev, where, next, sep(), print);
   document.body.append(ui);
 
   function sync(): void {

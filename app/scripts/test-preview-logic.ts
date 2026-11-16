@@ -4,15 +4,26 @@ import { boardGap, boardWorldBounds, boardWorldLayout, boardWorldOrigin } from "
 import { boardAnchor, bookViewIndexOfBoard, bookViewIndexOfPage, bookViews, deviceViews, playingViews, screenIndexForAnchor, sheetPiece } from "../src/bookview.ts";
 import {
   defaultDevice,
+  defaultPreviewChoice,
+  DESKTOP_MIN_CLIENT,
   DESKTOP_SCREEN,
+  desktopClient,
   desktopWindowPlacement,
+  desktopWindowPlacementIn,
+  desktopWorkArea,
   DEVICE_IDS,
   DEVICE_LABELS,
   fitScale,
   isDeviceId,
+  parsePreviewDevices,
   PHONE_MODELS,
   phoneModel,
   phoneScreenPlacement,
+  plainLabel,
+  previewChoiceLabel,
+  previewChoices,
+  resizeDesktopFrame,
+  resolvePreviewChoice,
   viewFit,
 } from "../src/devices.ts";
 import type { Scene } from "../src/model.ts";
@@ -356,6 +367,68 @@ async function bookViewTests(): Promise<void> {
 }
 
 async function deviceTests(): Promise<void> {
+  await test("devices：project.json 的 preview.devices——按写的顺序列出、第一个是默认，pdf 就是 plain，重复的去掉，认不出的报出来", () => {
+    assert.deepEqual(parsePreviewDevices(undefined), { devices: null, problems: [] });
+    assert.deepEqual(parsePreviewDevices({}), { devices: null, problems: [] });
+    assert.deepEqual(parsePreviewDevices({ devices: ["book", "pdf"] }), { devices: ["book", "plain"], problems: [] });
+    assert.deepEqual(parsePreviewDevices({ devices: ["PDF", " Book ", "plain", "book"] }).devices, ["plain", "book"], "大小写、空格不算，pdf 和 plain 是同一种，重复的只留第一个");
+    const unknown = parsePreviewDevices({ devices: ["book", "tablet", 3] });
+    assert.deepEqual(unknown.devices, ["book"]);
+    assert.equal(unknown.problems.length, 2);
+    assert.match(unknown.problems[0], /"tablet"/);
+    const none = parsePreviewDevices({ devices: ["tablet"] });
+    assert.equal(none.devices, null, "一个都认不出来就当没写");
+    assert.equal(none.problems.length, 2);
+    assert.equal(parsePreviewDevices({ devices: [] }).devices, null);
+    assert.equal(parsePreviewDevices({ devices: "book" }).problems.length, 1, "不是数组");
+    assert.equal(parsePreviewDevices(["book"]).problems.length, 1, "preview 不是对象");
+  });
+
+  await test("devices：看法的名字、列出哪几种、默认哪种、选的不能用时换成哪种", () => {
+    assert.equal(plainLabel("graphic"), "PDF");
+    assert.equal(plainLabel("ui"), "原样");
+    assert.deepEqual(["book", "desktop", "phone", "plain"].map((c) => previewChoiceLabel(c as "book", "graphic")), ["书籍", "电脑", "手机", "PDF"]);
+    assert.equal(previewChoiceLabel("plain", "ui"), "原样");
+    assert.deepEqual(previewChoices(null), ["book", "desktop", "phone", "plain"]);
+    assert.deepEqual(previewChoices(["plain", "book"]), ["plain", "book"]);
+    assert.equal(defaultPreviewChoice("graphic", null), "book");
+    assert.equal(defaultPreviewChoice("ui", null), "desktop");
+    assert.equal(defaultPreviewChoice("graphic", ["plain", "book"]), "plain", "写了就是写的第一个");
+    assert.equal(resolvePreviewChoice("desktop", "graphic", ["book", "plain"]), "book", "存下来的是电脑，这个项目不让用，换成默认");
+    assert.equal(resolvePreviewChoice("plain", "graphic", ["book", "plain"]), "plain");
+    assert.equal(resolvePreviewChoice("phone", "ui", null), "phone");
+    assert.equal(resolvePreviewChoice("tablet", "ui", null), "desktop");
+    assert.equal(resolvePreviewChoice(undefined, "graphic", null), "book");
+  });
+
+  await test("devices：拖电脑里窗口的边、角改大小——对边不动、不出工作区、不小于最小尺寸；内容放进拖过的窗口", () => {
+    assert.deepEqual(desktopWorkArea(), { x: 0, y: 0, width: 1920, height: 1032 });
+    const start = { x: 320, y: 100, width: 1280, height: 832 };
+    assert.deepEqual(desktopClient(start), { width: 1280, height: 800 });
+    // 右下角往左上拖：左上角不动
+    assert.deepEqual(resizeDesktopFrame(start, { right: true, bottom: true }, -200, -120), { x: 320, y: 100, width: 1080, height: 712 });
+    // 左边往右拖：右边不动
+    assert.deepEqual(resizeDesktopFrame(start, { left: true }, 100, 50), { x: 420, y: 100, width: 1180, height: 832 }, "只拖左边，竖着挪不算");
+    // 往外拖出工作区：停在工作区的边上
+    assert.deepEqual(resizeDesktopFrame(start, { top: true, left: true }, -1000, -1000), { x: 0, y: 0, width: 1600, height: 932 });
+    assert.deepEqual(resizeDesktopFrame(start, { right: true, bottom: true }, 5000, 5000), { x: 320, y: 100, width: 1600, height: 932 });
+    // 往里拖得太多：内容区不小于最小尺寸
+    const tiny = resizeDesktopFrame(start, { right: true, bottom: true }, -5000, -5000);
+    assert.deepEqual(desktopClient(tiny), DESKTOP_MIN_CLIENT);
+    const tinyLeft = resizeDesktopFrame(start, { left: true, top: true }, 5000, 5000);
+    assert.deepEqual([tinyLeft.x + tinyLeft.width, tinyLeft.y + tinyLeft.height], [1600, 932], "从左上角缩到最小，右下角还在原处");
+    // 跟着窗口重新排版：内容就是内容区，缩放 1、正好铺满
+    const relayout = desktopWindowPlacementIn({ x: 320, y: 100, width: 1080, height: 712 }, { width: 1080, height: 680 });
+    assert.equal(relayout.scale, 1);
+    assert.deepEqual(relayout.content, { x: 320, y: 132, width: 1080, height: 680 });
+    // 纸：按比例缩放、居中放进内容区
+    const paper = desktopWindowPlacementIn({ x: 0, y: 0, width: 800, height: 632 }, { width: 1600, height: 1000 });
+    assert.equal(paper.scale, 0.5);
+    assert.deepEqual(paper.content, { x: 0, y: 32 + 50, width: 800, height: 500 });
+    // 最大化（外框就是整个工作区）和以前的最大化摆法一样
+    assert.deepEqual(desktopWindowPlacementIn(desktopWorkArea(), { width: 800, height: 500 }), desktopWindowPlacement({ width: 800, height: 500 }, { maximized: true }));
+  });
+
   await test("devices：设备代号判断、默认设备与手机型号查找（找不到时回退到第一个）", () => {
     assert.deepEqual(DEVICE_IDS, ["book", "desktop", "phone"]);
     assert.equal(DEVICE_LABELS.book, "书籍");

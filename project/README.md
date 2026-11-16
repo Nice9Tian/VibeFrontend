@@ -11,7 +11,7 @@
 ```text
 project/
   README.md                 # 本文件
-  project.json              # 项目名、窗口及其页面文档；icon（可选）是软件图标的图片路径，预览成电脑时窗口和任务栏上用它
+  project.json              # 项目名、窗口及其页面文档；icon（可选）是软件图标的图片路径，预览成电脑时窗口和任务栏上用它；preview（可选）限定预览有哪几种看法，如 "preview": { "devices": ["desktop", "phone"] }（按写的顺序，第一个是默认；名字是 book、desktop、phone、plain）
   ui/scene.json             # 画布：控件树、类型、位置、尺寸、外观设置
   ui/presets.json           # 用户存下来的图形预设（第 10.4 节），没有可以不建
   logic/app.logic.yaml      # 逻辑：状态、条件、全局事件、每个控件的行为

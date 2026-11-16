@@ -22,6 +22,7 @@ import { allWindowIds, childrenOfNode, unitOf, type ComponentCreate, type Compon
 import { pageLabel, sheetCount, sheetPageNumbers } from "../pages.ts";
 import { isValidPartPath, MAX_PART_DEPTH, referencedParts } from "../parts.ts";
 import { renderNode, type RenderContext } from "../render.ts";
+import { parsePreviewDevices } from "../devices.ts";
 import { applyBoard, createStageServices, createWaitTracker, GRAPHIC_STAGE_CSS } from "../stage.ts";
 import { setupScreen } from "./screen.ts";
 
@@ -316,7 +317,7 @@ async function start(state: PlayerState): Promise<void> {
   const partParam = (params.get("part") ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
   const part = partParam && isValidPartPath(partParam) ? partParam : "";
   const own = (path: string) => (part ? `${part}/${path}` : path);
-  type Config = { name?: string; kind?: string; styles?: string[]; icon?: string };
+  type Config = { name?: string; kind?: string; styles?: string[]; icon?: string; preview?: unknown };
   const config = (await fetchJson<Config>(base, "project.json")) ?? {};
   const partConfig = part ? await fetchJson<Config>(base, own("project.json")) : null;
   const scene = await fetchJson<Scene>(base, own("ui/scene.json"));
@@ -408,6 +409,8 @@ async function start(state: PlayerState): Promise<void> {
       frames,
       book,
       app: { name: name ?? "未命名项目", icon: icon ? base + icon.split("/").map(encodeURIComponent).join("/") : undefined },
+      // 子项目没写就跟着总项目；写错的地方编辑器的检查会报，这里只用认得出来的
+      allowed: parsePreviewDevices(partConfig?.preview ?? config.preview).devices,
     });
   }
 

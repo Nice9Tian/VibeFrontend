@@ -2,6 +2,7 @@
 // 工具界面里走 fs.ts，命令行里走 Node 的文件接口。
 import { parse as parseYaml } from "yaml";
 import { check } from "./check.ts";
+import { parsePreviewDevices, type PreviewChoice } from "./devices.ts";
 import { DEFAULT_KIND, isKindId, KINDS, type KindId } from "./kinds.ts";
 import { md5 } from "./md5.ts";
 import {
@@ -60,6 +61,7 @@ type ProjectConfig = {
   styles?: unknown;
   export?: { qt?: string; web?: string };
   icon?: unknown;
+  preview?: unknown;
 };
 
 /**
@@ -195,6 +197,7 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
   let kind: KindId = DEFAULT_KIND;
   let stylePaths: string[] = [];
   let icon: string | undefined;
+  let previewDevices: PreviewChoice[] | null = null;
   const extraWindowDocs: string[] = [];
   const boardDocs: Record<string, string> = {};
   const configText = (await io.readText("project.json")) ?? "{}";
@@ -216,6 +219,7 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
       if (config.styles === undefined && master.styles !== undefined) config.styles = master.styles;
       if (config.export === undefined && master.export !== undefined) config.export = master.export;
       if (config.icon === undefined && master.icon !== undefined) config.icon = master.icon;
+      if (config.preview === undefined && master.preview !== undefined) config.preview = master.preview;
     }
     name = config.name ?? name;
     if (config.kind !== undefined) {
@@ -233,6 +237,9 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
     else if (config.styles !== undefined) problems.push({ level: "error", message: "project.json 的 styles 要写成样式表路径的数组，例如 [\"styles/text.css\"]" });
     if (typeof config.icon === "string" && config.icon.trim()) icon = config.icon.trim();
     else if (config.icon !== undefined) problems.push({ level: "error", message: "project.json 的 icon 要写成项目里一张图片的路径，例如 \"assets/icon.svg\"" });
+    const preview = parsePreviewDevices(config.preview);
+    previewDevices = preview.devices;
+    for (const message of preview.problems) problems.push({ level: "error", message });
     qtExportDir = config.export?.qt ?? null;
     webExportDir = config.export?.web ?? null;
   } catch (e) {
@@ -368,6 +375,7 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
     parts,
     partList,
     ...(icon ? { icon } : {}),
+    ...(previewDevices ? { previewDevices } : {}),
     presets,
     scene,
     sceneText: sceneText ?? "",
