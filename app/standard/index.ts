@@ -350,11 +350,122 @@ const createTabBar: ComponentCreate = (el, { props, emit }) => {
   return { update, destroy: () => bar.remove() };
 };
 
+// ---- 拖动重排：整个列表都接受放下（List 和 Tree 共用）----
+//
+// 以前 dragover / drop 只绑在每一行上，行间的缝隙和列表下方的空白都放不下去（浏览器在没有
+// 处理 dragover 的位置不允许放下），拖动很容易失败，拖的时候也看不出会插到哪。现在由容器统一
+// 处理：按光标的纵向位置算出“插在哪一行之前”，并在那里画一条插入线。
+//
+// reorder 事件的含义没有变：{ from, to }，to 是这一项移动之后所在的下标（也就是 move 的 to），
+// 导出的 Qt 程序用的是同一个含义。插入线画在第 p 行之前时：from 在 p 之前，移走后后面的行前移
+// 一位，to = p - 1；否则 to = p。这样线画在哪，放下之后这一项就落在哪。
+
+/** 插在数据下标 insertBefore 之前，对应 reorder 的 to */
+export function reorderTarget(from: number, insertBefore: number): number {
+  return from < insertBefore ? insertBefore - 1 : insertBefore;
+}
+
+interface ReorderDrop {
+  /** 一行开始被拖动时调用，index 是它的数据下标 */
+  begin(index: number): void;
+  /** 重新渲染之后调用：行都换过了，插入线也跟着被清掉了 */
+  rendered(state: { rowCount: number; disabled: boolean }): void;
+}
+
+/**
+ * 让 container 整体接受自己行的拖放。
+ * rowSelector 选出当前画出来的行（每行的 data-vf-row 是数据下标；Tree 里折叠的组的子行不渲染，
+ * 所以选不到，插入位置也就不会落到折叠的组里面去）。
+ */
+function attachReorderDrop(container: HTMLElement, rowSelector: string, lineClass: string, emitReorder: (from: number, to: number) => void): ReorderDrop {
+  let dragFrom = -1;
+  let rowCount = 0;
+  let disabled = false;
+  let line: HTMLElement | null = null;
+
+  /**
+   * 光标纵坐标对应的插入位置。光标在某一行的上半边就插在这一行之前，下半边就插在下一条可见行
+   * 之前；过了最后一行（含列表下方的空白）就是末尾。top 是插入线相对容器内容的纵向位置。
+   */
+  const dropPosition = (clientY: number): { insertBefore: number; top: number } | null => {
+    const rows = [...container.querySelectorAll<HTMLElement>(rowSelector)];
+    if (rows.length === 0) return null;
+    const box = container.getBoundingClientRect();
+    const toContent = (y: number) => y - box.top + container.scrollTop;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i].getBoundingClientRect();
+      if (clientY < r.top + r.height / 2) {
+        const prevBottom = i > 0 ? rows[i - 1].getBoundingClientRect().bottom : r.top - 2;
+        return { insertBefore: Number(rows[i].dataset.vfRow), top: toContent((prevBottom + r.top) / 2) };
+      }
+    }
+    return { insertBefore: rowCount, top: toContent(rows[rows.length - 1].getBoundingClientRect().bottom + 1) };
+  };
+  const hideLine = () => {
+    line?.remove();
+    line = null;
+  };
+  const showLine = (top: number) => {
+    if (!line || !line.isConnected) {
+      line = document.createElement("div");
+      line.className = lineClass;
+      container.append(line);
+    }
+    line.style.top = `${Math.round(top) - 1}px`;
+  };
+
+  // 只接自己这个列表里拖起来的行；别处拖来的东西不处理，浏览器照旧显示“不能放”。
+  // dragenter 和 dragover 都要接：光标刚进到一个新位置（比如行间的缝隙）时浏览器先发 dragenter，
+  // 这时就松手的话，只看 dragenter 有没有被接受；只接 dragover 会让快速拖放落空。
+  const accept = (ev: DragEvent) => {
+    if (dragFrom < 0 || disabled) return;
+    const pos = dropPosition(ev.clientY);
+    if (!pos) return;
+    ev.preventDefault();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+    showLine(pos.top);
+  };
+  container.addEventListener("dragenter", accept);
+  container.addEventListener("dragover", accept);
+  // 在行和缝隙之间移动时也会收到 dragleave（而且浏览器常常不给 relatedTarget），所以按光标是否
+  // 真的出了容器来判断，免得插入线一闪一闪。
+  container.addEventListener("dragleave", (ev) => {
+    const box = container.getBoundingClientRect();
+    if (ev.clientX < box.left || ev.clientX >= box.right || ev.clientY < box.top || ev.clientY >= box.bottom) hideLine();
+  });
+  container.addEventListener("drop", (ev) => {
+    const from = dragFrom;
+    dragFrom = -1;
+    hideLine();
+    if (from < 0 || disabled) return;
+    ev.preventDefault();
+    const pos = dropPosition(ev.clientY);
+    if (!pos) return;
+    const to = reorderTarget(from, pos.insertBefore);
+    if (to !== from) emitReorder(from, to);
+  });
+  container.addEventListener("dragend", () => {
+    dragFrom = -1;
+    hideLine();
+  });
+
+  return {
+    begin(index) {
+      dragFrom = index;
+    },
+    rendered(state) {
+      rowCount = state.rowCount;
+      disabled = state.disabled;
+      line = null;
+    },
+  };
+}
+
 const createList: ComponentCreate = (el, { props, emit }) => {
   const container = document.createElement("div");
   container.className = "vf-std-list";
   el.append(container);
-  let dragFrom = -1;
+  const reorder = attachReorderDrop(container, ".vf-std-list-row", "vf-std-list-dropline", (from, to) => emit("reorder", { from, to }));
 
   const itemLabel = (item: Value): string => {
     if (item && typeof item === "object" && !Array.isArray(item)) {
@@ -368,6 +479,7 @@ const createList: ComponentCreate = (el, { props, emit }) => {
     const disabled = next.enabled === false;
     container.dataset.disabled = String(disabled);
     const items = Array.isArray(next.items) ? next.items : [];
+    reorder.rendered({ rowCount: items.length, disabled });
     const selected = typeof next.value === "number" ? next.value : 0;
     const draggable = Boolean(next.draggable);
     const mutedFrom = typeof next.mutedFrom === "number" ? next.mutedFrom : -1;
@@ -404,25 +516,13 @@ const createList: ComponentCreate = (el, { props, emit }) => {
       if (draggable) {
         row.draggable = true;
         row.addEventListener("dragstart", (ev) => {
-          dragFrom = index;
+          reorder.begin(index);
           if (ev.dataTransfer) {
             ev.dataTransfer.effectAllowed = "move";
             ev.dataTransfer.setData("text/plain", String(index));
           }
         });
-        row.addEventListener("dragover", (ev) => {
-          ev.preventDefault();
-          if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
-        });
-        row.addEventListener("drop", (ev) => {
-          ev.preventDefault();
-          if (disabled) return;
-          const from = dragFrom >= 0 ? dragFrom : Number(ev.dataTransfer?.getData("text/plain") ?? -1);
-          dragFrom = -1;
-          if (from >= 0 && from !== index) {
-            emit("reorder", { from, to: index });
-          }
-        });
+        // dragover / drop 由容器统一处理（attachReorderDrop）
       }
       container.append(row);
     });
@@ -485,13 +585,14 @@ const createTree: ComponentCreate = (el, { props, emit }) => {
   const container = document.createElement("div");
   container.className = "vf-std-tree";
   el.append(container);
-  let dragFrom = -1;
+  const reorder = attachReorderDrop(container, ".vf-std-tree-row", "vf-std-tree-dropline", (from, to) => emit("reorder", { from, to }));
 
   const update = (next: Record<string, Value>) => {
     container.replaceChildren();
     const disabled = next.enabled === false;
     container.dataset.disabled = String(disabled);
     const rows = normalizeTreeItems(next.items ?? []);
+    reorder.rendered({ rowCount: rows.length, disabled });
     const selected = typeof next.value === "number" ? next.value : Number(next.selectedIndex ?? 0);
     const checkable = next.checkable !== false;
     const draggable = next.draggable !== false;
@@ -564,25 +665,13 @@ const createTree: ComponentCreate = (el, { props, emit }) => {
       if (draggable) {
         row.draggable = true;
         row.addEventListener("dragstart", (ev) => {
-          dragFrom = r.index;
+          reorder.begin(r.index);
           if (ev.dataTransfer) {
             ev.dataTransfer.effectAllowed = "move";
             ev.dataTransfer.setData("text/plain", String(r.index));
           }
         });
-        row.addEventListener("dragover", (ev) => {
-          ev.preventDefault();
-          if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
-        });
-        row.addEventListener("drop", (ev) => {
-          ev.preventDefault();
-          if (disabled) return;
-          const from = dragFrom >= 0 ? dragFrom : Number(ev.dataTransfer?.getData("text/plain") ?? -1);
-          dragFrom = -1;
-          if (from >= 0 && from !== r.index) {
-            emit("reorder", { from, to: r.index });
-          }
-        });
+        // dragover / drop 由容器统一处理（attachReorderDrop）
       }
       container.append(row);
     }
@@ -1290,7 +1379,7 @@ export const STANDARD_COMPONENT_LIST: StandardComponent[] = [
     decl: listDecl as ComponentDecl,
     folder: "List",
     create: createList,
-    styleText: `.vf-std-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 1px; width: 100%; height: 100%; padding: 3px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; }
+    styleText: `.vf-std-list { position: relative; box-sizing: border-box; display: flex; flex-direction: column; gap: 1px; width: 100%; height: 100%; padding: 3px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; }
 .vf-std-list[data-disabled="true"] { opacity: 0.5; pointer-events: none; }
 .vf-std-list-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-muted, #64748b); font-size: 12px; }
 .vf-std-list-row { display: flex; align-items: center; gap: 6px; min-height: 20px; padding: 0 6px; border-radius: 4px; color: var(--color-text, #1e293b); font-size: 12px; cursor: pointer; user-select: none; }
@@ -1300,13 +1389,14 @@ export const STANDARD_COMPONENT_LIST: StandardComponent[] = [
 .vf-std-list-check { font-size: 12px; color: #94a3b8; cursor: pointer; }
 .vf-std-list-check.on { color: var(--color-primary, #2563eb); }
 .vf-std-list-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vf-std-list-badge { padding: 1px 4px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); color: inherit; font-size: 10px; }`,
+.vf-std-list-badge { padding: 1px 4px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); color: inherit; font-size: 10px; }
+.vf-std-list-dropline { position: absolute; left: 4px; right: 4px; height: 2px; border-radius: 1px; background: var(--color-primary, #2563eb); box-shadow: 0 0 0 1px var(--color-surface, #ffffff); pointer-events: none; }`,
   },
   {
     decl: treeDecl as ComponentDecl,
     folder: "Tree",
     create: createTree,
-    styleText: `.vf-std-tree { box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; width: 100%; height: 100%; padding: 4px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; user-select: none; }
+    styleText: `.vf-std-tree { position: relative; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; width: 100%; height: 100%; padding: 4px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; user-select: none; }
 .vf-std-tree[data-disabled="true"] { opacity: 0.5; pointer-events: none; }
 .vf-std-tree-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-muted, #64748b); font-size: 12px; }
 .vf-std-tree-row { display: flex; align-items: center; gap: 5px; min-height: 24px; padding-right: 6px; border-radius: 4px; color: var(--color-text, #1e293b); font-size: 12px; cursor: pointer; }
@@ -1316,7 +1406,8 @@ export const STANDARD_COMPONENT_LIST: StandardComponent[] = [
 .vf-std-tree-check { width: 13px; height: 13px; margin: 0; accent-color: var(--color-primary, #2563eb); cursor: pointer; flex-shrink: 0; }
 .vf-std-tree-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vf-std-tree-text.group { font-weight: 600; }
-.vf-std-tree-badge { padding: 1px 4px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); font-size: 10px; flex-shrink: 0; }`,
+.vf-std-tree-badge { padding: 1px 4px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); font-size: 10px; flex-shrink: 0; }
+.vf-std-tree-dropline { position: absolute; left: 4px; right: 4px; height: 2px; border-radius: 1px; background: var(--color-primary, #2563eb); box-shadow: 0 0 0 1px var(--color-surface, #ffffff); pointer-events: none; }`,
   },
   {
     decl: dialogButtonBoxDecl as ComponentDecl,

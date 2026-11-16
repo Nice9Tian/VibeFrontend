@@ -2714,11 +2714,104 @@ var VF = (function(exports) {
 			destroy: () => bar.remove()
 		};
 	};
+	/** 插在数据下标 insertBefore 之前，对应 reorder 的 to */
+	function reorderTarget(from, insertBefore) {
+		return from < insertBefore ? insertBefore - 1 : insertBefore;
+	}
+	/**
+	* 让 container 整体接受自己行的拖放。
+	* rowSelector 选出当前画出来的行（每行的 data-vf-row 是数据下标；Tree 里折叠的组的子行不渲染，
+	* 所以选不到，插入位置也就不会落到折叠的组里面去）。
+	*/
+	function attachReorderDrop(container, rowSelector, lineClass, emitReorder) {
+		let dragFrom = -1;
+		let rowCount = 0;
+		let disabled = false;
+		let line = null;
+		/**
+		* 光标纵坐标对应的插入位置。光标在某一行的上半边就插在这一行之前，下半边就插在下一条可见行
+		* 之前；过了最后一行（含列表下方的空白）就是末尾。top 是插入线相对容器内容的纵向位置。
+		*/
+		const dropPosition = (clientY) => {
+			const rows = [...container.querySelectorAll(rowSelector)];
+			if (rows.length === 0) return null;
+			const box = container.getBoundingClientRect();
+			const toContent = (y) => y - box.top + container.scrollTop;
+			for (let i = 0; i < rows.length; i++) {
+				const r = rows[i].getBoundingClientRect();
+				if (clientY < r.top + r.height / 2) {
+					const prevBottom = i > 0 ? rows[i - 1].getBoundingClientRect().bottom : r.top - 2;
+					return {
+						insertBefore: Number(rows[i].dataset.vfRow),
+						top: toContent((prevBottom + r.top) / 2)
+					};
+				}
+			}
+			return {
+				insertBefore: rowCount,
+				top: toContent(rows[rows.length - 1].getBoundingClientRect().bottom + 1)
+			};
+		};
+		const hideLine = () => {
+			line === null || line === void 0 || line.remove();
+			line = null;
+		};
+		const showLine = (top) => {
+			if (!line || !line.isConnected) {
+				line = document.createElement("div");
+				line.className = lineClass;
+				container.append(line);
+			}
+			line.style.top = `${Math.round(top) - 1}px`;
+		};
+		const accept = (ev) => {
+			if (dragFrom < 0 || disabled) return;
+			const pos = dropPosition(ev.clientY);
+			if (!pos) return;
+			ev.preventDefault();
+			if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+			showLine(pos.top);
+		};
+		container.addEventListener("dragenter", accept);
+		container.addEventListener("dragover", accept);
+		container.addEventListener("dragleave", (ev) => {
+			const box = container.getBoundingClientRect();
+			if (ev.clientX < box.left || ev.clientX >= box.right || ev.clientY < box.top || ev.clientY >= box.bottom) hideLine();
+		});
+		container.addEventListener("drop", (ev) => {
+			const from = dragFrom;
+			dragFrom = -1;
+			hideLine();
+			if (from < 0 || disabled) return;
+			ev.preventDefault();
+			const pos = dropPosition(ev.clientY);
+			if (!pos) return;
+			const to = reorderTarget(from, pos.insertBefore);
+			if (to !== from) emitReorder(from, to);
+		});
+		container.addEventListener("dragend", () => {
+			dragFrom = -1;
+			hideLine();
+		});
+		return {
+			begin(index) {
+				dragFrom = index;
+			},
+			rendered(state) {
+				rowCount = state.rowCount;
+				disabled = state.disabled;
+				line = null;
+			}
+		};
+	}
 	const createList = (el, { props, emit }) => {
 		const container = document.createElement("div");
 		container.className = "vf-std-list";
 		el.append(container);
-		let dragFrom = -1;
+		const reorder = attachReorderDrop(container, ".vf-std-list-row", "vf-std-list-dropline", (from, to) => emit("reorder", {
+			from,
+			to
+		}));
 		const itemLabel = (item) => {
 			if (item && typeof item === "object" && !Array.isArray(item)) {
 				var _ref3, _ref4, _ref5, _ref6, _item$name;
@@ -2731,6 +2824,10 @@ var VF = (function(exports) {
 			const disabled = next.enabled === false;
 			container.dataset.disabled = String(disabled);
 			const items = Array.isArray(next.items) ? next.items : [];
+			reorder.rendered({
+				rowCount: items.length,
+				disabled
+			});
 			const selected = typeof next.value === "number" ? next.value : 0;
 			const draggable = Boolean(next.draggable);
 			const mutedFrom = typeof next.mutedFrom === "number" ? next.mutedFrom : -1;
@@ -2766,26 +2863,11 @@ var VF = (function(exports) {
 				if (draggable) {
 					row.draggable = true;
 					row.addEventListener("dragstart", (ev) => {
-						dragFrom = index;
+						reorder.begin(index);
 						if (ev.dataTransfer) {
 							ev.dataTransfer.effectAllowed = "move";
 							ev.dataTransfer.setData("text/plain", String(index));
 						}
-					});
-					row.addEventListener("dragover", (ev) => {
-						ev.preventDefault();
-						if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
-					});
-					row.addEventListener("drop", (ev) => {
-						var _ev$dataTransfer$getD, _ev$dataTransfer;
-						ev.preventDefault();
-						if (disabled) return;
-						const from = dragFrom >= 0 ? dragFrom : Number((_ev$dataTransfer$getD = (_ev$dataTransfer = ev.dataTransfer) === null || _ev$dataTransfer === void 0 ? void 0 : _ev$dataTransfer.getData("text/plain")) !== null && _ev$dataTransfer$getD !== void 0 ? _ev$dataTransfer$getD : -1);
-						dragFrom = -1;
-						if (from >= 0 && from !== index) emit("reorder", {
-							from,
-							to: index
-						});
 					});
 				}
 				container.append(row);
@@ -2840,13 +2922,20 @@ var VF = (function(exports) {
 		const container = document.createElement("div");
 		container.className = "vf-std-tree";
 		el.append(container);
-		let dragFrom = -1;
+		const reorder = attachReorderDrop(container, ".vf-std-tree-row", "vf-std-tree-dropline", (from, to) => emit("reorder", {
+			from,
+			to
+		}));
 		const update = (next) => {
 			var _next$items, _next$selectedIndex;
 			container.replaceChildren();
 			const disabled = next.enabled === false;
 			container.dataset.disabled = String(disabled);
 			const rows = normalizeTreeItems((_next$items = next.items) !== null && _next$items !== void 0 ? _next$items : []);
+			reorder.rendered({
+				rowCount: rows.length,
+				disabled
+			});
 			const selected = typeof next.value === "number" ? next.value : Number((_next$selectedIndex = next.selectedIndex) !== null && _next$selectedIndex !== void 0 ? _next$selectedIndex : 0);
 			const checkable = next.checkable !== false;
 			const draggable = next.draggable !== false;
@@ -2922,26 +3011,11 @@ var VF = (function(exports) {
 				if (draggable) {
 					row.draggable = true;
 					row.addEventListener("dragstart", (ev) => {
-						dragFrom = r.index;
+						reorder.begin(r.index);
 						if (ev.dataTransfer) {
 							ev.dataTransfer.effectAllowed = "move";
 							ev.dataTransfer.setData("text/plain", String(r.index));
 						}
-					});
-					row.addEventListener("dragover", (ev) => {
-						ev.preventDefault();
-						if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
-					});
-					row.addEventListener("drop", (ev) => {
-						var _ev$dataTransfer$getD2, _ev$dataTransfer2;
-						ev.preventDefault();
-						if (disabled) return;
-						const from = dragFrom >= 0 ? dragFrom : Number((_ev$dataTransfer$getD2 = (_ev$dataTransfer2 = ev.dataTransfer) === null || _ev$dataTransfer2 === void 0 ? void 0 : _ev$dataTransfer2.getData("text/plain")) !== null && _ev$dataTransfer$getD2 !== void 0 ? _ev$dataTransfer$getD2 : -1);
-						dragFrom = -1;
-						if (from >= 0 && from !== r.index) emit("reorder", {
-							from,
-							to: r.index
-						});
 					});
 				}
 				container.append(row);
@@ -3593,7 +3667,7 @@ var VF = (function(exports) {
 			decl: component_default$9,
 			folder: "List",
 			create: createList,
-			styleText: `.vf-std-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 1px; width: 100%; height: 100%; padding: 3px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; }
+			styleText: `.vf-std-list { position: relative; box-sizing: border-box; display: flex; flex-direction: column; gap: 1px; width: 100%; height: 100%; padding: 3px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; }
 .vf-std-list[data-disabled="true"] { opacity: 0.5; pointer-events: none; }
 .vf-std-list-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-muted, #64748b); font-size: 12px; }
 .vf-std-list-row { display: flex; align-items: center; gap: 6px; min-height: 20px; padding: 0 6px; border-radius: 4px; color: var(--color-text, #1e293b); font-size: 12px; cursor: pointer; user-select: none; }
@@ -3603,13 +3677,14 @@ var VF = (function(exports) {
 .vf-std-list-check { font-size: 12px; color: #94a3b8; cursor: pointer; }
 .vf-std-list-check.on { color: var(--color-primary, #2563eb); }
 .vf-std-list-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vf-std-list-badge { padding: 1px 4px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); color: inherit; font-size: 10px; }`
+.vf-std-list-badge { padding: 1px 4px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); color: inherit; font-size: 10px; }
+.vf-std-list-dropline { position: absolute; left: 4px; right: 4px; height: 2px; border-radius: 1px; background: var(--color-primary, #2563eb); box-shadow: 0 0 0 1px var(--color-surface, #ffffff); pointer-events: none; }`
 		},
 		{
 			decl: component_default,
 			folder: "Tree",
 			create: createTree,
-			styleText: `.vf-std-tree { box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; width: 100%; height: 100%; padding: 4px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; user-select: none; }
+			styleText: `.vf-std-tree { position: relative; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; width: 100%; height: 100%; padding: 4px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--color-surface, #ffffff); overflow-y: auto; user-select: none; }
 .vf-std-tree[data-disabled="true"] { opacity: 0.5; pointer-events: none; }
 .vf-std-tree-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-muted, #64748b); font-size: 12px; }
 .vf-std-tree-row { display: flex; align-items: center; gap: 5px; min-height: 24px; padding-right: 6px; border-radius: 4px; color: var(--color-text, #1e293b); font-size: 12px; cursor: pointer; }
@@ -3619,7 +3694,8 @@ var VF = (function(exports) {
 .vf-std-tree-check { width: 13px; height: 13px; margin: 0; accent-color: var(--color-primary, #2563eb); cursor: pointer; flex-shrink: 0; }
 .vf-std-tree-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vf-std-tree-text.group { font-weight: 600; }
-.vf-std-tree-badge { padding: 1px 4px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); font-size: 10px; flex-shrink: 0; }`
+.vf-std-tree-badge { padding: 1px 4px; border-radius: 3px; background: rgba(148, 163, 184, 0.2); font-size: 10px; flex-shrink: 0; }
+.vf-std-tree-dropline { position: absolute; left: 4px; right: 4px; height: 2px; border-radius: 1px; background: var(--color-primary, #2563eb); box-shadow: 0 0 0 1px var(--color-surface, #ffffff); pointer-events: none; }`
 		},
 		{
 			decl: component_default$12,
