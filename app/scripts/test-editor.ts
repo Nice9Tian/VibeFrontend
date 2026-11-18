@@ -15,6 +15,7 @@ import { controlReference, controlsReference } from "../src/refs.ts";
 import { clampPanels, DEFAULT_PANELS } from "../src/panels.ts";
 import { nodeIO } from "./node-io.ts";
 import { reorderTarget } from "../standard/index.ts";
+import { farthestRayHit, nearestOnOutline } from "../src/outline.ts";
 import {
   applyAddNodeToScene,
   applyDeleteFromScene,
@@ -689,6 +690,47 @@ test("直线与曲线拐点：添加、移动、删除拐点及多段路径生�
   const updated = updateLineBend(arr, 0, { x: 30, y: 40 });
   assert.equal(formatBends(updated), "30,40");
   assert.deepEqual(removeLineBend(updated, 0), []);
+});
+
+// 6b. 线头挂在形状上：在节点自己的坐标系里求交点和最近点，再换算到画布，和把整圈轮廓换算后再算一样
+test("轮廓几何：边的中点与最近点在局部坐标里算，旋转父容器里也和整圈换算的结果一致", () => {
+  // 菱形的一圈点（局部坐标，宽 120 高 80）
+  const diamond = [
+    { x: 60, y: 0 },
+    { x: 120, y: 40 },
+    { x: 60, y: 80 },
+    { x: 0, y: 40 },
+  ];
+  const center = { x: 60, y: 40 };
+  assert.deepEqual(farthestRayHit(diamond, center, { x: 0, y: -1 }), { x: 60, y: 0 }, "朝上打到上顶点");
+  assert.deepEqual(farthestRayHit(diamond, center, { x: 1, y: 0 }), { x: 120, y: 40 }, "朝右打到右顶点");
+  assert.equal(farthestRayHit([], center, { x: 1, y: 0 }), null, "没有轮廓就没有交点");
+  // (100, 0) 投到右上斜边 (60,0)→(120,40)：t = 2400 / 5200 = 6/13，垂足 (60 + 60·6/13, 40·6/13)，距离 = 叉积 / 边长
+  const near = nearestOnOutline(diamond, { x: 100, y: 0 })!;
+  assert.ok(Math.abs(near.point.x - (60 + 360 / 13)) < 1e-9 && Math.abs(near.point.y - 240 / 13) < 1e-9, `落在右上斜边的垂足，实测 ${JSON.stringify(near.point)}`);
+  assert.ok(Math.abs(near.distance - 1600 / Math.hypot(60, 40)) < 1e-9);
+  assert.equal(nearestOnOutline([], { x: 0, y: 0 }), null);
+
+  // 菱形放进旋转 30° 的父容器、自己再转 25°：局部算完换算一个点 = 整圈换算后在画布上算
+  const scene = makeBaseScene();
+  scene.nodes.box1.rotation = 30;
+  scene.nodes.box1.children = ["child1", "gem"];
+  scene.nodes.gem = { type: "Shape", x: 20, y: -10, width: 120, height: 80, rotation: 25, props: { shape: "diamond" } };
+  const toWorld = (p: { x: number; y: number }) => nodeLocalToWorldInScene(scene, "gem", p);
+  const worldOutline = diamond.map(toWorld);
+  const worldCenter = toWorld(center);
+  const totalRotation = worldRotationInScene(scene, "gem");
+  for (const dir of [{ x: 0, y: -1 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 }]) {
+    const viaLocal = toWorld(farthestRayHit(diamond, center, dir)!);
+    const viaWorld = farthestRayHit(worldOutline, worldCenter, rotatePoint(dir, { x: 0, y: 0 }, totalRotation))!;
+    assert.ok(Math.hypot(viaLocal.x - viaWorld.x, viaLocal.y - viaWorld.y) < 1e-6, `方向 ${JSON.stringify(dir)} 的交点应一致`);
+  }
+  const probe = { x: 260, y: 40 };
+  const local = nearestOnOutline(diamond, worldToNodeLocalInScene(scene, "gem", probe))!;
+  const world = nearestOnOutline(worldOutline, probe)!;
+  const localInWorld = toWorld(local.point);
+  assert.ok(Math.hypot(localInWorld.x - world.point.x, localInWorld.y - world.point.y) < 1e-6, "最近点应一致");
+  assert.ok(Math.abs(local.distance - world.distance) < 1e-6, "距离在旋转平移下不变");
 });
 
 // 7. 删除控件时检测并询问/清理 YAML 条目
