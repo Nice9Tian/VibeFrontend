@@ -3,16 +3,15 @@
 // 并与导出的 Qt 程序实际运行时的控件几何（layoutDump）逐一比较，检查偏差不超过 3 像素。
 //
 //   node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { loadProjectFiles } from "../src/loader.ts";
 import { nodeIO } from "./node-io.ts";
-import { findBrowserExecutable, HEADLESS_BROWSER_ARGS } from "./browser-exe.ts";
+import { launchHeadlessBrowser, runHeadlessBrowserCommand } from "./headless-browser.ts";
 import { buildQtEnv } from "./qt-env.ts";
 
 interface Box {
@@ -442,8 +441,6 @@ async function measureInHeadlessBrowser(
   userAgent: string;
   scenarios: Array<Record<string, Box>>;
 }> {
-  const browserExe = findBrowserExecutable();
-  const tmpProfileDir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-layout-chrome-"));
 
   let resolveReport!: (val: { userAgent: string; scenarios: Array<Record<string, Box>> }) => void;
   let rejectReport!: (err: Error) => void;
@@ -549,16 +546,7 @@ async function measureInHeadlessBrowser(
   const address = server.address() as { port: number };
   const url = `http://127.0.0.1:${address.port}/`;
 
-  const proc = spawn(
-    browserExe,
-    [
-      ...HEADLESS_BROWSER_ARGS,
-      "--window-size=1600,1200",
-      `--user-data-dir=${tmpProfileDir}`,
-      url,
-    ],
-    { stdio: "ignore" },
-  );
+  const browser = launchHeadlessBrowser(url, ["--window-size=1600,1200"]);
 
   const timeout = setTimeout(() => {
     rejectReport(new Error("无头浏览器测量 DOM 超时（15s）"));
@@ -567,40 +555,13 @@ async function measureInHeadlessBrowser(
   try {
     const res = await reportPromise;
     if (webShotOutPath) {
-      const shotProfileDir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-shot-chrome-"));
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const shotProc = spawn(
-            browserExe,
-            [
-              ...HEADLESS_BROWSER_ARGS,
-              "--hide-scrollbars",
-              "--window-size=1280,800",
-              `--user-data-dir=${shotProfileDir}`,
-              `--screenshot=${webShotOutPath}`,
-              `${url}?shot=1`,
-            ],
-            { stdio: "ignore" },
-          );
-          shotProc.on("exit", () => resolve());
-          shotProc.on("error", reject);
-        });
-      } finally {
-        try {
-          fs.rmSync(shotProfileDir, { recursive: true, force: true });
-        } catch {}
-      }
+      await runHeadlessBrowserCommand(`${url}?shot=1`, ["--hide-scrollbars", "--window-size=1280,800", `--screenshot=${webShotOutPath}`]);
     }
     return res;
   } finally {
     clearTimeout(timeout);
-    try {
-      proc.kill();
-    } catch {}
+    await browser.close();
     server.close();
-    try {
-      fs.rmSync(tmpProfileDir, { recursive: true, force: true });
-    } catch {}
   }
 }
 

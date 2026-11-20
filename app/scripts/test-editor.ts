@@ -359,6 +359,7 @@ test("测试分级：只有碰到 Qt 导出的改动才跑真实 Qt 程序", () 
     "examples/animean/design/ui/scene.json",
     "examples/minimal/qt/ui/CMakeLists.txt",
     "app/scripts/test-dock.ts",
+    "app/scripts/headless-browser.ts",
   ]) {
     assert.ok(needsQt(file), `${file} 应该触发 Qt 测试`);
   }

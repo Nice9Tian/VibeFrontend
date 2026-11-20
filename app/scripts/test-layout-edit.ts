@@ -5,7 +5,6 @@
 //    从全新空项目出发，仅通过编辑模式鼠标拖拽与面板交互搭出“图层面板”（Dock + HBox 工具栏 + 列表 + 显隐栏 + 视图菜单项 + 业务状态 layer.visible），
 //    并在真实浏览器内验证锁定拦截与 Ctrl+Z / Ctrl+Y 撤销重做，最后与 examples/animean/design 对跑同一套图层面板用例，结果完全一致。
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -79,7 +78,7 @@ import {
 } from "../src/stateedit.ts";
 import { setNodesLocked } from "../src/transform.ts";
 import { nodeIO, readTree } from "./node-io.ts";
-import { findBrowserExecutable } from "./browser-exe.ts";
+import { launchHeadlessBrowser, type HeadlessBrowser } from "./headless-browser.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..");
@@ -758,7 +757,6 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
 
   const vitePort = await getFreePort();
   const cdpPort = await getFreePort();
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-chrome-profile-"));
 
   const { createServer } = await import("vite");
   const server = await createServer({
@@ -769,30 +767,16 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
   });
   await server.listen();
 
-  let chromeProc: ChildProcess | null = null;
+  let browser: HeadlessBrowser | null = null;
   let cdp: CdpSession | null = null;
 
   try {
-    const chromeBin = findBrowserExecutable();
-    chromeProc = spawn(
-      chromeBin,
-      [
-        "--headless=new",
-        "--disable-gpu",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--window-size=1600,1000",
-        `--remote-debugging-port=${cdpPort}`,
-        `--user-data-dir=${userDataDir}`,
-        `http://127.0.0.1:${vitePort}/`,
-      ],
-      { stdio: "ignore" },
-    );
+    browser = launchHeadlessBrowser(`http://127.0.0.1:${vitePort}/`, ["--window-size=1600,1000", `--remote-debugging-port=${cdpPort}`]);
 
     // 等待 CDP 端口就绪并连接页面
     let wsUrl = "";
     let chromeExit: string | null = null;
-    chromeProc.once("exit", (code, signal) => {
+    browser.process.once("exit", (code, signal) => {
       chromeExit = `code=${code} signal=${signal}`;
     });
     const deadline = Date.now() + 30000;
@@ -1818,15 +1802,12 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     assert.deepEqual(timingProblems, [], "保存与重载时序");
   } finally {
     cdp?.close();
-    if (chromeProc) {
-      chromeProc.kill();
-    }
+    await browser?.close();
     await server.close();
     if (prevEnv === undefined) delete process.env.VF_PROJECT;
     else process.env.VF_PROJECT = prevEnv;
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
-      fs.rmSync(userDataDir, { recursive: true, force: true });
     } catch {
       // ignore cleanup error on Windows
     }

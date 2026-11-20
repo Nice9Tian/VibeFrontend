@@ -10,10 +10,9 @@
 //    这一项要启动 Qt 程序，带 --qt 才跑
 
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -66,7 +65,7 @@ import {
 } from "../src/model.ts";
 import { Runtime } from "../src/runtime.ts";
 import { nodeIO } from "./node-io.ts";
-import { findBrowserExecutable, HEADLESS_BROWSER_ARGS } from "./browser-exe.ts";
+import { launchHeadlessBrowser } from "./headless-browser.ts";
 import { animeanQtExe, buildQtEnv } from "./qt-env.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1105,8 +1104,6 @@ function buildInteractiveHtmlPage(): string {
 
 async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
   const project = await loadProjectFiles(nodeIO(ANIMEAN_DIR), null);
-  const browserExe = findBrowserExecutable();
-  const tmpProfileDir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-dock-chrome-"));
 
   interface ReportPayload {
     userAgent: string;
@@ -1201,16 +1198,7 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
   const address = server.address() as { port: number };
   const url = `http://127.0.0.1:${address.port}/`;
 
-  const proc = spawn(
-    browserExe,
-    [
-      ...HEADLESS_BROWSER_ARGS,
-      "--window-size=1600,1200",
-      `--user-data-dir=${tmpProfileDir}`,
-      url,
-    ],
-    { stdio: "ignore" },
-  );
+  const browser = launchHeadlessBrowser(url, ["--window-size=1600,1200"]);
 
   const timeout = setTimeout(() => {
     rejectReport(new Error("无头浏览器交互测试超时（15s）"));
@@ -1221,14 +1209,9 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
     report = await reportPromise;
   } finally {
     clearTimeout(timeout);
-    try {
-      proc.kill();
-    } catch {}
+    await browser.close();
     server.closeAllConnections?.();
     server.close();
-    try {
-      fs.rmSync(tmpProfileDir, { recursive: true, force: true });
-    } catch {}
   }
 
   console.log(`无头浏览器真实 DOM 交互（${report.userAgent}）：`);

@@ -137,6 +137,7 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 | `scripts/test-mode-switch.ts` | 用无头浏览器确认切换编辑、预览模式时设计窗口的位置不变，预览改外观不能改尺寸 |
 | `scripts/test-all.ts` | `npm test` 的入口：按改动范围选测试，分级判断在 `scripts/test-tiers.ts`，用法见根目录 `AGENTS.md` 的“测试”一节 |
 | `scripts/qt-env.ts` | 启动 Qt 程序的共用设置，默认不开窗口 |
+| `scripts/headless-browser.ts` | 无头浏览器测试共用的启动和清理：找 Chrome 或 Edge（先看 `CHROME_BIN`），带上统一的参数，用完连同子进程一起停掉、删掉临时配置目录 |
 | `scripts/test-editor.ts` | 编辑器纯函数（`history.ts`、`transform.ts` 等）的单元测试入口（`npm run test:editor`） |
 | `scripts/test-step2.ts` | 步骤 2 核心能力与复审项的回归测试入口（含无头浏览器实测） |
 | `scripts/test-dock.ts` | 步骤 3 Qt 停靠与浮动嵌入框回归测试入口（含模型单测、无头浏览器真实 DOM 交互、停靠变形后与 Qt 几何比对）；用环境变量 `VF_ANIMEAN_EXE` 指定 Qt 程序，找不到时第 3 项不算通过 |
