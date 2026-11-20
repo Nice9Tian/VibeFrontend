@@ -12,7 +12,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findBrowserExecutable } from "./browser-exe.ts";
+import { findBrowserExecutable, HEADLESS_BROWSER_ARGS } from "./browser-exe.ts";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -135,10 +135,7 @@ async function main(): Promise<void> {
     browser = spawn(
       findBrowserExecutable(),
       [
-        "--headless=new",
-        "--disable-gpu",
-        "--no-first-run",
-        "--no-default-browser-check",
+        ...HEADLESS_BROWSER_ARGS,
         `--remote-debugging-port=${cdpPort}`,
         `--user-data-dir=${path.join(workDir, "profile")}`,
         `http://127.0.0.1:${vitePort}/`,
