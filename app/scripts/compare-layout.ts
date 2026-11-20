@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { loadProjectFiles } from "../src/loader.ts";
 import { nodeIO } from "./node-io.ts";
-import { findBrowserExecutable } from "./browser-exe.ts";
+import { findBrowserExecutable, HEADLESS_BROWSER_ARGS } from "./browser-exe.ts";
 import { buildQtEnv } from "./qt-env.ts";
 
 interface Box {
@@ -552,10 +552,7 @@ async function measureInHeadlessBrowser(
   const proc = spawn(
     browserExe,
     [
-      "--headless=new",
-      "--disable-gpu",
-      "--no-first-run",
-      "--no-default-browser-check",
+      ...HEADLESS_BROWSER_ARGS,
       "--window-size=1600,1200",
       `--user-data-dir=${tmpProfileDir}`,
       url,
@@ -576,11 +573,8 @@ async function measureInHeadlessBrowser(
           const shotProc = spawn(
             browserExe,
             [
-              "--headless=new",
-              "--disable-gpu",
+              ...HEADLESS_BROWSER_ARGS,
               "--hide-scrollbars",
-              "--no-first-run",
-              "--no-default-browser-check",
               "--window-size=1280,800",
               `--user-data-dir=${shotProfileDir}`,
               `--screenshot=${webShotOutPath}`,
