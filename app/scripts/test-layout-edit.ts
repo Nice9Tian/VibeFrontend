@@ -79,7 +79,7 @@ import {
 } from "../src/stateedit.ts";
 import { setNodesLocked } from "../src/transform.ts";
 import { nodeIO, readTree } from "./node-io.ts";
-import { findBrowserExecutable } from "./browser-exe.ts";
+import { findBrowserExecutable, HEADLESS_BROWSER_ARGS } from "./browser-exe.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..");
@@ -777,10 +777,7 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     chromeProc = spawn(
       chromeBin,
       [
-        "--headless=new",
-        "--disable-gpu",
-        "--no-first-run",
-        "--no-default-browser-check",
+        ...HEADLESS_BROWSER_ARGS,
         "--window-size=1600,1000",
         `--remote-debugging-port=${cdpPort}`,
         `--user-data-dir=${userDataDir}`,
