@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { loadProjectFiles } from "../src/loader.ts";
 import { nodeIO } from "./node-io.ts";
+import { findBrowserExecutable } from "./browser-exe.ts";
 import { buildQtEnv } from "./qt-env.ts";
 
 interface Box {
@@ -33,20 +34,6 @@ const SIZES: Array<{ width: number; height: number; note?: string }> = [
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..");
-
-function findBrowserExecutable(): string {
-  const candidates = [
-    process.env.CHROME_BIN,
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-  ].filter((p): p is string => Boolean(p));
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  throw new Error("未找到无头浏览器可执行文件（Chrome 或 Edge）");
-}
 
 function buildHtmlPage(): string {
   return `<!doctype html>
