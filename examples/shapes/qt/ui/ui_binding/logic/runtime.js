@@ -4416,10 +4416,10 @@ var VF = (function(exports) {
 			dockLayout: next
 		}));
 	}
-	function computeReferenceAreaSplitSpan(layout, scene, winNode, area) {
+	function computeReferenceAreaSplitSpan(layout, scene, winNode, area, windowSize) {
 		var _winNode$menuBar$heig, _statusNode$height, _areaSpec$splitOrient4, _layout$areas$top$gro2, _layout$areas$top4, _layout$areas$bottom$2, _layout$areas$bottom4;
-		const W = (winNode === null || winNode === void 0 ? void 0 : winNode.width) && winNode.width > 0 ? winNode.width : 1280;
-		const H = (winNode === null || winNode === void 0 ? void 0 : winNode.height) && winNode.height > 0 ? winNode.height : 800;
+		const W = windowSize && windowSize.width > 0 ? windowSize.width : (winNode === null || winNode === void 0 ? void 0 : winNode.width) && winNode.width > 0 ? winNode.width : 1280;
+		const H = windowSize && windowSize.height > 0 ? windowSize.height : (winNode === null || winNode === void 0 ? void 0 : winNode.height) && winNode.height > 0 ? winNode.height : 800;
 		const menuH = (winNode === null || winNode === void 0 ? void 0 : winNode.menuBar) ? Math.max(0, Math.round((_winNode$menuBar$heig = winNode.menuBar.height) !== null && _winNode$menuBar$heig !== void 0 ? _winNode$menuBar$heig : 28)) : 0;
 		const statusNode = (winNode === null || winNode === void 0 ? void 0 : winNode.statusBar) ? scene.nodes[winNode.statusBar] : void 0;
 		const statusH = statusNode ? Math.round((_statusNode$height = statusNode.height) !== null && _statusNode$height !== void 0 ? _statusNode$height : 28) : 0;
@@ -4451,7 +4451,7 @@ var VF = (function(exports) {
 		return Math.max(80, midH - topH - bottomH);
 	}
 	/** 拖动同一停靠区内并排组之间的分隔条，仅在相邻的第 groupIndex 与第 groupIndex+1 组之间重新分配尺寸，保持其余组不变。 */
-	function dockResizeSplit(layout, scene, winNode, area, groupIndex, size) {
+	function dockResizeSplit(layout, scene, winNode, area, groupIndex, size, windowSize) {
 		var _areaSpec$groups, _areaSpec$splitOrient5, _winNode$width12, _winNode$height12;
 		const next = cloneDockLayout(layout);
 		const areaSpec = next.areas[area];
@@ -4477,7 +4477,7 @@ var VF = (function(exports) {
 				dockLayout: next
 			}));
 		}
-		const curSizes = distributeGroupAxisSizes(computeReferenceAreaSplitSpan(next, scene, winNode, area), groups.map((group) => {
+		const curSizes = distributeGroupAxisSizes(computeReferenceAreaSplitSpan(next, scene, winNode, area, windowSize), groups.map((group) => {
 			var _ref7;
 			const activeId = group.active && group.tabs.includes(group.active) ? group.active : group.tabs[0];
 			return {
@@ -5088,6 +5088,32 @@ var VF = (function(exports) {
 		},
 		children: true
 	};
+	/**
+	* 子项目：平面设计里放在页面上的一块，内容在 parts/<名字>/ 这个子项目里单独做，这里只显示，不能直接改。
+	* 子项目一改，这里跟着变。尺寸是这一块在总项目页面里占的地方，子项目里那一页的尺寸和它一样（拆出来时就是这样）。
+	*/
+	const PART_DECL = {
+		type: "Part",
+		label: "子项目",
+		description: "显示一个子项目的内容；双击打开子项目去改",
+		defaultSize: {
+			width: 80,
+			height: 60
+		},
+		props: {
+			part: {
+				type: "string",
+				default: "",
+				label: "子项目文件夹（parts/名字）"
+			},
+			board: {
+				type: "string",
+				default: "",
+				label: "子项目里的页面（不写是第一页）"
+			}
+		},
+		children: false
+	};
 	const LAYOUT_TYPE_KINDS = {
 		VBox: "vbox",
 		HBox: "hbox",
@@ -5190,6 +5216,7 @@ var VF = (function(exports) {
 		if (type === "Dialog") return DIALOG_DECL;
 		if (type === "Page" && project.kind === "graphic") return PAGE_DECL;
 		if (type === "Group" && project.kind === "graphic") return GROUP_DECL;
+		if (type === "Part" && project.kind === "graphic") return PART_DECL;
 		if (type === "Container" || type === "Window" || type in LAYOUT_TYPE_KINDS) return CONTAINER_DECL;
 		if (type === "External") return EXTERNAL_DECL;
 		if (type === "Shape") return SHAPE_DECL;
@@ -5968,6 +5995,245 @@ var VF = (function(exports) {
 		return boxes;
 	}
 	//#endregion
+	//#region src/pages.ts
+	const numberProp = (node, key, fallback) => {
+		var _node$props;
+		const value = (_node$props = node.props) === null || _node$props === void 0 ? void 0 : _node$props[key];
+		return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+	};
+	/** 页面由几张纸拼成。写得不对（小于 1、不是整数）就当 1。 */
+	function sheetCount(node) {
+		const raw = Math.round(numberProp(node, "sheets", 1));
+		return raw >= 1 && raw <= 16 ? raw : 1;
+	}
+	/**
+	* 一个页面的版面：每张纸的方框和版心、中缝、出血。
+	* 靠中缝的一边用“内边距”，靠外的一边用“外边距”；单页没有中缝，左右都用外边距。
+	*/
+	function pageGeometry(node) {
+		const sheets = sheetCount(node);
+		const sheetWidth = node.width / sheets;
+		const top = Math.max(0, numberProp(node, "marginTop", 0));
+		const bottom = Math.max(0, numberProp(node, "marginBottom", 0));
+		const outer = Math.max(0, numberProp(node, "marginOuter", 0));
+		const inner = Math.max(0, numberProp(node, "marginInner", 0));
+		const sheetRects = [];
+		const liveAreas = [];
+		const folds = [];
+		for (let i = 0; i < sheets; i++) {
+			const x = i * sheetWidth;
+			const left = sheets === 1 || i === 0 ? outer : inner;
+			const right = sheets === 1 || i === sheets - 1 ? outer : inner;
+			sheetRects.push({
+				x,
+				y: 0,
+				width: sheetWidth,
+				height: node.height
+			});
+			liveAreas.push({
+				x: x + left,
+				y: top,
+				width: Math.max(0, sheetWidth - left - right),
+				height: Math.max(0, node.height - top - bottom)
+			});
+			if (i > 0) folds.push(x);
+		}
+		return {
+			sheets,
+			sheetWidth,
+			sheetRects,
+			liveAreas,
+			folds
+		};
+	}
+	/** 全部页面，按页序。 */
+	function pageIds(scene) {
+		return allWindowIds(scene).filter((id) => {
+			var _scene$nodes$id;
+			return ((_scene$nodes$id = scene.nodes[id]) === null || _scene$nodes$id === void 0 ? void 0 : _scene$nodes$id.type) === "Page";
+		});
+	}
+	/**
+	* 包封页面的 ID：scene.cover 是 "wrap"，而且第一个页面正好由两张纸拼成（左封底、右封面）。
+	* 写了 wrap 但第一个页面不是两张纸时不算，页码照顺序排，检查里会提示。
+	*/
+	function coverWrapId(scene) {
+		if (scene.cover !== "wrap") return null;
+		const first = pageIds(scene)[0];
+		return first && sheetCount(scene.nodes[first]) === 2 ? first : null;
+	}
+	/**
+	* 每个页面里每张纸是第几页（从 1 数起），从左到右。
+	* 平常按页面顺序数下去；有包封时，包封的左半是最后一页、右半是第 1 页，后面的页面从第 2 页数起，
+	* 这样翻开封面看到的是第 2–3 页这一版。
+	*/
+	function sheetPageNumbers(scene) {
+		const ids = pageIds(scene);
+		const wrap = coverWrapId(scene);
+		const total = ids.reduce((sum, id) => sum + sheetCount(scene.nodes[id]), 0);
+		const result = /* @__PURE__ */ new Map();
+		let next = 1;
+		for (const id of ids) {
+			if (id === wrap) {
+				result.set(id, [total, 1]);
+				next = 2;
+				continue;
+			}
+			const count = sheetCount(scene.nodes[id]);
+			result.set(id, Array.from({ length: count }, (_, i) => next + i));
+			next += count;
+		}
+		return result;
+	}
+	//#endregion
+	//#region src/boardlayout.ts
+	const layoutCache = /* @__PURE__ */ new WeakMap();
+	/** 页面之间的垂直间距：取全部页面最大高度的 12%，没有页面时为 0。 */
+	function boardGap(scene) {
+		const ids = pageIds(scene);
+		if (ids.length === 0) return 0;
+		let maxHeight = 0;
+		for (const id of ids) {
+			var _scene$nodes$id$heigh, _scene$nodes$id;
+			const h = (_scene$nodes$id$heigh = (_scene$nodes$id = scene.nodes[id]) === null || _scene$nodes$id === void 0 ? void 0 : _scene$nodes$id.height) !== null && _scene$nodes$id$heigh !== void 0 ? _scene$nodes$id$heigh : 0;
+			if (h > maxHeight) maxHeight = h;
+		}
+		return roundInScene(scene, maxHeight * .12);
+	}
+	/** 页面内部书脊相对页面左边的距离：跨页取最中间的中缝，单页按奇偶页码放左或右。 */
+	function localSpineOffset(node, firstPageNumber) {
+		const geo = pageGeometry(node);
+		if (geo.sheets >= 2) {
+			var _geo$folds$;
+			const mid = node.width / 2;
+			if (geo.sheets % 2 === 0) return mid;
+			let best = (_geo$folds$ = geo.folds[0]) !== null && _geo$folds$ !== void 0 ? _geo$folds$ : mid;
+			let bestDist = Math.abs(best - mid);
+			for (const fold of geo.folds) {
+				const dist = Math.abs(fold - mid);
+				if (dist < bestDist - 1e-9) {
+					best = fold;
+					bestDist = dist;
+				}
+			}
+			return best;
+		}
+		if (firstPageNumber !== void 0 && firstPageNumber % 2 === 0) return node.width;
+		return 0;
+	}
+	function buildCacheKey(scene, ids) {
+		var _scene$unit, _scene$cover;
+		let key = `${(_scene$unit = scene.unit) !== null && _scene$unit !== void 0 ? _scene$unit : "px"}|${(_scene$cover = scene.cover) !== null && _scene$cover !== void 0 ? _scene$cover : ""}|${scene.root}`;
+		for (const id of ids) {
+			const n = scene.nodes[id];
+			const hasX = typeof n.x === "number" && Number.isFinite(n.x) ? String(n.x) : "";
+			const hasY = typeof n.y === "number" && Number.isFinite(n.y) ? String(n.y) : "";
+			key += `;${id}:${n.width}x${n.height}:${sheetCount(n)}:${hasX},${hasY}`;
+		}
+		return key;
+	}
+	function ensureLayout(scene) {
+		const ids = pageIds(scene);
+		const key = buildCacheKey(scene, ids);
+		const hit = layoutCache.get(scene);
+		if (hit && hit.key === key) return hit;
+		const list = [];
+		const places = /* @__PURE__ */ new Map();
+		if (ids.length > 0) {
+			const gap = boardGap(scene);
+			const numbers = sheetPageNumbers(scene);
+			let rootSpine = 0;
+			let nextY = 0;
+			for (let i = 0; i < ids.length; i++) {
+				var _numbers$get;
+				const id = ids[i];
+				const node = scene.nodes[id];
+				const width = roundInScene(scene, node.width);
+				const height = roundInScene(scene, node.height);
+				const offset = localSpineOffset(node, (_numbers$get = numbers.get(id)) === null || _numbers$get === void 0 ? void 0 : _numbers$get[0]);
+				if (i === 0) {
+					const x = 0;
+					const y = 0;
+					const spine = roundInScene(scene, x + offset);
+					rootSpine = spine;
+					nextY = roundInScene(scene, y + height + gap);
+					list.push({
+						id,
+						x,
+						y,
+						width,
+						height,
+						spine
+					});
+					places.set(id, {
+						x,
+						y
+					});
+					continue;
+				}
+				if (typeof node.x === "number" && Number.isFinite(node.x) && typeof node.y === "number" && Number.isFinite(node.y)) {
+					const x = roundInScene(scene, node.x);
+					const y = roundInScene(scene, node.y);
+					const spine = roundInScene(scene, x + offset);
+					list.push({
+						id,
+						x,
+						y,
+						width,
+						height,
+						spine
+					});
+					places.set(id, {
+						x,
+						y
+					});
+				} else {
+					const x = roundInScene(scene, rootSpine - offset);
+					const y = nextY;
+					const spine = roundInScene(scene, x + offset);
+					nextY = roundInScene(scene, y + height + gap);
+					list.push({
+						id,
+						x,
+						y,
+						width,
+						height,
+						spine
+					});
+					places.set(id, {
+						x,
+						y
+					});
+				}
+			}
+		}
+		const anchor = places.get(scene.root);
+		if (anchor && (anchor.x !== 0 || anchor.y !== 0)) for (const place of list) {
+			place.x = roundInScene(scene, place.x - anchor.x);
+			place.y = roundInScene(scene, place.y - anchor.y);
+			place.spine = roundInScene(scene, place.spine - anchor.x);
+			places.set(place.id, {
+				x: place.x,
+				y: place.y
+			});
+		}
+		const entry = {
+			key,
+			list,
+			places
+		};
+		layoutCache.set(scene, entry);
+		return entry;
+	}
+	/** 某个页面在无限画布上的左上角坐标；不是页面的画板或找不到时返回 null。 */
+	function boardWorldOrigin(scene, id) {
+		const origin = ensureLayout(scene).places.get(id);
+		return origin ? {
+			x: origin.x,
+			y: origin.y
+		} : null;
+	}
+	//#endregion
 	//#region src/transform.ts
 	/** 把角度规整到 (-180, 180] 的整数度数。 */
 	function normalizeRotation(deg) {
@@ -6047,6 +6313,15 @@ var VF = (function(exports) {
 			const box = boxes === null || boxes === void 0 ? void 0 : boxes.get(curr);
 			const w = box ? box.width : n.width;
 			const h = box ? box.height : n.height;
+			if (n.type === "Page") {
+				const origin = boardWorldOrigin(scene, curr);
+				if (origin) return {
+					x: origin.x,
+					y: origin.y,
+					width: w,
+					height: h
+				};
+			}
 			const rootNode = scene.nodes[scene.root];
 			return {
 				x: (_n$x = n.x) !== null && _n$x !== void 0 ? _n$x : rootNode ? Math.round((rootNode.width - w) / 2) : 0,
@@ -6713,8 +6988,9 @@ var VF = (function(exports) {
 			});
 			this.notifyChanged();
 		}
-		dockResizeSplit(area, groupIndex, size, winId = this.project.scene.root) {
-			const next = dockResizeSplit(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], area, groupIndex, size);
+		/** windowSize：窗口这时按别的大小排版（编辑器预览里拖过电脑里窗口的大小），分栏按它算；不给就是设计的尺寸 */
+		dockResizeSplit(area, groupIndex, size, winId = this.project.scene.root, windowSize) {
+			const next = dockResizeSplit(this.getDockLayout(winId), this.project.scene, this.project.scene.nodes[winId], area, groupIndex, size, windowSize);
 			this.dockLayouts.set(winId, next);
 			this.releaseDockedPointerStates();
 			this.hooks.onLog({
