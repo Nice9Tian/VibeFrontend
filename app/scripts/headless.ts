@@ -1,27 +1,13 @@
-// 无头浏览器的共用部分：找到本机的 Chrome 或 Edge、起一个不带任何扩展的实例、用调试协议和页面说话。
-// 导出 PDF 和图片（export-print.ts）以及平面设计的测试（test-graphic.ts）用它。
+// 无头浏览器的共用部分：起一个不带任何扩展的 Chrome 或 Edge 实例、用调试协议和页面说话。
+// 导出 PDF 和图片（export-print.ts）以及平面设计的测试（test-graphic.ts 等）用它。
+// 找哪个浏览器、每次启动都带的参数和别的无头测试一样，在 browser-exe.ts 里。
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-
-export function findBrowser(): string {
-  const candidates = [
-    process.env.CHROME_PATH,
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  ];
-  const found = candidates.find((p): p is string => Boolean(p) && fs.existsSync(p!));
-  if (!found) throw new Error("未找到无头浏览器可执行文件（Chrome 或 Edge）；可以用环境变量 CHROME_PATH 指定");
-  return found;
-}
+import { findBrowserExecutable, HEADLESS_BROWSER_ARGS } from "./browser-exe.ts";
 
 export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -107,13 +93,10 @@ export async function openHeadless(url: string, options: { width?: number; heigh
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-headless-"));
   const cdpPort = await freePort();
   let browser: ChildProcess | null = spawn(
-    findBrowser(),
+    findBrowserExecutable(),
     [
-      "--headless=new",
-      "--disable-gpu",
+      ...HEADLESS_BROWSER_ARGS,
       "--disable-extensions",
-      "--no-first-run",
-      "--no-default-browser-check",
       "--hide-scrollbars",
       `--window-size=${options.width ?? 1600},${options.height ?? 1000}`,
       `--remote-debugging-port=${cdpPort}`,
