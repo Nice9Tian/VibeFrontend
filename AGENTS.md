@@ -39,6 +39,7 @@
 - “碰到 Qt 导出”指改了 `app/src/export/`、`app/qt-templates/`、`app/standard/`、`examples/*/design/`、`examples/*/qt/`、Qt 测试脚本，或导出代码 import 到的源文件（如 `runtime.ts`、`model.ts`）。判断在 `app/scripts/test-tiers.ts`。
 - Qt 程序默认用 `offscreen` 平台运行，不开窗口，不抢前台。要亲眼看窗口时设环境变量 `VF_QT_SHOW=1`。
 - Qt 测试用的是已经编译好的程序，不会自己重新导出和编译，程序位置见 `app/scripts/qt-env.ts`。`npm test` 发现程序比改动旧时会在最后提示，这时 Qt 结果不代表这次改动。
+- 测试里要用无头浏览器，一律经 `app/scripts/headless-browser.ts` 启动（`launchHeadlessBrowser`，用完 `await close()`；`--screenshot` 这类一次性命令用 `runHeadlessBrowserCommand`），不要自己 `spawn` 浏览器、建 `--user-data-dir` 目录。它负责统一的启动参数，并保证浏览器的子进程和临时配置目录都不留下（以前各测试 `kill()` 完马上删目录，浏览器退出时还在往里写，目录就一直留在临时目录里）。
 
 ## 修改设计项目
 

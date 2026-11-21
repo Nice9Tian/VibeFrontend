@@ -2,10 +2,8 @@
 //
 //   node scripts/test-step2.ts
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -30,7 +28,7 @@ import {
 } from "../src/model.ts";
 import { controlReference, selectionRange } from "../src/refs.ts";
 import { nodeIO } from "./node-io.ts";
-import { findBrowserExecutable, HEADLESS_BROWSER_ARGS } from "./browser-exe.ts";
+import { launchHeadlessBrowser } from "./headless-browser.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..");
@@ -452,17 +450,7 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
 
   await new Promise<void>((res) => server.listen(0, "127.0.0.1", () => res()));
   const port = (server.address() as { port: number }).port;
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-step2-test-"));
-  const browserBin = findBrowserExecutable();
-  const proc = spawn(
-    browserBin,
-    [
-      ...HEADLESS_BROWSER_ARGS,
-      `--user-data-dir=${userDataDir}`,
-      `http://127.0.0.1:${port}/index.html`,
-    ],
-    { stdio: "ignore" },
-  );
+  const browser = launchHeadlessBrowser(`http://127.0.0.1:${port}/index.html`);
 
   try {
     await Promise.race([
@@ -470,11 +458,7 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
       new Promise<void>((_, rej) => setTimeout(() => rej(new Error("无头浏览器测试超时")), 15000)),
     ]);
   } finally {
-    try {
-      proc.kill();
-    } catch {
-      // ignore
-    }
+    await browser.close();
     server.close();
     server.closeAllConnections?.();
   }

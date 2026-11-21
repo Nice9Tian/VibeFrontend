@@ -8,7 +8,7 @@ const QT_PATHS = [
   /^app\/qt-templates\//,
   /^app\/standard\//,
   /^examples\/[^/]+\/(design|qt)\//,
-  /^app\/scripts\/(compare-layout|export-qt|qt-env|run-case|test-dock)\.ts$/,
+  /^app\/scripts\/(compare-layout|export-qt|headless-browser|qt-env|run-case|test-dock)\.ts$/,
 ];
 
 /** 导出代码顺着 import 用到的全部源文件（相对仓库根）。名单不用手工维护，新加的依赖自动算进来。 */

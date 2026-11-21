@@ -6,13 +6,12 @@
 // 2. 预览模式把设计窗口的边框加粗，窗口尺寸一变，里面的内容就挪了。
 // 所以预览时要改外观，只能用不占尺寸的办法（颜色、box-shadow），不要改边框粗细、内外边距或显隐占位的元素。
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findBrowserExecutable, HEADLESS_BROWSER_ARGS } from "./browser-exe.ts";
+import { launchHeadlessBrowser, type HeadlessBrowser } from "./headless-browser.ts";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -129,19 +128,10 @@ async function main(): Promise<void> {
   await server.listen();
 
   const cdpPort = await freePort();
-  let browser: ChildProcess | null = null;
+  let browser: HeadlessBrowser | null = null;
   let cdp: Cdp | null = null;
   try {
-    browser = spawn(
-      findBrowserExecutable(),
-      [
-        ...HEADLESS_BROWSER_ARGS,
-        `--remote-debugging-port=${cdpPort}`,
-        `--user-data-dir=${path.join(workDir, "profile")}`,
-        `http://127.0.0.1:${vitePort}/`,
-      ],
-      { stdio: "ignore" },
-    );
+    browser = launchHeadlessBrowser(`http://127.0.0.1:${vitePort}/`, [`--remote-debugging-port=${cdpPort}`]);
 
     let pageUrl = "";
     const deadline = Date.now() + 30000;
@@ -206,16 +196,13 @@ async function main(): Promise<void> {
     console.log(`\n全部通过：切换模式时位置没有变化（共比较 ${checked} 个控件）。`);
   } finally {
     cdp?.close();
-    if (browser && browser.exitCode === null) {
-      const exited = new Promise((resolve) => browser!.once("exit", resolve));
-      browser.kill();
-      await exited;
-    }
+    await browser?.close();
     await server.close();
     try {
+      // Windows 上文件句柄偶尔释放得慢，重试几次
       fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-    } catch {
-      // 浏览器的文件偶尔释放得慢，临时目录留着不影响结果
+    } catch (error) {
+      console.warn(`没能删掉临时目录 ${workDir}：${(error as Error).message}`);
     }
   }
 }
