@@ -13,6 +13,8 @@ import { qtRelevantFiles, qtSourceFiles } from "./test-tiers.ts";
 import { eventRowsFor } from "../src/eventedit.ts";
 import { controlReference, controlsReference } from "../src/refs.ts";
 import { nodeIO } from "./node-io.ts";
+import { reorderTarget } from "../standard/index.ts";
+import { farthestRayHit, nearestOnOutline } from "../src/outline.ts";
 import {
   applyAddNodeToScene,
   applyDeleteFromScene,
@@ -671,6 +673,47 @@ test("直线与曲线拐点：添加、移动、删除拐点及多段路径生�
   assert.deepEqual(removeLineBend(updated, 0), []);
 });
 
+// 6b. 线头挂在形状上：在节点自己的坐标系里求交点和最近点，再换算到画布，和把整圈轮廓换算后再算一样
+test("轮廓几何：边的中点与最近点在局部坐标里算，旋转父容器里也和整圈换算的结果一致", () => {
+  // 菱形的一圈点（局部坐标，宽 120 高 80）
+  const diamond = [
+    { x: 60, y: 0 },
+    { x: 120, y: 40 },
+    { x: 60, y: 80 },
+    { x: 0, y: 40 },
+  ];
+  const center = { x: 60, y: 40 };
+  assert.deepEqual(farthestRayHit(diamond, center, { x: 0, y: -1 }), { x: 60, y: 0 }, "朝上打到上顶点");
+  assert.deepEqual(farthestRayHit(diamond, center, { x: 1, y: 0 }), { x: 120, y: 40 }, "朝右打到右顶点");
+  assert.equal(farthestRayHit([], center, { x: 1, y: 0 }), null, "没有轮廓就没有交点");
+  // (100, 0) 投到右上斜边 (60,0)→(120,40)：t = 2400 / 5200 = 6/13，垂足 (60 + 60·6/13, 40·6/13)，距离 = 叉积 / 边长
+  const near = nearestOnOutline(diamond, { x: 100, y: 0 })!;
+  assert.ok(Math.abs(near.point.x - (60 + 360 / 13)) < 1e-9 && Math.abs(near.point.y - 240 / 13) < 1e-9, `落在右上斜边的垂足，实测 ${JSON.stringify(near.point)}`);
+  assert.ok(Math.abs(near.distance - 1600 / Math.hypot(60, 40)) < 1e-9);
+  assert.equal(nearestOnOutline([], { x: 0, y: 0 }), null);
+
+  // 菱形放进旋转 30° 的父容器、自己再转 25°：局部算完换算一个点 = 整圈换算后在画布上算
+  const scene = makeBaseScene();
+  scene.nodes.box1.rotation = 30;
+  scene.nodes.box1.children = ["child1", "gem"];
+  scene.nodes.gem = { type: "Shape", x: 20, y: -10, width: 120, height: 80, rotation: 25, props: { shape: "diamond" } };
+  const toWorld = (p: { x: number; y: number }) => nodeLocalToWorldInScene(scene, "gem", p);
+  const worldOutline = diamond.map(toWorld);
+  const worldCenter = toWorld(center);
+  const totalRotation = worldRotationInScene(scene, "gem");
+  for (const dir of [{ x: 0, y: -1 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 }]) {
+    const viaLocal = toWorld(farthestRayHit(diamond, center, dir)!);
+    const viaWorld = farthestRayHit(worldOutline, worldCenter, rotatePoint(dir, { x: 0, y: 0 }, totalRotation))!;
+    assert.ok(Math.hypot(viaLocal.x - viaWorld.x, viaLocal.y - viaWorld.y) < 1e-6, `方向 ${JSON.stringify(dir)} 的交点应一致`);
+  }
+  const probe = { x: 260, y: 40 };
+  const local = nearestOnOutline(diamond, worldToNodeLocalInScene(scene, "gem", probe))!;
+  const world = nearestOnOutline(worldOutline, probe)!;
+  const localInWorld = toWorld(local.point);
+  assert.ok(Math.hypot(localInWorld.x - world.point.x, localInWorld.y - world.point.y) < 1e-6, "最近点应一致");
+  assert.ok(Math.abs(local.distance - world.distance) < 1e-6, "距离在旋转平移下不变");
+});
+
 // 7. 删除控件时检测并询问/清理 YAML 条目
 test("删除控件与 YAML 条目检测和清理（含子节点及保留注释）", () => {
   const scene = makeBaseScene();
@@ -965,6 +1008,44 @@ test("旋转节点与旋转父容器内子节点的移动和缩放精度", () =>
   assert.equal(resizedChildScene.nodes.child1.height, 20);
   assert.equal(resizedChildScene.nodes.child1.x, 10, "在父容器局部系中拖右把手不应改变左边缘 x");
   assert.equal(resizedChildScene.nodes.child1.y, 10, "在父容器局部系中拖右把手不应改变上边缘 y");
+});
+
+// List / Tree 拖动重排：插入线画在第 p 行之前，放下后这一项就落在那里，而 reorder 事件的 to
+// 仍然是“移动之后所在的下标”（设计项目里 move 的 to、导出的 Qt 程序用的都是这个含义）。
+test("List / Tree 拖动重排：插入位置换算成 reorder 的 to，结果和插入线一致", () => {
+  const move = (items: string[], from: number, to: number): string[] => {
+    const next = items.slice();
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    return next;
+  };
+  for (let n = 1; n <= 6; n++) {
+    const items = Array.from({ length: n }, (_, i) => `row${i}`);
+    for (let from = 0; from < n; from++) {
+      // insertBefore = n 表示放到末尾（列表下方的空白处）
+      for (let insertBefore = 0; insertBefore <= n; insertBefore++) {
+        const to = reorderTarget(from, insertBefore);
+        assert.ok(to >= 0 && to < n, `to 应是合法下标：n=${n} from=${from} insertBefore=${insertBefore} to=${to}`);
+        const result = move(items, from, to);
+        const at = result.indexOf(items[from]);
+        const where = `n=${n} from=${from} insertBefore=${insertBefore}`;
+        if (insertBefore === from || insertBefore === from + 1) {
+          // 线画在这一项自己的上边或下边：原地不动，控件不会发 reorder
+          assert.equal(to, from, `${where}：线在自己旁边时不应移动`);
+          assert.deepEqual(result, items);
+        } else if (insertBefore === n) {
+          assert.equal(at, n - 1, `${where}：放到末尾`);
+        } else {
+          assert.equal(result[at + 1], items[insertBefore], `${where}：应正好落在插入线后面那一行之前`);
+        }
+        // 其余各行的先后不变
+        assert.deepEqual(result.filter((x) => x !== items[from]), items.filter((x) => x !== items[from]), `${where}：其余行的顺序不应变`);
+      }
+    }
+  }
+  // 原来只能落在行上时的两种结果没有变：向上拖落在目标行之前，向下拖落在目标行之后
+  assert.equal(reorderTarget(2, 0), 0);
+  assert.equal(reorderTarget(0, 2), 1);
 });
 
 // 14. [复审阻塞 3 回归] 重命名项目控件类型后同步更新历史栈快照，撤销/重做不会回退到已删除的旧控件类型

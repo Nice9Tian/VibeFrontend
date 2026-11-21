@@ -67,6 +67,7 @@ import {
 } from "../src/model.ts";
 import { Runtime } from "../src/runtime.ts";
 import { nodeIO } from "./node-io.ts";
+import { findBrowserExecutable, HEADLESS_BROWSER_ARGS } from "./browser-exe.ts";
 import { animeanQtExe, buildQtEnv } from "./qt-env.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -74,20 +75,6 @@ const APP_ROOT = path.resolve(__dirname, "..");
 const ANIMEAN_DIR = path.resolve(APP_ROOT, "../examples/animean/design");
 const ANIMEAN_QT_EXE = animeanQtExe(APP_ROOT);
 const RUN_QT = process.argv.includes("--qt");
-
-function findBrowserExecutable(): string {
-  const candidates = [
-    process.env.CHROME_BIN,
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-  ].filter((p): p is string => Boolean(p));
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  throw new Error("未找到无头浏览器可执行文件（Chrome 或 Edge）");
-}
 
 // ---------------------------------------------------------------------------
 // 1. 停靠模型纯函数与引用维护测试
@@ -1218,10 +1205,7 @@ async function testHeadlessDomInteractionsAndQtLayout(): Promise<void> {
   const proc = spawn(
     browserExe,
     [
-      "--headless=new",
-      "--disable-gpu",
-      "--no-first-run",
-      "--no-default-browser-check",
+      ...HEADLESS_BROWSER_ARGS,
       "--window-size=1600,1200",
       `--user-data-dir=${tmpProfileDir}`,
       url,

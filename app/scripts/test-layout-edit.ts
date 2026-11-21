@@ -80,6 +80,7 @@ import {
 } from "../src/stateedit.ts";
 import { setNodesLocked } from "../src/transform.ts";
 import { nodeIO, readTree } from "./node-io.ts";
+import { findBrowserExecutable } from "./browser-exe.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..");
@@ -483,19 +484,6 @@ test("审核回归：状态归属冲突拦截、simulate 目标归属校验、�
 
 // ---------- 2. 真实无头浏览器（Headless Chrome + CDP 真实鼠标事件）端到端测试 ----------
 
-function findChromeExecutable(): string {
-  const candidates = [
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  throw new Error("未找到 Chrome 或 Edge 浏览器可执行文件");
-}
-
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
@@ -786,7 +774,7 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
   let cdp: CdpSession | null = null;
 
   try {
-    const chromeBin = findChromeExecutable();
+    const chromeBin = findBrowserExecutable();
     chromeProc = spawn(
       chromeBin,
       [

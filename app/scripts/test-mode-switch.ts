@@ -13,24 +13,9 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findBrowserExecutable, HEADLESS_BROWSER_ARGS } from "./browser-exe.ts";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-
-function findBrowser(): string {
-  const candidates = [
-    process.env.CHROME_PATH,
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  ];
-  const found = candidates.find((p): p is string => Boolean(p) && fs.existsSync(p!));
-  if (!found) throw new Error("未找到无头浏览器可执行文件（Chrome 或 Edge）");
-  return found;
-}
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -152,12 +137,9 @@ async function main(): Promise<void> {
   let cdp: Cdp | null = null;
   try {
     browser = spawn(
-      findBrowser(),
+      findBrowserExecutable(),
       [
-        "--headless=new",
-        "--disable-gpu",
-        "--no-first-run",
-        "--no-default-browser-check",
+        ...HEADLESS_BROWSER_ARGS,
         `--remote-debugging-port=${cdpPort}`,
         `--user-data-dir=${path.join(workDir, "profile")}`,
         `http://127.0.0.1:${vitePort}/`,

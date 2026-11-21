@@ -31,24 +31,11 @@ import {
 } from "../src/model.ts";
 import { controlReference, selectionRange } from "../src/refs.ts";
 import { nodeIO } from "./node-io.ts";
+import { findBrowserExecutable, HEADLESS_BROWSER_ARGS } from "./browser-exe.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(APP_ROOT, "..");
-
-function findBrowserExecutable(): string {
-  const candidates = [
-    process.env.CHROME_BIN,
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-  ].filter((p): p is string => Boolean(p));
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  throw new Error("未找到无头浏览器可执行文件（Chrome 或 Edge）");
-}
 
 async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
   // 1. 纯函数级验证：标准控件名与内置类型名保留，拖入同名收藏走规则 4（改名 Button_2）
@@ -471,10 +458,7 @@ async function testItem1AndItem5InHeadlessBrowser(): Promise<void> {
   const proc = spawn(
     browserBin,
     [
-      "--headless=new",
-      "--disable-gpu",
-      "--no-first-run",
-      "--no-default-browser-check",
+      ...HEADLESS_BROWSER_ARGS,
       `--user-data-dir=${userDataDir}`,
       `http://127.0.0.1:${port}/index.html`,
     ],

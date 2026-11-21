@@ -105,6 +105,7 @@ import {
 } from "./refs";
 import { Runtime, type LogEntry } from "./runtime";
 import { layoutLine, paintLine, paintShape, presetIcon, type LineLayout } from "./paint";
+import { farthestRayHit, nearestOnOutline } from "./outline";
 import {
   autoSide,
   CAPS,
@@ -401,11 +402,22 @@ function layoutHooks(runtime: Runtime) {
   };
 }
 
-/** 一次点选要查很多节点，这段时间里排版只算一遍。 */
+/** 一次要查很多节点时（点选、算一条线的两头），这段时间里排版只算一遍。 */
 let frozenBoxes: ReturnType<typeof computeSceneLayout> | null = null;
 
 function currentLayoutBoxes() {
   return frozenBoxes ?? computeSceneLayout(project.scene, layoutHooks(activeRuntime()));
+}
+
+/** 在 fn 里排版只算一遍。fn 期间改动的东西不能影响排版结果；可以嵌套，外层已经冻住时直接用外层的。 */
+function withFrozenLayout<T>(fn: () => T): T {
+  if (frozenBoxes) return fn();
+  frozenBoxes = currentLayoutBoxes();
+  try {
+    return fn();
+  } finally {
+    frozenBoxes = null;
+  }
 }
 
 /** 节点相对于设计窗口左上角的位置（含排版计算与旋转父容器对子节点中心位置的变换）。根窗口在 (0, 0)。 */
@@ -440,8 +452,7 @@ function hitTest(px: number, py: number): string | null {
   };
   // 平面设计：编辑时全部页面都在画布上；预览时只有正在看的那一页。界面设计：主窗口和叠在上面显示的对话框
   const winIds = spreadOut() ? pageIds(project.scene) : kind().board.arrange === "spread" ? [stageRootId()] : allWindowIds(project.scene);
-  frozenBoxes = currentLayoutBoxes();
-  try {
+  return withFrozenLayout(() => {
     for (let i = winIds.length - 1; i >= 0; i--) {
       const winId = winIds[i];
       if (!spreadOut() && winId !== stageRootId() && !isDialogShownInStage(winId)) continue;
@@ -449,9 +460,7 @@ function hitTest(px: number, py: number): string | null {
       if (hit) return hit;
     }
     return null;
-  } finally {
-    frozenBoxes = null;
-  }
+  });
 }
 
 function canHoldChildren(id: string): boolean {
@@ -2684,52 +2693,32 @@ function outlineOf(id: string): Point[] {
   return points;
 }
 
-/** 节点外轮廓在设计窗口世界坐标系下的顶点序列（含自身与父容器旋转）。 */
+// 节点到设计窗口只有旋转和平移，下面在节点自己的坐标系里算交点和最近点，只把结果换算出去。
+// 整圈轮廓点逐个换算很贵：一条线两头各几百个点，拖动时每一帧要重画所有的线。
+
+/** 节点局部坐标 → 设计窗口坐标，排版与 absRect 用同一份。 */
+function localToWorld(id: string, pt: Point): Point {
+  return nodeLocalToWorldInScene(project.scene, id, pt, currentLayoutBoxes());
+}
+
+/** 设计窗口坐标 → 节点局部坐标，排版与 absRect 用同一份。 */
+function worldToLocal(id: string, pt: Point): Point {
+  return worldToNodeLocalInScene(project.scene, id, pt, currentLayoutBoxes());
+}
+
+/** 节点外轮廓在设计窗口世界坐标系下的顶点序列（含自身与父容器旋转）。只在要把整圈画出来时用。 */
 function worldOutlineOf(id: string): Point[] {
-  return outlineOf(id).map((pt) => nodeLocalToWorldInScene(project.scene, id, pt));
+  return withFrozenLayout(() => outlineOf(id).map((pt) => localToWorld(id, pt)));
 }
 
 /** 外轮廓上离 p 最近的点（设计窗口里的绝对坐标）。 */
-function nearestOnOutline(id: string, p: Point): { point: Point; distance: number } {
-  const r = absRect(id);
-  const pts = worldOutlineOf(id);
-  let best = { point: { x: r.x, y: r.y }, distance: Infinity };
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[i];
-    const b = pts[(i + 1) % pts.length];
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const length2 = dx * dx + dy * dy;
-    const t = length2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length2)) : 0;
-    const q = { x: a.x + dx * t, y: a.y + dy * t };
-    const d = Math.hypot(q.x - p.x, q.y - p.y);
-    if (d < best.distance) best = { point: q, distance: d };
-  }
-  return best;
-}
-
-/** 从节点中心朝 direction 射出去，和外轮廓最远的那个交点。用来放形状四条“边”的中点：三角形的左边中点在斜边上，不在方框上。 */
-function outlineRayHit(id: string, direction: Point): Point | null {
-  const r = absRect(id);
-  const c = { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-  const pts = worldOutlineOf(id);
-  let best: Point | null = null;
-  let bestT = -1;
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[i];
-    const b = pts[(i + 1) % pts.length];
-    const ex = b.x - a.x;
-    const ey = b.y - a.y;
-    const denominator = direction.x * ey - direction.y * ex;
-    if (Math.abs(denominator) < 1e-9) continue;
-    const t = ((a.x - c.x) * ey - (a.y - c.y) * ex) / denominator;
-    const u = ((a.x - c.x) * direction.y - (a.y - c.y) * direction.x) / denominator;
-    if (t > 0 && u >= 0 && u <= 1 && t > bestT) {
-      bestT = t;
-      best = { x: c.x + direction.x * t, y: c.y + direction.y * t };
-    }
-  }
-  return best;
+function nearestOnNodeOutline(id: string, p: Point): { point: Point; distance: number } {
+  return withFrozenLayout(() => {
+    const hit = nearestOnOutline(outlineOf(id), worldToLocal(id, p));
+    if (hit) return { point: localToWorld(id, hit.point), distance: hit.distance };
+    const r = absRect(id);
+    return { point: { x: r.x, y: r.y }, distance: Infinity };
+  });
 }
 
 /** 节点某一边在世界坐标系下的法向方向（含旋转）。 */
@@ -2739,16 +2728,19 @@ function sideDirectionOf(id: string, side: Side): Point {
   return rot ? rotatePoint(dir, { x: 0, y: 0 }, rot) : dir;
 }
 
-/** 节点某一边的“中点”：形状按真实轮廓，其余按方框（均含旋转变换）。 */
+/**
+ * 节点某一边的“中点”：形状按真实轮廓，其余按方框（均含旋转变换）。
+ * 形状从中心朝这一边射出去，取和外轮廓最远的交点：三角形的左边中点在斜边上，不在方框上。
+ */
 function sideAnchorOf(id: string, side: Side): Point {
-  const rotDir = sideDirectionOf(id, side);
-  if (node(id)?.type === "Shape") {
-    const hit = outlineRayHit(id, rotDir);
-    if (hit) return hit;
-  }
-  const r = absRect(id);
-  const localAnchor = sideAnchor({ x: 0, y: 0, width: r.width, height: r.height }, side);
-  return nodeLocalToWorldInScene(project.scene, id, localAnchor);
+  return withFrozenLayout(() => {
+    const r = absRect(id);
+    if (node(id)?.type === "Shape") {
+      const hit = farthestRayHit(outlineOf(id), { x: r.width / 2, y: r.height / 2 }, sideDirection(side));
+      if (hit) return localToWorld(id, hit);
+    }
+    return localToWorld(id, sideAnchor({ x: 0, y: 0, width: r.width, height: r.height }, side));
+  });
 }
 
 /** "0.250,1.000" → 相对于节点方框的位置（0 到 1）。 */
@@ -2767,13 +2759,12 @@ function resolveAttach(id: string, sideValue: string, at: Point | null, other: P
   const rect = absRect(id);
   const localRect = { x: 0, y: 0, width: rect.width, height: rect.height };
   if (sideValue === "outline" && at) {
-    const guess = nodeLocalToWorldInScene(project.scene, id, { x: at.x * rect.width, y: at.y * rect.height });
-    const point = nearestOnOutline(id, guess).point;
-    const localPt = worldToNodeLocalInScene(project.scene, id, point);
-    const localSide = autoSide(localRect, localPt);
+    const guess = localToWorld(id, { x: at.x * rect.width, y: at.y * rect.height });
+    const point = nearestOnNodeOutline(id, guess).point;
+    const localSide = autoSide(localRect, worldToLocal(id, point));
     return { point, direction: sideDirectionOf(id, localSide) };
   }
-  const localOther = worldToNodeLocalInScene(project.scene, id, other);
+  const localOther = worldToLocal(id, other);
   const side: Side = SIDES.includes(sideValue as Side) ? (sideValue as Side) : autoSide(localRect, localOther);
   return { point: sideAnchorOf(id, side), direction: sideDirectionOf(id, side) };
 }
@@ -2801,12 +2792,15 @@ function lineEndpoints(id: string, props: Record<string, Value>): { start: Endpo
   return { start: resolve("start", startTarget, endRef), end: resolve("end", endTarget, startRef) };
 }
 
+/** 算一条线的走向。期间不改场景，两头要查的节点位置共用一次排版。 */
 function lineLayoutOf(id: string, props: Record<string, Value>): LineLayout {
-  const { start, end } = lineEndpoints(id, props);
-  // 手动调整过的拐点存的是相对于父节点的坐标（直线、曲线、折线都支持拐点）
-  const origin = parentOrigin(id);
-  const bends = parseBends(props.bends).map((p) => ({ x: p.x + origin.x, y: p.y + origin.y }));
-  return layoutLine(start, end, props, bends);
+  return withFrozenLayout(() => {
+    const { start, end } = lineEndpoints(id, props);
+    // 手动调整过的拐点存的是相对于父节点的坐标（直线、曲线、折线都支持拐点）
+    const origin = parentOrigin(id);
+    const bends = parseBends(props.bends).map((p) => ({ x: p.x + origin.x, y: p.y + origin.y }));
+    return layoutLine(start, end, props, bends);
+  });
 }
 
 /** 平移一条线：没挂着的端点和手动调整过的拐点一起挪；挂着的端点跟着它挂的节点，不动。 */
@@ -2847,37 +2841,55 @@ function paintGraphic(id: string, entry: Mounted, props: Record<string, Value>, 
     // 放在排版容器里的形状按排出来的方框画（容器拉伸、电脑预览里拖过窗口大小时外框变了，图形跟着变）
     entry.hit = paintShape(entry.body, toPx(unit(), box?.width ?? n.width), toPx(unit(), box?.height ?? n.height), props);
   } else {
-    const layout = lineLayoutOf(id, props);
-    const origin = placeLine(id, layout);
+    // placeLine 先读父节点位置再写线的外框，两步共用一次排版
+    const { layout, origin } = withFrozenLayout(() => {
+      const layout = lineLayoutOf(id, props);
+      return { layout, origin: placeLine(id, layout) };
+    });
     Object.assign(entry.wrapper.style, { left: `${n.x}px`, top: `${n.y}px`, width: `${n.width}px`, height: `${n.height}px` });
     entry.hit = paintLine(entry.body, layout, origin, props);
   }
   entry.wrapper.style.opacity = String(Math.max(0, Math.min(1, num(props.opacity, 1))));
 }
 
+/**
+ * 挨个重算一批线，排版只算一遍。
+ * 重算会改线自己的外框，这只影响线自己；线由排版摆放时（放在 VBox 之类的容器里）例外，
+ * 它的大小会挤动兄弟节点，这时每条线各自重新排版。
+ */
+function forEachLineSharingLayout(ids: string[], fn: (id: string) => void): void {
+  const run = () => ids.forEach(fn);
+  if (ids.some((id) => isLayoutPositionedNode(project.scene, id))) run();
+  else withFrozenLayout(run);
+}
+
 /** 重画所有线条：拖动、缩放节点时，挂在它上面的线跟着走。 */
 function refreshLines(): void {
   const runtime = activeRuntime();
-  for (const [id, entry] of mounted) {
-    if (node(id)?.type === "Line") paintGraphic(id, entry, runtime.view(id).props);
-  }
+  const lines = [...mounted.keys()].filter((id) => node(id)?.type === "Line");
+  forEachLineSharingLayout(lines, (id) => paintGraphic(id, mounted.get(id)!, runtime.view(id).props));
 }
 
 /** 写文件之前：线条的外框按当前位置重算，挂着节点的一头把位置记下来（被挂的节点删掉后，线停在这里）。 */
 function normalizeLines(): void {
-  // 写进文件的线条位置按设计的尺寸排版来算：电脑预览里拖过窗口大小时，排版是按窗口的大小，那些位置不能落盘
+  // 写进文件的线条位置按设计的尺寸排版来算：电脑预览里拖过窗口大小时，排版是按窗口的大小，那些位置不能落盘。
+  // 外面要是冻住了一份排版，那份也是按窗口大小算的，这里不沿用，按设计尺寸另算一份
   const resized = previewRootSize;
+  const frozen = frozenBoxes;
   previewRootSize = null;
+  frozenBoxes = null;
   try {
     normalizeLinesAtDesignSize();
   } finally {
     previewRootSize = resized;
+    frozenBoxes = frozen;
   }
 }
 
 function normalizeLinesAtDesignSize(): void {
-  for (const [id, n] of Object.entries(project.scene.nodes)) {
-    if (n.type !== "Line") continue;
+  const lines = Object.keys(project.scene.nodes).filter((id) => project.scene.nodes[id].type === "Line");
+  forEachLineSharingLayout(lines, (id) => {
+    const n = project.scene.nodes[id];
     const props = designRuntime.view(id).props;
     const layout = lineLayoutOf(id, props);
     placeLine(id, layout);
@@ -2891,7 +2903,7 @@ function normalizeLinesAtDesignSize(): void {
       n.props.x2 = Math.round(layout.end.point.x - origin.x);
       n.props.y2 = Math.round(layout.end.point.y - origin.y);
     }
-  }
+  });
 }
 
 /** 一个点在不在节点上。形状和线条按图形本身判断，别的按方框（支持自身及父容器旋转后的方框）。 */
@@ -2899,7 +2911,7 @@ function containsPoint(id: string, px: number, py: number): boolean {
   const n = node(id);
   if (!n) return false;
   const entry = mounted.get(id);
-  const localPt = worldToNodeLocalInScene(project.scene, id, { x: px, y: py });
+  const localPt = worldToLocal(id, { x: px, y: py });
   if (entry?.hit && (n.type === "Shape" || n.type === "Line")) {
     if (n.type === "Line") return entry.hit.isPointInStroke(new DOMPoint(px, py));
     // 形状是按像素画的，点也换成像素再判断
@@ -3396,11 +3408,11 @@ function nearestEdge(px: number, py: number, excludeId: string | null, avoid: st
     if (isBoardRoot(id) || id === excludeId || id === avoid || n.type === "Line") continue;
     const vr = visualRect(id);
     if (px < vr.x - 12 || px > vr.x + vr.width + 12 || py < vr.y - 12 || py > vr.y + vr.height + 12) continue;
-    const hit = nearestOnOutline(id, { x: px, y: py });
+    const hit = nearestOnNodeOutline(id, { x: px, y: py });
     if (hit.distance <= bestDistance) {
       bestDistance = hit.distance;
       const r = absRect(id);
-      const localHit = worldToNodeLocalInScene(project.scene, id, hit.point);
+      const localHit = worldToLocal(id, hit.point);
       const at = { x: localHit.x / Math.max(1, r.width), y: localHit.y / Math.max(1, r.height) };
       best = { point: hit.point, node: id, side: "outline", at };
     }
@@ -3417,12 +3429,16 @@ function nearestEdge(px: number, py: number, excludeId: string | null, avoid: st
  */
 function anchorAt(pt: Point, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, excludeId: string | null, from: Point | null, avoid: string | null = null): Anchor {
   if (!(e.ctrlKey || e.metaKey)) {
-    const near = nearestSideAnchor(pt.x, pt.y, excludeId, avoid);
-    if (near) return { point: near.point, node: near.node, side: near.side };
-    const edge = nearestEdge(pt.x, pt.y, excludeId, avoid);
-    if (edge) return edge;
-    const target = attachableAt(pt.x, pt.y, excludeId, avoid);
-    if (target) return { point: resolveAttach(target, "auto", null, from ?? pt).point, node: target, side: "auto" };
+    // 只读：挨个节点查边的中点和轮廓，共用一次排版
+    const attached = withFrozenLayout((): Anchor | null => {
+      const near = nearestSideAnchor(pt.x, pt.y, excludeId, avoid);
+      if (near) return { point: near.point, node: near.node, side: near.side };
+      const edge = nearestEdge(pt.x, pt.y, excludeId, avoid);
+      if (edge) return edge;
+      const target = attachableAt(pt.x, pt.y, excludeId, avoid);
+      return target ? { point: resolveAttach(target, "auto", null, from ?? pt).point, node: target, side: "auto" } : null;
+    });
+    if (attached) return attached;
   }
   let point = pt;
   // 按住 Shift：角度按 45 度取整
