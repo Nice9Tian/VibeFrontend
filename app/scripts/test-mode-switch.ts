@@ -5,6 +5,7 @@
 // 1. 中间栏占着画布上方的空间，切到预览时换一组按钮，栏的高度一变，画布区域就跟着变；
 // 2. 预览模式把设计窗口的边框加粗，窗口尺寸一变，里面的内容就挪了。
 // 所以预览时要改外观，只能用不占尺寸的办法（颜色、box-shadow），不要改边框粗细、内外边距或显隐占位的元素。
+import "./test-env.ts";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -116,6 +117,9 @@ async function main(): Promise<void> {
   // 复制一份，这样测试不依赖工作区里没提交的设计文件
   const designDir = path.join(workDir, "design");
   fs.cpSync(path.resolve(appRoot, "../examples/animean/design"), designDir, { recursive: true });
+  // 预览默认套电脑的外框，窗口会挪到桌面中间：这里比的是“原样”预览（不套外框、1:1）里位置变没变
+  fs.mkdirSync(path.join(designDir, ".designer"), { recursive: true });
+  fs.writeFileSync(path.join(designDir, ".designer/preview.json"), JSON.stringify({ device: "plain" }) + "\n");
   process.env.VF_PROJECT = designDir;
 
   const { createServer } = await import("vite");
@@ -171,6 +175,18 @@ async function main(): Promise<void> {
       else if (readySince === 0) readySince = Date.now();
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+
+    // 界面设计项目打开时停在“文档”页签，页签顺序和以前一样。
+    // 右栏放不下时一部分页签收在“…”里，先把右栏拉宽让它们全回到一排，再看顺序
+    await page.evaluate(`document.getElementById("right").style.width = "1200px"`);
+    await new Promise((r) => setTimeout(r, 400));
+    const tabs = await page.evaluate<{ selected: string; order: string[] }>(`(() => ({
+      selected: document.querySelector('#right .tabs [aria-selected="true"]')?.id ?? "",
+      order: [...document.querySelectorAll("#right .tabs > [role=tab]")].filter((t) => !t.hidden).map((t) => t.id),
+    }))()`);
+    await page.evaluate(`document.getElementById("right").style.width = ""`);
+    assert.equal(tabs.selected, "tab-doc");
+    assert.deepEqual(tabs.order, ["tab-layout", "tab-menu", "tab-state", "tab-events", "tab-doc", "tab-yaml"]);
 
     const views: Array<[string, string]> = [
       ["刚打开", ""],

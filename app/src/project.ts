@@ -1,11 +1,14 @@
 // 工具界面里读取设计项目：在 loader.ts 读出的内容之上，把控件和效果的实现文件加载成可以运行的模块，
 // 并把控件的样式注入设计窗口 iframe。数据结构和查找函数在 model.ts 里，这里原样转出，界面代码只需要引用这一个文件。
-import { mountStateImageControl, STANDARD_COMPONENT_LIST } from "../standard/index.ts";
+import { mountStateImageControl } from "../standard/index.ts";
 import { check } from "./check.ts";
-import { listDir, projectRoot, readText } from "./fs";
+import { scopeComponentCss } from "./cssscope.ts";
+import { currentPart, listDir, projectBaseUrl, projectRoot, projectUrl, readText } from "./fs";
 import { loadProjectFiles } from "./loader.ts";
+import { md5 } from "./md5.ts";
 import {
   isPaintEffect,
+  standardComponentsOf,
   STATE_IMAGE_KEYS,
   type ComponentCreate,
   type EffectPaint,
@@ -14,161 +17,81 @@ import {
 } from "./model.ts";
 
 export * from "./model.ts";
+export { scopeComponentCss };
 
-const moduleCache = new Map<string, { source: string; module?: { default?: unknown }; error?: string }>();
+interface CachedModule {
+  source: string;
+  /** 在哪个设计窗口文档里加载的；设计窗口换了文档，脚本要在新的环境里重新加载 */
+  realm: Document | null;
+  module?: { default?: unknown };
+  error?: string;
+}
+
+const moduleCache = new Map<string, CachedModule>();
 let stageStyleTarget: Document | null = null;
 let lastComponentCss = "";
+let lastProjectStyles: Array<{ path: string; text: string }> = [];
 
-/** 把一段源码当作 ES 模块加载。同样的源码只加载一次。 */
-async function importSource(cacheKey: string, source: string): Promise<{ module?: { default?: unknown }; error?: string }> {
-  let cached = moduleCache.get(cacheKey);
-  if (!cached || cached.source !== source) {
-    cached = { source };
-    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+type StageImporter = (url: string) => Promise<{ default?: unknown }>;
+
+/**
+ * 让设计窗口成为“项目的网页”：
+ * - 基准地址指向项目文件夹，项目里的脚本、样式表、图片、字体用相对路径互相引用；
+ * - 装一个导入函数，项目的脚本在设计窗口自己的环境里加载和运行（document 就是设计窗口的文档），
+ *   和导出成网页之后一样。换一个新的设计窗口文档，就得到一个干净的环境，改过的脚本全部重新加载。
+ */
+function prepareStageRealm(doc: Document): void {
+  if (!doc.getElementById("vf-project-base")) {
+    const base = doc.createElement("base");
+    base.id = "vf-project-base";
+    base.href = projectBaseUrl();
+    doc.head.prepend(base);
+  }
+  const win = doc.defaultView as (Window & { __vfImport?: StageImporter }) | null;
+  if (win && !win.__vfImport) {
+    // 普通脚本元素属于设计窗口的文档，它里面的 import() 用的是设计窗口自己的模块表
+    const script = doc.createElement("script");
+    script.textContent = "window.__vfImport = (url) => import(url);";
+    doc.head.append(script);
+    script.remove();
+  }
+}
+
+function stageImporter(): { importer: StageImporter; realm: Document } | null {
+  const doc = stageStyleTarget;
+  const importer = (doc?.defaultView as (Window & { __vfImport?: StageImporter }) | null | undefined)?.__vfImport;
+  return doc && importer ? { importer, realm: doc } : null;
+}
+
+/**
+ * 加载项目里的一个脚本（控件或效果的实现）。path 相对于项目文件夹。
+ * 有设计窗口时在设计窗口的环境里按网址加载，脚本里可以用相对路径引用项目里别的脚本；
+ * 没有设计窗口时（还没建好）退回到把源码当模块加载，这时脚本不能引用别的文件。
+ * 源码没变、还是同一个设计窗口文档时不重复加载。
+ */
+async function importProjectModule(path: string, source: string): Promise<{ module?: { default?: unknown }; error?: string }> {
+  const stage = stageImporter();
+  const realm = stage?.realm ?? null;
+  let cached = moduleCache.get(path);
+  if (!cached || cached.source !== source || cached.realm !== realm) {
+    cached = { source, realm };
     try {
-      cached.module = (await import(/* @vite-ignore */ url)) as { default?: unknown };
+      if (stage) {
+        cached.module = await stage.importer(`${projectUrl(path)}?v=${md5(source).slice(0, 8)}`);
+      } else {
+        const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+        try {
+          cached.module = (await import(/* @vite-ignore */ url)) as { default?: unknown };
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      }
     } catch (e) {
       cached.error = `加载失败：${(e as Error).message}`;
-    } finally {
-      URL.revokeObjectURL(url);
     }
-    moduleCache.set(cacheKey, cached);
+    moduleCache.set(path, cached);
   }
   return cached;
-}
-
-function splitSelectorList(selectorText: string): string[] {
-  const parts: string[] = [];
-  let current = "";
-  let parenDepth = 0;
-  let bracketDepth = 0;
-  let quote: string | null = null;
-  for (let i = 0; i < selectorText.length; i++) {
-    const ch = selectorText[i];
-    if (quote) {
-      current += ch;
-      if (ch === "\\" && i + 1 < selectorText.length) {
-        current += selectorText[++i];
-      } else if (ch === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      current += ch;
-      continue;
-    }
-    if (ch === "(") parenDepth++;
-    else if (ch === ")") parenDepth = Math.max(0, parenDepth - 1);
-    else if (ch === "[") bracketDepth++;
-    else if (ch === "]") bracketDepth = Math.max(0, bracketDepth - 1);
-    else if (ch === "," && parenDepth === 0 && bracketDepth === 0) {
-      parts.push(current);
-      current = "";
-      continue;
-    }
-    current += ch;
-  }
-  if (current) parts.push(current);
-  return parts;
-}
-
-function prefixSingleSelector(prefix: string, rawSelector: string): string {
-  const sel = rawSelector.trim();
-  if (!sel) return "";
-  if (sel === ":scope" || sel === ":root" || sel === "html" || sel === "body") {
-    return prefix;
-  }
-  if (sel.startsWith(":scope")) {
-    return `${prefix}${sel.slice(":scope".length)}`;
-  }
-  if (sel.startsWith(prefix)) {
-    return sel;
-  }
-  return `${prefix} ${sel}`;
-}
-
-/** 把控件 CSS 的选择器加上 `[data-vf-type="..."]` 前缀，不依赖 @scope。 */
-export function scopeComponentCss(type: string, cssText: string): string {
-  const prefix = `[data-vf-type="${type}"]`;
-  const stripped = cssText.replace(/\/\*[\s\S]*?\*\//g, "");
-  let out = "";
-  let i = 0;
-  const n = stripped.length;
-
-  while (i < n) {
-    while (i < n && /\s/.test(stripped[i])) {
-      out += stripped[i++];
-    }
-    if (i >= n) break;
-
-    let headerStart = i;
-    let quote: string | null = null;
-    while (i < n && stripped[i] !== "{" && stripped[i] !== ";") {
-      const ch = stripped[i];
-      if (quote) {
-        if (ch === "\\" && i + 1 < n) i++;
-        else if (ch === quote) quote = null;
-      } else if (ch === '"' || ch === "'") {
-        quote = ch;
-      }
-      i++;
-    }
-    if (i >= n) {
-      out += stripped.slice(headerStart);
-      break;
-    }
-    if (stripped[i] === ";") {
-      out += stripped.slice(headerStart, i + 1);
-      i++;
-      continue;
-    }
-
-    const header = stripped.slice(headerStart, i).trim();
-    i++; // skip '{'
-    const bodyStart = i;
-    let depth = 1;
-    quote = null;
-    while (i < n && depth > 0) {
-      const ch = stripped[i];
-      if (quote) {
-        if (ch === "\\" && i + 1 < n) i++;
-        else if (ch === quote) quote = null;
-      } else if (ch === '"' || ch === "'") {
-        quote = ch;
-      } else if (ch === "{") {
-        depth++;
-      } else if (ch === "}") {
-        depth--;
-      }
-      i++;
-    }
-    const body = stripped.slice(bodyStart, Math.max(bodyStart, i - 1));
-
-    if (header.startsWith("@")) {
-      const lower = header.toLowerCase();
-      if (
-        lower.startsWith("@media") ||
-        lower.startsWith("@supports") ||
-        lower.startsWith("@container") ||
-        lower.startsWith("@layer")
-      ) {
-        out += `${header} {\n${scopeComponentCss(type, body)}\n}\n`;
-      } else {
-        out += `${header} {${body}}\n`;
-      }
-    } else {
-      const prefixed = splitSelectorList(header)
-        .map((s) => prefixSingleSelector(prefix, s))
-        .filter(Boolean)
-        .join(", ");
-      if (prefixed) {
-        out += `${prefixed} {${body}}\n`;
-      }
-    }
-  }
-  return out;
 }
 
 function applyComponentStylesToDoc(doc: Document, css: string): void {
@@ -181,6 +104,30 @@ function applyComponentStylesToDoc(doc: Document, css: string): void {
   if (style.textContent !== css) style.textContent = css;
 }
 
+/**
+ * 把项目级的样式表（project.json 的 styles）按顺序挂进设计窗口。
+ * 用 <link> 挂，样式表里的 url() 才是相对于样式表自己的位置；内容变了就换一个带新版本号的地址。
+ */
+function applyProjectStylesToDoc(doc: Document, styles: Array<{ path: string; text: string }>): void {
+  const wanted = styles.map((style) => `${projectUrl(style.path)}?v=${md5(style.text).slice(0, 8)}`);
+  const existing = [...doc.head.querySelectorAll<HTMLLinkElement>("link[data-vf-project-style]")];
+  if (existing.length === wanted.length && existing.every((link, i) => link.dataset.vfProjectStyle === wanted[i])) return;
+  const anchor = doc.getElementById("vf-component-styles");
+  const fresh = wanted.map((href) => {
+    const link = doc.createElement("link");
+    link.rel = "stylesheet";
+    link.href = href;
+    link.dataset.vfProjectStyle = href;
+    return link;
+  });
+  // 先挂新的再撤旧的，换样式表时页面不会有一瞬间没有样式
+  for (const link of fresh) {
+    if (anchor) anchor.before(link);
+    else doc.head.append(link);
+  }
+  for (const link of existing) link.remove();
+}
+
 /** 指定设计窗口 iframe 的 Document，使控件样式只注入 iframe 内。 */
 export function setStageStyleTarget(doc: Document | null): void {
   stageStyleTarget = doc;
@@ -188,14 +135,16 @@ export function setStageStyleTarget(doc: Document | null): void {
     document.getElementById("vf-component-styles")?.remove();
   }
   if (doc) {
+    if (doc !== document) prepareStageRealm(doc);
     applyComponentStylesToDoc(doc, lastComponentCss);
+    if (doc !== document) applyProjectStylesToDoc(doc, lastProjectStyles);
   }
 }
 
 /** 把所有控件（含标准控件与项目控件）的 style.css 加上类型前缀，合并注入设计窗口 iframe。 */
 async function injectComponentStyles(project: Project): Promise<string> {
   let css = "";
-  for (const std of STANDARD_COMPONENT_LIST) {
+  for (const std of standardComponentsOf(project.kind).values()) {
     if (project.components.has(std.decl.type)) continue;
     if (std.styleText) css += `${scopeComponentCss(std.decl.type, std.styleText)}\n`;
   }
@@ -205,15 +154,17 @@ async function injectComponentStyles(project: Project): Promise<string> {
     if (text) css += `${scopeComponentCss(type, text)}\n`;
   }
   lastComponentCss = css;
+  lastProjectStyles = project.styles ?? [];
   if (stageStyleTarget) {
     applyComponentStylesToDoc(stageStyleTarget, css);
+    if (stageStyleTarget !== document) applyProjectStylesToDoc(stageStyleTarget, lastProjectStyles);
   }
   return css;
 }
 
 /** previous 用于在 YAML 写坏时沿用上一份有效的逻辑。 */
 export async function loadProject(previous: Project | null): Promise<Project> {
-  const project = await loadProjectFiles({ root: projectRoot, readText, listDir }, previous);
+  const project = await loadProjectFiles({ root: projectRoot, readText, listDir, part: currentPart }, previous);
   const preCheckSet = new Set(check(project).map((p) => `${p.level}\0${p.message}`));
   const loaderProblems = project.problems.filter((p) => !preCheckSet.has(`${p.level}\0${p.message}`));
   let svgSignature = "";
@@ -244,7 +195,7 @@ export async function loadProject(previous: Project | null): Promise<Project> {
   for (const [, component] of project.components) {
     if (component.source === undefined) continue;
     const entry = component.decl.entry ?? "index.js";
-    const loaded = await importSource(`components/${component.folder}/${entry}`, component.source);
+    const loaded = await importProjectModule(`components/${component.folder}/${entry}`, component.source);
     if (loaded.error) component.error = `${entry} ${loaded.error}`;
     else if (typeof loaded.module?.default !== "function") component.error = `${entry} 没有默认导出一个创建函数`;
     else {
@@ -282,7 +233,7 @@ export async function loadProject(previous: Project | null): Promise<Project> {
     const entry = effect.decl.entry ?? "index.js";
     const source = effect.files[entry];
     if (effect.error || source === undefined) continue;
-    const loaded = await importSource(`effects/${effect.folder}/${entry}`, source);
+    const loaded = await importProjectModule(`effects/${effect.folder}/${entry}`, source);
     if (loaded.error) effect.error = `${entry} ${loaded.error}`;
     else if (typeof loaded.module?.default !== "function") {
       effect.error = `${entry} 没有默认导出一个${isPaintEffect(effect.decl.kind) ? "绘制" : "播放"}函数`;

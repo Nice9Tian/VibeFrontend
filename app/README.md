@@ -18,6 +18,23 @@ npm run tauri dev
 
 只想在浏览器里看界面时，可以运行 `npm run dev`，再打开 <http://localhost:1420>。这时文件读写走 `vite.config.ts` 里的开发接口，功能与桌面窗口相同。两种方式都使用 1420 端口，不能同时运行。
 
+## 两种设计：界面设计和平面设计
+
+设计项目的 `project.json` 里 `kind` 决定它是哪一类设计（不写就是界面设计）：
+
+| | 界面设计（`"ui"`） | 平面设计（`"graphic"`） |
+| --- | --- | --- |
+| 做什么 | 软件的窗口、面板、对话框 | 海报、作品集、宣传页这类按纸张做的版面 |
+| 画板 | 窗口（对话框叠在主窗口上） | 页面（一次看一页，翻页条翻页；一个页面可以是左右拼起来的跨页） |
+| 单位 | 像素 | 毫米（`scene.json` 的 `unit`） |
+| 右侧页签 | 布局、菜单、状态、文档、YAML、交互事件 | 属性、文档 |
+| 自带的控件 | 17 种窗口控件 | 文本框（`Text`，一段 HTML，样子由样式类决定）、图片（`Image`）、组（`Group`） |
+| 预览 | 逻辑运行，控件能点 | 项目控件按时间动；编辑时只画静帧 |
+| 导出 | Qt 6 工程 | 网页、PDF、每页的图片 |
+
+两类共用同一个编辑器内核：画布、图层、选中、拖动、缩放、吸附、撤销、锁定、引用、说明文档、文件监听。随类型变的东西集中在 `src/kinds.ts`，加一类设计就是在那里加一项，再写它自己的标准控件和导出。
+平面设计项目的写法见 `examples/graphic/design/README.md`。
+
 ## 已实现
 
 - 素材栏：容器、外部容器、六种排版容器（竖排 `VBox`、横排 `HBox`、换行 `Flow`、网格 `Grid`、表单 `Form`、层叠 `Stack`）、停靠面板 `Dock`、对话框 `Dialog`、17 种自带标准控件（`Label`、`Button`、`TextInput`、`TextArea`、`SpinBox`、`Slider`、`ScrollBar`、`ComboBox`、`CheckBox`、`TabBar`、`List`、`Tree`、`DataForm`、`DialogButtonBox`、`Spacer`、`Separator`、`FloatBox` 浮动嵌入框）、“收藏的素材”（跨项目复用，按结构哈希与 `.designer/origins.json` 来源记录识别“已修改 / 有新版本 / 两边都改过”，拖进还没有它的项目时自动复制到 `components/`）、`project/components/` 中的自定义控件（自动列出，可拖入或右键收藏），以及基础图形、流程图图形、线条和“我的预设”
@@ -34,7 +51,12 @@ npm run tauri dev
 - 样式条：选中形状或线条时浮在它旁边，换形状、配色（12 种配色，一次换填充、描边和文字）、自定义颜色、线型、线宽、圆角、边数、角数、旋转角度、端头、路径、字号、对齐、粗体；新画的图形沿用上次用过的颜色和线型
 - 预设：把选中图形的样式存为预设，存在设计项目的 `ui/presets.json`，出现在素材栏“我的预设”里，右键可以删除
 - 双击形状或线条写字；Ctrl+D 复制一份；Ctrl+Enter 快速新建（在右边或下边放一个同样的形状，用折线箭头连起来）；Shift 拖动只沿一个方向；Shift 拖角保持长宽比
-- 拓展栏：顶栏的“素材栏”“详细信息”收起或展开左右两栏，底部栏右端的“收起”把它收成一条导航栏，点页签也会展开。拖动三个栏的边缘改宽度或高度，双击边缘恢复默认，画布始终留出最小空间，尺寸和收起状态下次打开保持。
+- 工作区：项目、素材、图层、详细信息、问题、事件记录六个面板都是停靠面板（和 AnimeAn 用的是同一个停靠引擎 `src/dock.ts`）：拖标题栏停到左、右、下、上四边，叠成页签、上下或左右分栏，拆成浮动面板再放回去，拖分隔条改大小，`×` 关掉以后从“窗口”菜单打开；排列存在浏览器里，下次打开照旧，“窗口 ▸ 重置布局”回到默认。顶栏是菜单栏（文件、编辑、视图、窗口、帮助），`Ctrl+K` 打开命令面板，菜单里的命令都能搜到；“帮助 ▸ 快捷键”列出画布快捷键
+- 素材面板（参考 PromptCut 的素材库）：顶上是搜索框和分类筛选（全部、控件 ▾、图形 ▾，点 ▾ 直接进其中一组）；总览里每组一张卡片，写着组名、条数和前几样的缩略，点卡片像进文件夹一样进到这一组看全部，“‹ 全部”回来；搜索在总览里只留下有结果的组，进了组就只在这一组里筛。图层是单独的面板，不和素材放在一起
+- 项目面板：上面是当前的总项目和它 `parts/` 下的子项目（写着子项目画在总项目的哪一页，◎ 在画布上找到它），下面是清单里别的项目，按最近打开排。点一行在本标签页打开，`↗` 或 Ctrl+点在新标签页打开，几个项目可以同时开着；“添加已有项目”“新建项目”往清单里加。清单由开发服务器记在 `%APPDATA%\VibeFrontend\workspace.json`（环境变量 `VF_WORKSPACE` 可以换位置），每个项目用 `?root=<id>` 打开
+- 平面设计编辑时全部页面摊开在一张无限画布上（`src/boardlayout.ts`）：一页接一页往下排，左右按书脊对齐；每页上方写着第几页，点它“在看”这一页；跳页用下拉框或 PageUp / PageDown；东西能从一页拖到另一页；吸附只看同一页
+- 预览的设备外框（`src/deviceframe.ts`，几何在 `src/devices.ts`，翻书的配页在 `src/bookview.ts`）：书籍（翻开的书一屏两页，翻页时纸从书脊翻过去）、电脑（16:9 桌面、任务栏、软件窗口，任务栏图标上停一下有窗口缩略图，能最小化、还原、最大化）、手机（四种型号、能横放，软件按屏幕宽度缩放）、不套外框（平面设计叫“PDF”：像在浏览器里看 PDF，全部页面按页序竖着排开、用滚轮上下滚，预览栏的页码跟着滚到的那一页，◀ ▶ 和 PageUp / PageDown 是滚到上一页、下一页，编辑器的预览和播放页用同一个缩放规则和页间距（`devices.ts` 的 `pdfPageScale`、`pdfPageGap`），滚到最上面、最下面算第一页、最后一页（`pdfPageInView`，页很矮时也认得出），这时设计窗口不缩放、不平移；界面设计叫“原样”，1:1）；平面设计默认书，界面设计默认电脑；选择存在 `.designer/preview.json`；软件图标是 `project.json` 的 `icon`。电脑里的窗口能拖边、拖角改大小（`resizeDesktopFrame`）：界面设计按新的宽高重新排版（`computeSceneLayout` 的 `rootSize`），拖的途中只重排位置、不重建控件；平面设计的纸按比例放进窗口；最大化时界面设计按整个桌面重新排版。项目可以在 `project.json` 写 `"preview": { "devices": ["book", "pdf"] }` 限定看法（`devices.ts` 的 `parsePreviewDevices`）：只列写了的，按写的顺序，第一个是默认；`pdf` 和 `plain` 是一回事；写错的在问题栏里报出来。编辑器的预览模式、“▶ 独立预览”窗口和导出的网页都能套外框、都能翻页（见下面的“播放页”）
+- 子项目（平面设计）：画布上右键一样东西 ▸“拆成子项目……”（多选几样时是“把这 N 个拆成子项目……”，它们合起来的范围变成一块子项目节点），它连同里面的东西搬进 `parts/<名字>/`（一个完整的小项目：自己的 `project.json`、`ui/scene.json`、`docs/`），原处换成一个同 ID、同位置大小的子项目节点（`Part`），显示子项目的内容、只看不改。双击它（或项目面板里点它）打开子项目单独施工，顶栏显示“总项目 › 子项目”；子项目里改了，总项目跟着变（开着的总项目也会自己重画）。子项目和总项目共用样式表、控件、脚本、素材和“我的预设”，设计类型和样式表跟着总项目；子项目里还可以再放子项目（最多 4 层，套了自己会报错）。播放页、导出的网页、PDF 和图片里子项目照样画出来，`player.html?part=parts/<名字>` 只看一个子项目
 - 运行状态：预览里操作之后回到编辑模式，画布接着显示操作后的状态，不写进文件；中间栏的“恢复初始状态”回到初始状态。右侧“交互事件”页签不进预览就能触发选中控件的事件，切换它的状态。
 - 视角：按住鼠标中键拖动、或者按住空格再用左键拖动，平移设计窗口；滚轮上下平移，Shift + 滚轮左右平移；Ctrl + 滚轮（触控板双指捏合）以鼠标所在的点为中心缩放，10% 到 400%；Ctrl + = / Ctrl + - 放大缩小，Ctrl + 0 回到 100%，Shift + 1 缩放到刚好装下整个窗口，Shift + 2 缩放到所选。设计窗口四周留有空白，可以把视角移到窗口外面。中间栏右侧有缩放比例和按钮
 - 版本的恢复与重做（Ctrl+Z、Ctrl+Y、Ctrl+Shift+Z，以及工具栏“历史”菜单直接跳转到任意已记录版本），覆盖移动、缩放、旋转、属性修改、添加和删除控件以及 YAML 逻辑修改
@@ -51,7 +73,7 @@ npm run tauri dev
 - 同时选中多个控件时，引用第一行放共同的信息，后面每个控件一行，只写不同的部分，格式见 `project/README.md` 第 3.1 节。
 - 引用：把选中的东西复制成一行英文 `User referenced "键=值; ..."`，带文件路径和行号，贴给 Agent。可以引用控件（右键菜单或右上角的“引用”按钮）、文档或 YAML 中选中的几行（页签上的“引用所选”）、素材栏里的一种控件（右键）、问题栏里的一条问题（右键）；没有选中控件时，“引用”按钮引用整个项目
 - 在右侧顶部直接修改控件 ID，YAML 中的引用同步更新
-- 设计窗口的预览模式与顶部“▶ 独立预览”窗口：控件接收鼠标事件，逻辑运行，文字条件可切换，动作模拟模式（真跑 / 模拟成功 / 模拟失败）可切换，可重新开始，按住 Alt 点击选中控件并打开说明
+- 设计窗口的预览模式与顶部“▶ 独立预览”窗口：控件接收鼠标事件，逻辑运行，文字条件可切换，动作模拟模式（真跑 / 模拟成功 / 模拟失败）可切换，可重新开始，按住 Alt 点击选中控件并打开说明。界面设计的独立预览窗口工具条上也能选设备（电脑、手机、书、原样，和编辑器共用 `.designer/preview.json`），套外框时设备缩放到装下整个窗口，窗口大小变了跟着缩放
 - 逻辑运行层：状态（含 `array` 数组状态及增删移动 `push` / `remove` / `move` / 下标赋值）、符号条件与文字条件、属性计算、绑定、调用纯逻辑 JS 函数（`fn`，检查器禁止使用网页元素）、打开与关闭窗口（`openWindow` / `closeWindow`，含模态对话框）、调用动作（`call` 与 `actions`）及动作模拟、事件按批处理、全局事件
 - 状态的归属（界面自己管、业务管）、带参数的业务事件（界面 → 业务）与请求事件（业务 → 界面）
 - 状态图片（`stateImages`）：固定 5 个状态（`normal` / `hover` / `pressed` / `selected` / `disabled`），同一套 SVG 文件在网页端和 Qt 端（`QSvgRenderer`）绘制；九宫格拉伸（`slice`）保证四角不变形；文字由控件另外画在上面；状态切换带透明度过渡；检查器自动检测 Qt `QSvgRenderer` 不支持的 `<feDropShadow>`、`<feComponentTransfer>` 和 `clip-path` 并给出替代写法提示
@@ -61,7 +83,24 @@ npm run tauri dev
 - 右侧“文档”和“YAML”页签：文档支持“源码 | 预览”切换和所见即所得编辑（未改动的段落保留原文，小节和锁定标记受保护），停止输入后自动保存
 - 问题栏：YAML 语法、未知的状态路径或条件代号、控件不支持的属性和事件、逻辑函数中的网页元素检查、找不到的说明小节等
 - 事件记录
+- 平面设计（`kind: "graphic"`）：毫米画布（位置和尺寸存到 0.01 mm，按屏幕像素定的手感如吸附距离、最小尺寸、粘贴错开的距离换成毫米）；页面和跨页（`boards` 定页序，翻页条和 PageUp / PageDown 翻页，加页、删页、调页序）；版心和中缝参考线，东西能吸到版心线和中缝上；文本框双击直接改字（存成单引号属性的 HTML），右侧“属性”页签改位置尺寸、纸张、样式类（列出样式表里用 `/* @style 名字 */` 标出的样式）和控件属性；文本框可以单独调字号（pt）、行距、字距、对齐，没填时灰字显示样式类给的值；成册时第一个页面可以设成包封（左封底、右封面，`scene.cover = "wrap"`），页面的名字、翻页条和按页导出都按书的页码；项目样式表（`project.json` 的 `styles`）挂进设计窗口；问题栏检查压中缝的文字、找不到的样式类、界面设计专用的类型
+- 设计窗口是“项目的网页”：基准地址指向项目文件夹，项目里的脚本在设计窗口自己的环境里加载，控件可以用相对路径引用项目里别的脚本（`lib/`）、图片和字体；脚本改了换一个干净的环境重新加载
+- 播放页（`player.html`，`src/player/`）：不带编辑器，显示平面设计项目；“▶ 独立预览”打开它，导出的网页里跑的也是它。底下的播放条选设备（书籍、电脑、手机、PDF；项目在 `project.json` 的 `preview.devices` 里限定了的只列那几种），◀ ▶ 或键盘 ← →、PageUp / PageDown 翻页，手机能换型号、横放；PDF 是不套外框、一页页排开往下滚。页面只画一次，翻页、换设备时挪进外框，控件接着动。选哪种设备：网址参数 `?device=book|desktop|phone|pdf`（`pdf` 也可以写 `plain`；手机再加 `&phone=<型号>&landscape=1`）最优先，其次是存下来的（独立预览存在 `.designer/preview.json`，和编辑器共用；导出的网页存在看网页的浏览器里），都没有就是默认（项目写的第一个，没写是书）；项目不让用的不算；换设备时网址参数跟着改。几个窗口共用 `.designer/preview.json`：存的时候先读文件、只改动过的那一项，别的窗口改了，开着的编辑器预览跟着换、停在同一页；桌面窗口（Tauri）里独立预览窗口不能写盘，换的设备交给编辑器主窗口写。“打印”按纸张原大出，用浏览器自己的菜单打印时也临时换回一页页排开
 - 监听项目文件夹，外部修改后自动刷新；YAML 写坏时沿用上一份有效逻辑。和界面上的操作同时发生时的规则：同一文件的写入按发起顺序落盘；重载等本窗口的写入做完再读，读的过程中又有本地修改就重读；文档和 YAML 编辑器里没保存的内容不被外部修改覆盖，停止输入后以编辑器为准；“新增”表单里填了一半的内容不被重绘清掉；鼠标按住时不重绘，松开后补上。切换选中时文档页立刻跟到新控件，没存完的说明继续按原来的小节保存，保存失败时内容留着，文档页有重试入口，回到原控件能接着编辑；一次操作写几个文件时中途失败会把已写的写回原内容，内存、界面和历史都回到操作之前，写回也失败时提示哪些文件不一致
+
+## 导出成网页、PDF 和图片（平面设计）
+
+```bash
+npm run export:web -- <设计项目文件夹> [导出到哪个文件夹]
+```
+
+```bash
+npm run export:print -- <设计项目文件夹> [输出文件夹] [--scale 2] [--no-png] [--no-split]
+```
+
+- 网页：`index.html` + 播放页的程序（`vf-player.js`，设备外框和翻页都打包在里面）+ 项目里画面要用的文件（说明文档、逻辑不带，`.designer/` 里编辑器这台机器上的设置也不带）。不连编辑器、不上网，但要经一个本地服务打开（直接双击 `index.html`，浏览器不让脚本读文件）。默认套书的外框，看的人能换电脑、手机或一页页排开，见上面的“播放页”。内容没变的文件不重写，上次导出过、这次不要的会删掉（只删导出记录 `vf-export.json` 里记着的）。
+- PDF 和图片：先导出成网页，用无头浏览器（本机的 Chrome 或 Edge，不加载扩展）按纸张原大打开，等字体、图片和各控件的异步加载都到位再出图。`boards.pdf` 每个页面一页、尺寸和页面一样，文字和矢量图形保持矢量；有跨页时 `sheets.pdf` 按纸拆开、按页码排（成册时封面在第一页）；每页一张 PNG（`--scale` 是像素倍数）；`report.json` 记着页面清单和页面报的错。画布（`<canvas>`）在出图前自动换成同样大小的图片，PDF 里不会有白方块。
+- 编辑器顶栏的“导出”按钮在浏览器模式（`npm run dev`）下经开发服务器调用同样的脚本。
 
 ## 导出成 Qt
 
@@ -94,8 +133,12 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 
 - 普通控件（非基础图形 `Shape` 的 `QWidget`）在导出成 Qt 时的旋转绘制（基础图形 `Shape` 已按 `QPainter` 旋转导出；普通控件设置了旋转时在问题栏保留提示）
 - `animean/mainwindow.cpp` 与 `animean/pythonbind/python_bindings.cpp` 中尚未剥离的 9 类直接操作画布/弹窗/光标/菜单的 Python UI 回调（`animean/business/README.md` 归纳的 `registerAnimeanUiOverlayCallback`、`registerAnimeanUiEditHandlesCallback` / `registerAnimeanUiEditHandleCallback`、`registerAnimeanUiCursorCallback`、`registerAnimeanUiMenuCallbacks`、`registerAnimeanUiLayerContextCallbacks`、`registerAnimeanUiDialogCallbacks`、`registerAnimeanUiFreezeCallbacks` / `registerAnimeanUiFreezeCallback`、`registerAnimeanUiPythonDebugCallback`、`registerAnimeanUiStatusCallback` 以及 `registerAnimeanUiWindowsCallback`、`registerAnimeanUiFillPaintModeCallback`、`registerAnimeanUiPadValueCallback`）、动态脚本菜单、Python 调试 REPL 面板、交互式导入弹窗等界面耦合；`examples/animean/qt/app/Connect.cpp` 目前只连接了示范桩代码（`LayerModel` + `CanvasWidget`，仅接线 `layerToggleVisibleRequested` 与 `setCanvasHostWidget`），尚未接入 `AnimeanBusiness`；`animean/CMakeLists.txt` 默认 `ANIMEAN_WITH_PYTHON=ON` 且 `animean/tests/business_tests.cpp` 含有 `pybind11`（`py::scoped_interpreter`）测试，但最后一次集成验收是在 `ANIMEAN_WITH_PYTHON=OFF` 下执行的，`ANIMEAN_WITH_PYTHON=ON` 未在最终版本上重跑
-- Tauri 桌面端运行路径（`inTauri` / `isInTauri()` 分支，如素材库桌面读写、独立预览 `WebviewWindow`、导出目录选择与写盘）仅通过 `cargo check` 和浏览器/Node 端开发接口模拟验证，未实际启动 Tauri 桌面端验证
+- Tauri 桌面端运行路径（`inTauri` / `isInTauri()` 分支，如素材库桌面读写、独立预览 `WebviewWindow`、独立预览窗口把换过的预览设备交给主窗口写、导出目录选择与写盘）仅通过 `cargo check` 和浏览器/Node 端开发接口模拟验证，未实际启动 Tauri 桌面端验证
 - 批量跑用例时曾出现单轮 300 到 610 秒的卡顿，后来多轮没有再出现，根因未查明
+- 平面设计：桌面窗口（Tauri）里的“导出”还不能直接写盘，对话框给出要运行的命令；线条（`Line`）只在像素画布上有；还没有出血；文字放不下时没有自动提示
+- 从右往左翻的书还没有（编辑器的预览、独立预览、导出的网页都一样）；导出的网页还不能直接双击打开，要经本地服务
+- 电脑预览里把窗口拖得比停靠区还小时：停靠区被临时收窄，这时拖非默认方向（左右停靠区里左右并排、上下停靠区里上下叠放）的分栏分隔条位置不准（默认方向是准的）；浮动的停靠面板和浮动嵌入框画在窗口里面，窗口拖小后可能落到窗口外面看不见，窗口拖大就回来
+- 项目面板：桌面窗口（Tauri）里只开一个项目，多项目清单只在浏览器版（`npm run dev`）里有；撤销“拆成子项目”只把画布换回去，`parts/` 下的子项目文件夹留着（项目面板里还看得到）；子项目节点不能从素材面板拖出来，只能拆出来，或者在 `scene.json` 里写
 - `可视化界面与语义逻辑设计工具.md` 第 11 节“以后再做”中的内容：跨重启持久化的 `.designer/history/` 及按单小节/单条目独立版本列表与恢复、YAML 条目/整文件锁定（`# 🔒`）与 `component.json` 锁定及 `.designer/locks.json` 快照比对恢复、iOS 版、控件实现直接引入 npm 依赖包并由工具打包、运行时自动测量文字溢出提示、导出为独立 Web 项目
 
 
@@ -103,7 +146,7 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 
 | 文件 | 内容 |
 | --- | --- |
-| `src/main.ts` | 编辑器界面：素材栏、图层、设计窗口、右侧页签、问题栏 |
+| `src/main.ts` | 编辑器界面：素材、图层、设计窗口、右侧页签、问题栏，以及把它们装进工作区、注册菜单命令 |
 | `src/library.ts` | 收藏的素材、来源记录（`.designer/origins.json`）、状态对比与跨项目复制 |
 | `src/structhash.ts` | 控件的结构哈希（忽略名字与说明、统一换行和 JSON 键顺序） |
 | `src/docview.ts` | 文档页签的“源码 \| 预览”切换与所见即所得编辑 |
@@ -147,6 +190,36 @@ node scripts/compare-layout.ts <设计项目文件夹> <Qt可执行文件路径>
 | `src/stackview.ts` | 编辑模式下层叠容器看哪一页：隐藏页集合、切到选中控件所在的页 |
 | `src/eventedit.ts` | 右侧“交互事件”页签：列出控件的事件并触发 |
 | `src/overflowbar.ts` | 一排控件放不下时收进“…”弹层，工具栏和右侧页签共用 |
-| `src/panels.ts` | 左、右、下三个拓展栏的收起、展开和拖动改大小 |
-| `src/fs.ts` | 文件读写接口，桌面窗口里调用 Rust，浏览器里调用开发接口 |
-| `src-tauri/src/lib.rs` | Rust 系统层：读、写、列目录、监听 |
+| `src/workspace.ts` | 工作区：把编辑器的面板装进停靠面板（复用 `src/dock.ts`），排列存进浏览器、关掉的面板从菜单打开 |
+| `src/commands.ts` | 命令表：菜单栏、命令面板和快捷键清单都从这里取 |
+| `src/menubar.ts` | 菜单栏、命令面板（`Ctrl+K`）、快捷键清单 |
+| `src/assetbrowser.ts` | 素材面板的搜索、分类筛选和按组进入 |
+| `src/projectpanel.ts` | 项目面板：总项目和子项目、清单里的别的项目 |
+| `src/dialogs.ts` | 填几项再确定的小对话框 |
+| `src/parts.ts` | 子项目：路径换算、拆成子项目改哪些数据（纯计算，编辑器、检查、播放页、命令行共用） |
+| `src/render.ts` | 不带编辑功能的画法：播放页画页面、编辑器画子项目节点的内容都用它 |
+| `src/boardlayout.ts` | 平面设计编辑时页面在无限画布上的位置（一列、按书脊对齐），坐标换算层用它 |
+| `src/bookview.ts` | 预览成书时一屏一屏怎么配页；套着外框时每一屏放哪几面纸（`deviceViews`，编辑器的预览和播放页共用） |
+| `src/devices.ts` | 预览设备的几何：桌面上的窗口、手机型号和屏幕、放进视口的缩放 |
+| `src/deviceframe.ts` | 预览设备的外框（书、电脑、手机）和翻页动画，画在放页面的那个文档里（编辑器是设计窗口，播放页是它自己），不依赖编辑器 |
+| `src/fs.ts` | 文件读写接口，桌面窗口里调用 Rust，浏览器里调用开发接口；项目文件的网址（`projectBaseUrl`、`projectUrl`） |
+| `src/kinds.ts` | 设计类型（界面设计、平面设计）各自的配置和单位换算：编辑器内核只从这里取随类型变的东西 |
+| `src/stage.ts` | 设计窗口里节点的 DOM 怎么搭：基础样式、方框、给控件的环境（`StageServices`）；编辑器、播放页和导出共用 |
+| `src/pages.ts` | 页面：版心、中缝、页码，加页、删页、调页序 |
+| `src/propsedit.ts` | 右侧“属性”页签（平面设计） |
+| `src/richtext.ts` | 文本框的内容写回文件：固定写法的 HTML，属性用单引号 |
+| `src/classstyles.ts` | 项目样式表里有哪些样式类 |
+| `src/checkgraphic.ts` | 平面设计项目的检查 |
+| `src/cssscope.ts` | 控件样式加类型前缀（从 `project.ts` 挪出来，播放页也用） |
+| `src/graphicexport.ts` | 平面设计的“导出”对话框 |
+| `src/player/` | 播放页：`main.ts` 画页面，`screen.ts` 是屏幕上怎么看（设备外框、播放条、翻页），`host.ts` 是编辑器自带的入口（`player.html`，读写 `.designer/preview.json`） |
+| `standard/graphic.ts` | 平面设计自带的标准控件：文本框、图片 |
+| `scripts/export-web.ts`、`scripts/export-print.ts` | 导出成网页、PDF 和图片的命令行入口 |
+| `scripts/headless.ts` | 无头浏览器和本地静态服务的共用部分 |
+| `scripts/test-graphic.ts` | 平面设计的测试：纯函数、检查、真实编辑器里的拖动翻页改字预览、导出（`npm run test:graphic`） |
+| `scripts/test-workspace.ts` | 多项目开发接口的测试：项目清单、`?root=` 隔离、越界和跨站防护（`npm run test:workspace`） |
+| `scripts/test-parts.ts` | 子项目、项目面板和工作区的测试：拆成子项目、总项目跟着变、导出带子项目、面板关掉再打开、素材搜索（`npm run test:parts`） |
+| `scripts/test-env.ts` | 起开发服务器的测试第一行 import 它：项目清单写到临时文件，不碰用户自己的 |
+| `scripts/test-preview-logic.ts` | 页面排布、翻书配页、设备几何的纯函数测试（`npm run test:preview-logic`） |
+| `scripts/test-preview.ts` | 预览设备的测试（无头浏览器）：编辑器的预览、播放页（独立预览）、导出的网页、界面设计的独立预览窗口里的书翻页、手机、电脑的窗口和任务栏、原样、设置存下来；导出的网页只从自己的文件夹取东西（`npm run test:preview`） |
+| `src-tauri/src/lib.rs` | Rust 系统层：读、写、列目录、监听，以及把项目文件夹当网站的 `vfproject` 协议 |

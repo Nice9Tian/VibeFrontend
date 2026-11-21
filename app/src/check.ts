@@ -1,4 +1,5 @@
 // 检查设计项目：画布、逻辑、说明、函数、动作和效果之间能不能对上。结果显示在工具的问题栏里，导出前也会检查一遍。
+import { checkGraphic, checkUiKind } from "./checkgraphic.ts";
 import { dockIdsOfLayout } from "./dock.ts";
 import { parseAssignment, parseExpr, pathsIn } from "./expr.ts";
 import {
@@ -19,7 +20,7 @@ import {
   MOUSE_EVENTS,
   parseDocRef,
   requestEvent,
-  STANDARD_COMPONENTS,
+  standardComponentsOf,
   STATE_IMAGE_KEYS,
   walkMenuItems,
   type ConditionDef,
@@ -369,7 +370,8 @@ export function checkSvgCompatibility(svgText: string, fileLabel: string, nodeId
 
 export function check(project: Project): Problem[] {
   ensureComponentSvgFiles(project);
-  const problems: Problem[] = [];
+  // 随设计类型不同的检查在前面，后面是各类设计共用的（画布、逻辑、说明、控件之间对不对得上）
+  const problems: Problem[] = project.kind === "graphic" ? checkGraphic(project) : checkUiKind(project);
   const { scene, logic } = project;
   const error = (message: string, nodeId?: string) => problems.push({ level: "error", message, nodeId });
   const hint = (message: string, nodeId?: string) => problems.push({ level: "hint", message, nodeId });
@@ -608,7 +610,7 @@ export function check(project: Project): Problem[] {
       }
       continue;
     }
-    const component = project.components.get(node.type) ?? STANDARD_COMPONENTS.get(node.type);
+    const component = project.components.get(node.type) ?? standardComponentsOf(project.kind).get(node.type);
     if (!component) {
       error(`控件 ${id} 的类型“${node.type}”在 components/ 或标准控件中找不到`, id);
       continue;
@@ -638,6 +640,11 @@ export function check(project: Project): Problem[] {
   for (const [type, comp] of project.components) {
     if (comp.error) {
       error(`控件 ${type}：${comp.error}`);
+    }
+    // 和工具自带的类型同名：工具会用自带的那个，项目里的这个不会生效
+    const graphicOnly = type === "Page" || type === "Group" || type === "Part";
+    if (BUILTIN_TYPES.includes(type) && (!graphicOnly || project.kind === "graphic")) {
+      error(`控件 ${type}：类型名和工具自带的类型重名，工具会用自带的那个，请给 components/${comp.folder ?? type} 改个名字`);
     }
     const folder = comp.folder ?? type;
     if (comp.decl.stateImages) {

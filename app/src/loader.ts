@@ -2,6 +2,8 @@
 // 工具界面里走 fs.ts，命令行里走 Node 的文件接口。
 import { parse as parseYaml } from "yaml";
 import { check } from "./check.ts";
+import { parsePreviewDevices, type PreviewChoice } from "./devices.ts";
+import { DEFAULT_KIND, isKindId, KINDS, type KindId } from "./kinds.ts";
 import { md5 } from "./md5.ts";
 import {
   LOGIC_PATH,
@@ -11,22 +13,118 @@ import {
   type EffectDecl,
   type LoadedComponent,
   type LoadedEffect,
+  type LoadedPart,
   type Logic,
   type Problem,
   type Project,
   type Scene,
 } from "./model.ts";
+import { isValidPartPath, MAX_PART_DEPTH, PARTS_DIR, referencedParts, ROOT_PREFIX } from "./parts.ts";
 import type { ShapePreset } from "./shapes.ts";
 import { canonicalJson, normalizeLf } from "./structhash.ts";
 
 export const PRESETS_PATH = "ui/presets.json";
 
+/** 用户存下来的图形预设放在哪：子项目和总项目共用一份（素材是整个项目的） */
+export function presetsPath(partOf: Project["partOf"] | undefined): string {
+  return partOf ? `${ROOT_PREFIX}${PRESETS_PATH}` : PRESETS_PATH;
+}
+
+/** 一个还什么都没放的画布：界面设计是一个空窗口，平面设计是一张 A4。 */
+export function emptyScene(kind: KindId): Scene {
+  if (kind === "graphic") {
+    return { version: 1, unit: "mm", root: "page1", boards: ["page1"], nodes: { page1: { type: "Page", width: 210, height: 297, children: [] } } };
+  }
+  return { version: 1, root: "window", nodes: { window: { type: "Window", width: 480, height: 320, children: [] } } };
+}
+
 export interface ProjectIO {
   /** 设计项目文件夹的绝对路径 */
   root(): Promise<string>;
-  /** 路径相对于项目文件夹；文件不存在时返回 null */
+  /**
+   * 路径相对于项目文件夹；文件不存在时返回 null。
+   * 打开子项目时，项目自己的文件（project.json、ui/、docs/ 等）读的是子项目文件夹里的，路径以 @root/ 开头的读总项目的
+   * （见 parts.ts 的 mapPartPath）。
+   */
   readText(path: string): Promise<string | null>;
   listDir(path: string): Promise<Array<{ name: string; isDir: boolean }>>;
+  /** 打开的子项目文件夹（parts/<名字>），打开的是总项目时为 null 或不提供 */
+  part?(): string | null;
+}
+
+type ProjectConfig = {
+  name?: string;
+  kind?: unknown;
+  part?: unknown;
+  windows?: Array<{ id?: string; doc?: string }>;
+  boards?: Array<{ id?: string; doc?: string }>;
+  styles?: unknown;
+  export?: { qt?: string; web?: string };
+  icon?: unknown;
+  preview?: unknown;
+};
+
+/**
+ * 画布里子项目节点用到的子项目，连同它们里面又用到的，一层一层读进来（最多 MAX_PART_DEPTH 层）。
+ * texts 是读到的原文，算进项目指纹：子项目一改，总项目就重新加载、重新画。
+ */
+async function loadParts(io: ProjectIO, scene: Scene, texts: string[]): Promise<Map<string, LoadedPart>> {
+  const parts = new Map<string, LoadedPart>();
+  let frontier = referencedParts(scene);
+  for (let depth = 0; depth < MAX_PART_DEPTH && frontier.length > 0; depth++) {
+    const next: string[] = [];
+    for (const part of frontier) {
+      if (parts.has(part)) continue;
+      if (!isValidPartPath(part)) {
+        parts.set(part, { name: part, scene: null, error: `子项目的路径 ${JSON.stringify(part)} 写得不对` });
+        continue;
+      }
+      const configText = await io.readText(`${ROOT_PREFIX}${part}/project.json`);
+      const sceneText = await io.readText(`${ROOT_PREFIX}${part}/ui/scene.json`);
+      texts.push(part, configText ?? "", sceneText ?? "");
+      let name = part.slice(PARTS_DIR.length + 1);
+      try {
+        const config = configText ? (JSON.parse(configText) as ProjectConfig) : {};
+        if (typeof config.name === "string" && config.name) name = config.name;
+      } catch {
+        // 名字读不出来就用文件夹名；画布还能用
+      }
+      if (sceneText === null) {
+        parts.set(part, { name, scene: null, error: `找不到 ${part}/ui/scene.json` });
+        continue;
+      }
+      try {
+        const partScene = JSON.parse(sceneText) as Scene;
+        parts.set(part, { name, scene: partScene });
+        next.push(...referencedParts(partScene));
+      } catch (e) {
+        parts.set(part, { name, scene: null, error: `${part}/ui/scene.json 不是有效的 JSON：${(e as Error).message}` });
+      }
+    }
+    frontier = next;
+  }
+  return parts;
+}
+
+/** 总项目 parts/ 下的全部子项目（有 project.json 的文件夹） */
+async function listParts(io: ProjectIO, texts: string[]): Promise<Array<{ part: string; name: string }>> {
+  const list: Array<{ part: string; name: string }> = [];
+  for (const entry of await io.listDir(`${ROOT_PREFIX}${PARTS_DIR}`)) {
+    const part = `${PARTS_DIR}/${entry.name}`;
+    if (!entry.isDir || !isValidPartPath(part)) continue;
+    const configText = await io.readText(`${ROOT_PREFIX}${part}/project.json`);
+    if (configText === null) continue;
+    texts.push(part, configText);
+    let name = entry.name;
+    try {
+      const config = JSON.parse(configText) as ProjectConfig;
+      if (typeof config.name === "string" && config.name) name = config.name;
+    } catch {
+      // 写坏了也列出来，打开以后问题栏会说
+    }
+    list.push({ part, name });
+  }
+  return list;
 }
 
 /**
@@ -95,25 +193,60 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
   let name = "未命名项目";
   let pageDoc = "docs/page.md";
   let qtExportDir: string | null = null;
+  let webExportDir: string | null = null;
+  let kind: KindId = DEFAULT_KIND;
+  let stylePaths: string[] = [];
+  let icon: string | undefined;
+  let previewDevices: PreviewChoice[] | null = null;
   const extraWindowDocs: string[] = [];
+  const boardDocs: Record<string, string> = {};
   const configText = (await io.readText("project.json")) ?? "{}";
+  // 子项目：设计类型、样式表、导出位置跟着总项目（子项目自己写了的除外）
+  let partOf: Project["partOf"] = null;
+  let masterConfigText = "";
   try {
-    const config = JSON.parse(configText) as {
-      name?: string;
-      windows?: Array<{ id?: string; doc?: string }>;
-      export?: { qt?: string };
-    };
-    name = config.name ?? name;
-    pageDoc = config.windows?.[0]?.doc ?? pageDoc;
-    for (const win of config.windows ?? []) {
-      if (win?.doc) extraWindowDocs.push(win.doc);
+    const config = JSON.parse(configText) as ProjectConfig;
+    if (config.part !== undefined) {
+      masterConfigText = (await io.readText(`${ROOT_PREFIX}project.json`)) ?? "";
+      let master: ProjectConfig = {};
+      try {
+        master = masterConfigText ? (JSON.parse(masterConfigText) as ProjectConfig) : {};
+      } catch (e) {
+        problems.push({ level: "error", message: `总项目的 project.json 不是有效的 JSON：${(e as Error).message}` });
+      }
+      partOf = { name: typeof master.name === "string" && master.name ? master.name : "总项目", part: io.part?.() ?? null };
+      if (config.kind === undefined && master.kind !== undefined) config.kind = master.kind;
+      if (config.styles === undefined && master.styles !== undefined) config.styles = master.styles;
+      if (config.export === undefined && master.export !== undefined) config.export = master.export;
+      if (config.icon === undefined && master.icon !== undefined) config.icon = master.icon;
+      if (config.preview === undefined && master.preview !== undefined) config.preview = master.preview;
     }
+    name = config.name ?? name;
+    if (config.kind !== undefined) {
+      if (isKindId(config.kind)) kind = config.kind;
+      else problems.push({ level: "error", message: `project.json 的 kind 写的是 ${JSON.stringify(config.kind)}，只能是 ${Object.keys(KINDS).map((k) => `"${k}"`).join(" 或 ")}；先按界面设计打开` });
+    }
+    // 画板和说明文档的对应：界面设计写 windows，平面设计写 boards，两个是一回事
+    const boardList = config.boards ?? config.windows ?? [];
+    pageDoc = boardList[0]?.doc ?? pageDoc;
+    for (const win of boardList) {
+      if (win?.doc) extraWindowDocs.push(win.doc);
+      if (win?.id && win.doc) boardDocs[win.id] = win.doc;
+    }
+    if (Array.isArray(config.styles)) stylePaths = config.styles.filter((item): item is string => typeof item === "string" && item !== "");
+    else if (config.styles !== undefined) problems.push({ level: "error", message: "project.json 的 styles 要写成样式表路径的数组，例如 [\"styles/text.css\"]" });
+    if (typeof config.icon === "string" && config.icon.trim()) icon = config.icon.trim();
+    else if (config.icon !== undefined) problems.push({ level: "error", message: "project.json 的 icon 要写成项目里一张图片的路径，例如 \"assets/icon.svg\"" });
+    const preview = parsePreviewDevices(config.preview);
+    previewDevices = preview.devices;
+    for (const message of preview.problems) problems.push({ level: "error", message });
     qtExportDir = config.export?.qt ?? null;
+    webExportDir = config.export?.web ?? null;
   } catch (e) {
     problems.push({ level: "error", message: `project.json 不是有效的 JSON：${(e as Error).message}` });
   }
 
-  let scene: Scene = previous?.scene ?? { version: 1, root: "window", nodes: { window: { type: "Window", width: 480, height: 320, children: [] } } };
+  let scene: Scene = previous?.scene ?? emptyScene(kind);
   const sceneText = await io.readText(SCENE_PATH);
   if (sceneText === null) {
     problems.push({ level: "error", message: `找不到 ${SCENE_PATH}` });
@@ -124,6 +257,18 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
       problems.push({ level: "error", message: `${SCENE_PATH} 不是有效的 JSON，画布沿用上一份有效内容：${(e as Error).message}` });
     }
   }
+
+  // 项目级的样式表：读出来才能算进指纹（改了要重新挂），文字样式的清单也从这里来
+  const styles: Array<{ path: string; text: string }> = [];
+  for (const path of stylePaths) {
+    const text = await io.readText(path);
+    if (text === null) problems.push({ level: "error", message: `找不到样式表 ${path}（project.json 的 styles 里写了它）` });
+    else styles.push({ path, text });
+  }
+
+  const partTexts: string[] = [];
+  const parts = kind === "graphic" ? await loadParts(io, scene, partTexts) : new Map<string, LoadedPart>();
+  const partList = kind === "graphic" ? await listParts(io, partTexts) : [];
 
   const logicText = (await io.readText(LOGIC_PATH)) ?? "";
   let logic: Logic = previous?.logic ?? {};
@@ -196,7 +341,7 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
 
   // 用户存下来的图形预设
   let presets: ShapePreset[] = [];
-  const presetsText = await io.readText(PRESETS_PATH);
+  const presetsText = await io.readText(presetsPath(partOf));
   if (presetsText !== null) {
     try {
       const parsed = JSON.parse(presetsText) as { presets?: ShapePreset[] };
@@ -216,12 +361,21 @@ export async function loadProjectFiles(io: ProjectIO, previous: Project | null):
     if (text !== null) docs.set(path, text);
   }
 
-  const signature = JSON.stringify([sceneText, logicText, [...docs], fingerprints, configText, presetsText]);
+  const signature = JSON.stringify([sceneText, logicText, [...docs], fingerprints, configText, masterConfigText, presetsText, styles, partTexts]);
   const project: Project = {
+    kind,
     root,
     name,
     pageDoc,
+    boardDocs,
     qtExportDir,
+    webExportDir,
+    styles,
+    partOf,
+    parts,
+    partList,
+    ...(icon ? { icon } : {}),
+    ...(previewDevices ? { previewDevices } : {}),
     presets,
     scene,
     sceneText: sceneText ?? "",

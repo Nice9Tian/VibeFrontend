@@ -4,6 +4,7 @@
 // 2) 真实无头浏览器（Headless Chrome + CDP 真实鼠标事件）端到端验收：
 //    从全新空项目出发，仅通过编辑模式鼠标拖拽与面板交互搭出“图层面板”（Dock + HBox 工具栏 + 列表 + 显隐栏 + 视图菜单项 + 业务状态 layer.visible），
 //    并在真实浏览器内验证锁定拦截与 Ctrl+Z / Ctrl+Y 撤销重做，最后与 examples/animean/design 对跑同一套图层面板用例，结果完全一致。
+import "./test-env.ts";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -831,7 +832,14 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     };
 
     const dragFromPaletteToStage = async (type: string, sx: number, sy: number) => {
-      const itemBox = await cdp!.waitForSelector(`.palette-item[data-type="${type}"]`);
+      // 素材面板按组收着：先进到这样素材所在的组（总览卡片上的缩略只是看的，拖不动）
+      await cdp!.eval(`(() => {
+        const item = document.querySelector('.palette-item[data-type="${type}"]:not(.asset-preview-item)');
+        const group = item?.closest("[data-asset-group]")?.dataset.assetGroup;
+        if (group && !item.closest(".asset-detail")) document.querySelector('.asset-chip.back')?.click();
+        if (group && !item.closest(".asset-detail")) document.querySelector('.asset-group[data-group="' + group + '"]')?.click();
+      })()`);
+      const itemBox = await cdp!.waitForSelector(`.asset-detail .palette-item[data-type="${type}"]`);
       const targetPt = await stagePointToClient(sx, sy);
       await cdp!.mouseDrag(itemBox.x, itemBox.y, targetPt.x, targetPt.y);
     };
@@ -1738,7 +1746,7 @@ test("Headless Chrome 真实鼠标拖拽与面板操作：从空项目搭出图�
     const paletteAction = async (label: string) => {
       await clearToast();
       const menuItem = `[...document.body.querySelectorAll("*")].find((e) => e.children.length === 0 && e.textContent.trim() === ${JSON.stringify(label)})`;
-      const openPaletteMenu = `document.querySelector('.palette-item[data-type="LocalWidget"]')?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }))`;
+      const openPaletteMenu = `document.querySelector('.palette-item[data-type="LocalWidget"]:not(.asset-preview-item)')?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }))`;
       // 素材栏重绘时元素会被换掉，菜单没出现就是还没绑上，等界面就绪
       await waitUntil(`素材栏菜单出现 ${label}`, async () => {
         await cdp!.eval(openPaletteMenu);

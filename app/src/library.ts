@@ -9,6 +9,9 @@ import {
   BUILTIN_TYPES,
   CONTAINER_DECL,
   declFor,
+  defaultSizeFor,
+  standardComponentsOf,
+  unitOf,
   effectsForComponent,
   isPaintEffect,
   STANDARD_COMPONENTS,
@@ -1075,7 +1078,8 @@ async function saveUserLibrary(items: LibraryItem[], removedIds: string[] = []):
 export interface LibraryHost {
   getProject(): Project;
   getMode(): "edit" | "preview";
-  getZoom(): number;
+  /** 屏幕上的一点 → 设计窗口里的坐标（画布单位）。用编辑器自己的换算：平面设计摊开时画布从负坐标开始，不能只除以缩放 */
+  clientToStage(clientX: number, clientY: number): { x: number; y: number };
   readText(path: string): Promise<string | null>;
   writeText(path: string, content: string): Promise<void>;
   removeFile?(path: string): Promise<void>;
@@ -1691,7 +1695,10 @@ function startLibraryDrag(down: PointerEvent, fav: LibraryItem, matchedLocalType
   down.preventDefault();
   const project = host.getProject();
   const decl = (matchedLocalType ? declFor(project, matchedLocalType) : null) ?? parseComponentDecl(fav.files, fav.type);
-  const size = decl.defaultSize ?? CONTAINER_DECL.defaultSize!;
+  // 拖着走的虚框按屏幕像素画；尺寸在声明里是按画布单位写的
+  const unitPx = unitOf(project.scene).px;
+  const natural = decl.defaultSize ?? CONTAINER_DECL.defaultSize!;
+  const size = { width: natural.width * unitPx, height: natural.height * unitPx };
   const ghost = document.createElement("div");
   ghost.id = "drag-ghost";
   ghost.style.width = `${size.width}px`;
@@ -1722,9 +1729,7 @@ function startLibraryDrag(down: PointerEvent, fav: LibraryItem, matchedLocalType
     const rect = stage.getBoundingClientRect();
     const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
     if (!inside) return;
-    const zoom = host.getZoom();
-    const px = (e.clientX - rect.left) / zoom;
-    const py = (e.clientY - rect.top) / zoom;
+    const { x: px, y: py } = host.clientToStage(e.clientX, e.clientY);
     const localType = await ensureFavoriteInProject(fav);
     if (localType) await host.addNodeAt(localType, px, py);
   };
@@ -2022,7 +2027,9 @@ export async function renderLibraryPalette(): Promise<void> {
         return;
       }
       down.preventDefault();
-      const size = (declFor(host.getProject(), type) ?? CONTAINER_DECL).defaultSize ?? CONTAINER_DECL.defaultSize!;
+      const natural = defaultSizeFor(host.getProject(), type);
+      const unitPx = unitOf(host.getProject().scene).px;
+      const size = { width: natural.width * unitPx, height: natural.height * unitPx };
       const ghost = document.createElement("div");
       ghost.id = "drag-ghost";
       ghost.style.width = `${size.width}px`;
@@ -2047,15 +2054,16 @@ export async function renderLibraryPalette(): Promise<void> {
         if (!stage) return;
         const rect = stage.getBoundingClientRect();
         const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
-        const zoom = host.getZoom();
-        if (inside) void host.addNodeAt(type, (e.clientX - rect.left) / zoom, (e.clientY - rect.top) / zoom);
+        if (!inside) return;
+        const pt = host.clientToStage(e.clientX, e.clientY);
+        void host.addNodeAt(type, pt.x, pt.y);
       };
       document.addEventListener("pointermove", place);
       document.addEventListener("pointerup", up);
     });
   };
 
-  for (const stdComp of STANDARD_COMPONENTS.values()) {
+  for (const stdComp of standardComponentsOf(host.getProject().kind).values()) {
     const type = stdComp.decl.type;
     const el = document.createElement("div");
     el.className = "palette-item";

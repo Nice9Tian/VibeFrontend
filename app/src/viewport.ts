@@ -20,6 +20,14 @@ const SELECTION_MAX_ZOOM = 2;
 let zoom = 1;
 const listeners: Array<() => void> = [];
 
+/**
+ * 平面设计预览按 PDF 看时（body 上有 pdf-stack）：全部页面竖着排开，设计窗口跟着滚动条走，不缩放、不平移、不自动居中，
+ * 这里的缩放和平移都不动它（main.ts 管那时的滚动）。
+ */
+function viewLocked(): boolean {
+  return typeof document !== "undefined" && document.body.classList.contains("pdf-stack");
+}
+
 /** 当前的缩放比例。屏幕上的距离除以它，就是设计窗口里的距离。 */
 export function viewZoom(): number {
   return zoom;
@@ -66,6 +74,7 @@ function frameOrigin(): { x: number; y: number } {
  * 没给点时以视口中心为准。
  */
 export function setZoom(next: number, clientX?: number, clientY?: number): void {
+  if (viewLocked()) return;
   const { scroll } = elements();
   userMoved = true;
   const target = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
@@ -93,6 +102,7 @@ function topInset(): number {
 
 /** 把设计窗口放在视口正中。 */
 export function centerView(): void {
+  if (viewLocked()) return;
   const { scroll, frame } = elements();
   const origin = frameOrigin();
   scroll.scrollLeft = origin.x + (frame.offsetWidth * zoom) / 2 - scroll.clientWidth / 2;
@@ -101,6 +111,7 @@ export function centerView(): void {
 
 /** 缩放到刚好装下整个设计窗口（最多 100%），并放在正中。 */
 export function zoomToFit(): void {
+  if (viewLocked()) return;
   const { scroll, frame } = elements();
   userMoved = true;
   const padding = 48;
@@ -120,17 +131,41 @@ export function setSelectionRectSource(source: () => Rect | null): void {
   selectionRect = source;
 }
 
+/** 现在的视角（缩放和滚动位置）：切到预览再切回来时，编辑的视角原样回来 */
+export function viewState(): { zoom: number; left: number; top: number } {
+  const { scroll } = elements();
+  return { zoom, left: scroll.scrollLeft, top: scroll.scrollTop };
+}
+
+export function restoreViewState(state: { zoom: number; left: number; top: number }): void {
+  const { scroll } = elements();
+  userMoved = true;
+  zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, state.zoom));
+  layout();
+  scroll.scrollLeft = state.left;
+  scroll.scrollTop = state.top;
+  for (const listener of listeners) listener();
+}
+
 /** 缩放到刚好装下选中的东西，并把它放在视口正中。没有选中时不动。 */
 export function zoomToSelection(): void {
   const rect = selectionRect();
-  if (!rect) return;
+  if (rect) zoomToRect(rect, { padding: 96, max: SELECTION_MAX_ZOOM });
+}
+
+/**
+ * 缩放到刚好装下设计窗口里的这一块（设计窗口坐标，CSS 像素），放在视口正中。
+ * 平面设计的无限画布上“跳到某一页”用它；max 是最多放大到多少（默认 100%）。
+ */
+export function zoomToRect(rect: Rect, options: { padding?: number; max?: number } = {}): void {
+  if (viewLocked()) return;
   const { scroll } = elements();
   userMoved = true;
-  const padding = 96;
+  const padding = options.padding ?? 64;
   const fit = Math.min(
     (scroll.clientWidth - padding) / Math.max(rect.width, 1),
     (scroll.clientHeight - topInset() - padding) / Math.max(rect.height, 1),
-    SELECTION_MAX_ZOOM,
+    options.max ?? 1,
   );
   zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fit));
   layout();
@@ -140,10 +175,9 @@ export function zoomToSelection(): void {
   for (const listener of listeners) listener();
 }
 
-/** 选中的东西跑到视口外面时，把视角挪过去，缩放不变。本来就看得见就不动。 */
-export function panToSelection(): void {
-  const rect = selectionRect();
-  if (!rect) return;
+/** 设计窗口里的这一块不在视口里时，把视角挪过去，缩放不变。 */
+export function panToRect(rect: Rect): void {
+  if (viewLocked()) return;
   const { scroll } = elements();
   const origin = frameOrigin();
   const margin = 40;
@@ -154,6 +188,12 @@ export function panToSelection(): void {
   if (dx === 0 && dy === 0) return;
   userMoved = true;
   scroll.scrollBy(dx, dy);
+}
+
+/** 选中的东西跑到视口外面时，把视角挪过去，缩放不变。本来就看得见就不动。 */
+export function panToSelection(): void {
+  const rect = selectionRect();
+  if (rect) panToRect(rect);
 }
 
 function stepZoom(direction: 1 | -1): void {
@@ -228,6 +268,7 @@ export function initViewport(): void {
   // 设计窗口的大小变了（改了窗口尺寸、切换模式），重新摆放。
   // 用户自己动过视角之前，设计窗口一直保持居中（页面刚打开时，两者的大小会变好几次）
   const relayout = () => {
+    if (viewLocked()) return;
     layout();
     if (!userMoved && scroll.clientWidth > 0 && frame.offsetWidth > 0) centerView();
   };
@@ -238,6 +279,8 @@ export function initViewport(): void {
   scroll.addEventListener(
     "pointerdown",
     (e) => {
+      // 按 PDF 看时设计窗口不平移，中键、空格拖都不管
+      if (viewLocked()) return;
       if (e.button === 1 || (e.button === 0 && spaceHeld)) {
         e.preventDefault();
         e.stopPropagation();
@@ -286,7 +329,7 @@ export function initViewport(): void {
   );
 
   document.addEventListener("keydown", (e) => {
-    if (isTyping(e.target)) return;
+    if (isTyping(e.target) || viewLocked()) return;
     if (e.code === "Space") {
       // 空格按住期间是平移模式；不让页面跟着滚
       if (!spaceHeld) {
@@ -338,7 +381,9 @@ export function initViewport(): void {
           const pt = toOuterXY(e.clientX, e.clientY);
           const factor = Math.exp(-e.deltaY * (Math.abs(e.deltaY) < 40 ? 0.01 : 0.0015));
           setZoom(zoom * factor, pt.x, pt.y);
-        } else {
+        } else if (!document.body.classList.contains("standalone-device") && !viewLocked()) {
+          // 按 PDF 看时滚轮交给浏览器（从设计窗口接着滚到外面的滚动区），这里再加一遍就滚了两倍
+          // 独立预览窗口套着外框时设备总是装在窗口里：滚轮只给软件自己（列表、手机屏幕里滚动），不推着整个设备跑
           scroll.scrollLeft += e.shiftKey ? e.deltaY : e.deltaX;
           scroll.scrollTop += e.shiftKey ? 0 : e.deltaY;
         }
@@ -348,6 +393,7 @@ export function initViewport(): void {
     doc.addEventListener(
       "pointerdown",
       (e) => {
+        if (viewLocked()) return;
         if (e.button === 1 || (e.button === 0 && spaceHeld)) {
           e.preventDefault();
           e.stopPropagation();
@@ -373,7 +419,7 @@ export function initViewport(): void {
     doc.addEventListener("pointerup", finish, true);
     doc.addEventListener("pointercancel", finish, true);
     doc.addEventListener("keydown", (e) => {
-      if (isTyping(e.target)) return;
+      if (isTyping(e.target) || viewLocked()) return;
       if (e.code === "Space") {
         if (!spaceHeld) {
           spaceHeld = true;

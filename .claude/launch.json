@@ -12,6 +12,12 @@
       "runtimeExecutable": "cmd",
       "runtimeArgs": ["/c", "set VF_PROJECT=../examples/minimal/design&& npm run dev --prefix app"],
       "port": 1420
+    },
+    {
+      "name": "vibefrontend-web-graphic",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set VF_PROJECT=../examples/graphic/design&& npm run dev --prefix app -- --port 1423"],
+      "port": 1423
     }
   ]
 }

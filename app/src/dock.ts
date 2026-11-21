@@ -629,9 +629,11 @@ function computeReferenceAreaSplitSpan(
   scene: Scene,
   winNode: SceneNode | undefined,
   area: DockArea,
+  windowSize?: { width: number; height: number },
 ): number {
-  const W = winNode?.width && winNode.width > 0 ? winNode.width : 1280;
-  const H = winNode?.height && winNode.height > 0 ? winNode.height : 800;
+  // 窗口这时按别的大小排版（预览里拖过电脑里窗口的大小）：分栏的参考长度要按它算，和画出来的分隔条对得上
+  const W = windowSize && windowSize.width > 0 ? windowSize.width : winNode?.width && winNode.width > 0 ? winNode.width : 1280;
+  const H = windowSize && windowSize.height > 0 ? windowSize.height : winNode?.height && winNode.height > 0 ? winNode.height : 800;
   const menuH = winNode?.menuBar ? Math.max(0, Math.round(winNode.menuBar.height ?? 28)) : 0;
   const statusNode = winNode?.statusBar ? scene.nodes[winNode.statusBar] : undefined;
   const statusH = statusNode ? Math.round(statusNode.height ?? 28) : 0;
@@ -671,6 +673,7 @@ export function dockResizeSplit(
   area: DockArea,
   groupIndex: number,
   size: number,
+  windowSize?: { width: number; height: number },
 ): DockLayoutSpec {
   const next = cloneDockLayout(layout);
   const areaSpec = next.areas[area];
@@ -684,7 +687,7 @@ export function dockResizeSplit(
     groups[groupIndex].size = Math.max(minEach, Math.round(size));
     return normalizeDockLayout(scene, { ...winNode, type: "Window", width: winNode?.width ?? 1280, height: winNode?.height ?? 800, dockLayout: next });
   }
-  const refSpan = computeReferenceAreaSplitSpan(next, scene, winNode, area);
+  const refSpan = computeReferenceAreaSplitSpan(next, scene, winNode, area, windowSize);
   const groupEntries = groups.map((group) => {
     const activeId = group.active && group.tabs.includes(group.active) ? group.active : group.tabs[0];
     const activeDock = (activeId ? scene.nodes[activeId] : undefined) ?? ({ type: "Dock", width: 240, height: 280 } as SceneNode);
@@ -1609,12 +1612,13 @@ function startDockDragSession(
 
     // 2. 检查是否悬停在可见已停靠面板上（中心叠页签，上下/左右边缘并排；含多页签组把当前激活页签拖到本组边缘拆出分栏）
     const otherDocks = Array.from(
-      windowFrameEl.querySelectorAll<HTMLElement>('.node[data-type="Dock"], .vf-node[data-vf-type="Dock"]'),
+      windowFrameEl.querySelectorAll<HTMLElement>('.node[data-type="Dock"], .vf-node[data-vf-type="Dock"], [data-dock-id]'),
     );
     for (const otherEl of otherDocks) {
-      const otherId = otherEl.dataset.id ?? otherEl.dataset.vfId;
+      // data-dock-id：不是画布节点的停靠框（编辑器自己的工作区面板）
+      const otherId = otherEl.dataset.id ?? otherEl.dataset.vfId ?? otherEl.dataset.dockId;
       if (!otherId) continue;
-      if (otherEl.style.display === "none" || otherEl.classList.contains("dock-floating")) continue;
+      if (otherEl.hidden || otherEl.style.display === "none" || otherEl.classList.contains("dock-floating")) continue;
       let effectiveTargetId = otherId;
       if (otherId === dragDockId) {
         const peerId = dragLoc?.kind === "area" ? dragLoc.group.tabs.find((tid) => tid !== dragDockId) : undefined;

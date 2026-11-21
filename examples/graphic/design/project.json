@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "3d9a1f64-5b0e-4c7d-8a25-6e1f0b9c4d72",
+  "name": "平面设计示例",
+  "kind": "graphic",
+  "styles": ["styles/tokens.css", "styles/text.css"],
+  "boards": [
+    { "id": "spread1", "doc": "docs/spread1.md" },
+    { "id": "page3", "doc": "docs/spread1.md" }
+  ],
+  "export": {
+    "web": "../web"
+  }
+}

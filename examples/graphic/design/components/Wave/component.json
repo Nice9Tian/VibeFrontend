@@ -1,0 +1,13 @@
+{
+  "type": "Wave",
+  "label": "波形图",
+  "description": "几条叠在一起的正弦波。预览时流动，编辑和打印时停在 still 指定的相位",
+  "defaultSize": { "width": 120, "height": 60 },
+  "entry": "index.js",
+  "style": "style.css",
+  "props": {
+    "waves": { "type": "number", "default": 3, "label": "波的个数" },
+    "still": { "type": "number", "default": 0.25, "label": "静帧的相位（0 到 1）" }
+  },
+  "children": false
+}

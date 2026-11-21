@@ -1,0 +1,17 @@
+/* 颜色和字体。别的样式表和控件用这里的变量，不写死具体的值。 */
+:root {
+  --paper: #f6f3ea;
+  --ink: #1e1d1a;
+  --ink-2: #58534b;
+  --accent: #c4402a;
+  --blue: #2c57c4;
+  --serif: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  --sans: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+}
+
+/* 页面的样式类写在页面的“样式类”属性里（scene.json 里页面节点的 props.class） */
+.paper {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+}

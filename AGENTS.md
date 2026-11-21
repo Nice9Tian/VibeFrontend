@@ -16,6 +16,7 @@
 | `examples/minimal/` | 导出成 Qt 的最小例子：`design/` 是设计项目，`qt/ui/` 是从它导出的界面，`qt/business/`、`qt/app/`、`qt/violations/` 是示范用的假业务工程与分层检查测试 | `design/` 按设计项目的规则改；`qt/ui/` 里除了 `ui_effects/` 都是生成的，**不要手改**，要改就改 `design/` 再重新导出。细则见 `examples/minimal/qt/ui/AGENTS.md` |
 | `examples/animean/` | AnimeAn 新界面的完整例子：`design/` 是设计项目，`qt/ui/` 是导出产物（`qt/ui/ui_effects/` 下含手写的 `PanelExpand` 过渡效果与 `ColorPickerDraw` 自绘效果），`qt/business/` 与 `qt/app/` 是假业务工程与冒烟测试 | `design/` 按设计项目的规则改；`qt/ui/` 里除 `ui_effects/` 外均由导出生成，**不要手改**。细则见 `examples/animean/qt/ui/AGENTS.md` |
 | `examples/shapes/` | 基础图形（`Shape`）与线条（`Line`）导出成 Qt 的例子：`design/` 是设计项目，`qt/ui/` 是从它导出的界面 | `design/` 按设计项目的规则改；`qt/ui/` 里除了 `ui_effects/` 都是生成的，**不要手改** |
+| `examples/graphic/` | 平面设计（`kind: "graphic"`）的例子：`design/` 是设计项目，毫米单位、两个页面、文本框、图片、项目自己的控件 | 按 `examples/graphic/design/README.md`（平面设计项目的规则）改 |
 | `animean/` | AnimeAn 动画软件本身的 C++ / Qt / Python 工程。其中 `animean/business/`（`AnimeanBusiness`）是解耦出来的无界面业务层，只依赖 `animean_core`、`Qt::Core`、`Qt::Gui`，禁止包含 `QWidget`；第三方依赖 `animean/external`（如 `pybind11`）和本地 Python 运行时 `animean/tools/python312` 不提交到 git | 只有用户明确要求修改 AnimeAn 工程或其业务层时才改。细则见 `animean/AGENTS.md` |
 | `qt-sample/` | 写导出器之前手工写的样板，现在只保留其中的 SVG 试验 | 一般不用改 |
 
@@ -38,15 +39,21 @@
 
 - “碰到 Qt 导出”指改了 `app/src/export/`、`app/qt-templates/`、`app/standard/`、`examples/*/design/`、`examples/*/qt/`、Qt 测试脚本，或导出代码 import 到的源文件（如 `runtime.ts`、`model.ts`）。判断在 `app/scripts/test-tiers.ts`。
 - Qt 程序默认用 `offscreen` 平台运行，不开窗口，不抢前台。要亲眼看窗口时设环境变量 `VF_QT_SHOW=1`。
+- 新写的测试要起开发服务器时，第一行写 `import "./test-env.ts";`：开发服务器会把打开的项目记进用户的项目清单，不这样测试的临时项目就会混进去。
 - Qt 测试用的是已经编译好的程序，不会自己重新导出和编译，程序位置见 `app/scripts/qt-env.ts`。`npm test` 发现程序比改动旧时会在最后提示，这时 Qt 结果不代表这次改动。
 
 ## 修改设计项目
 
 1. 所有修改都在 `project/` 文件夹（或用户指定的 `examples/*/design/` 文件夹）内进行。
-2. 动手之前先读 [project/README.md](project/README.md)，里面写明了文件结构、控件的写法、YAML 逻辑的写法，以及哪些东西不能改。
+2. 动手之前先读项目自己的 `README.md`：界面设计项目是 [project/README.md](project/README.md) 那一份，写明了文件结构、控件的写法、YAML 逻辑的写法，以及哪些东西不能改；`project.json` 里 `"kind": "graphic"` 的是平面设计项目，规则见 [examples/graphic/design/README.md](examples/graphic/design/README.md)。
 3. 用户贴给你的文字里如果有 `User referenced "control=...; scene=...; root=..."` 这样的一行，那是从工具里复制出来的引用，指明了用户说的是哪个控件、哪个文件的哪几行。路径相对于其中的 `root`，`#89-96` 表示第 89 到 96 行。引用后面跟着的才是用户的要求。先读引用指向的内容，再动手。一次引用多个控件时是 `User referenced 3 controls "..."`，第一行是共同的信息，后面每个控件一行。完整的格式见 `project/README.md` 第 3 节。
 4. 工具会监听 `project/` 中的文件变化并自动刷新，不需要你重启任何东西。
 5. 改完后自查：`project/README.md` 末尾有检查清单。工具底部的问题栏会显示同样的检查结果，用户会看到。
+
+## 子项目（平面设计）
+
+- `parts/<名字>/` 是从总项目拆出来单独做的一块，总项目画布里用 `Part` 节点显示它（`props.part` 是 `parts/<名字>`，`props.board` 是子项目里的页面）。要改那一块的内容，改 `parts/<名字>/ui/scene.json`，不要在总项目里改 `Part` 节点的内容（它没有内容，只指过去）。
+- 子项目没有自己的 `styles/`、`components/`、`lib/`、`assets/`：这些都用总项目的，路径照总项目的写。
 
 ## 不要做的事
 

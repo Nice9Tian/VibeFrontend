@@ -256,9 +256,10 @@ export class Runtime {
     this.lastSceneDockLayouts.clear();
     for (const winId of allWindowIds(this.project.scene)) {
       const n = this.project.scene.nodes[winId];
-      const isRoot = winId === this.project.scene.root;
-      const open = isRoot ? true : Boolean(n?.initialOpen ?? n?.props?.open ?? false);
-      const modal = isRoot ? false : Boolean(n?.modal ?? n?.props?.modal ?? n?.type === "Dialog");
+      // 页面（平面设计的画板）不是弹出的窗口：每一页都一直显示，也不会挡住别的页
+      const alwaysOpen = winId === this.project.scene.root || n?.type === "Page";
+      const open = alwaysOpen ? true : Boolean(n?.initialOpen ?? n?.props?.open ?? false);
+      const modal = alwaysOpen ? false : Boolean(n?.modal ?? n?.props?.modal ?? n?.type === "Dialog");
       this.windows.set(winId, { open, modal });
       if (isPartitionedWindow(n)) {
         this.dockLayouts.set(winId, normalizeDockLayout(this.project.scene, n));
@@ -452,9 +453,10 @@ export class Runtime {
     this.notifyChanged();
   }
 
-  dockResizeSplit(area: DockArea, groupIndex: number, size: number, winId = this.project.scene.root): void {
+  /** windowSize：窗口这时按别的大小排版（编辑器预览里拖过电脑里窗口的大小），分栏按它算；不给就是设计的尺寸 */
+  dockResizeSplit(area: DockArea, groupIndex: number, size: number, winId = this.project.scene.root, windowSize?: { width: number; height: number }): void {
     const cur = this.getDockLayout(winId);
-    const next = dockResizeSplit(cur, this.project.scene, this.project.scene.nodes[winId], area, groupIndex, size);
+    const next = dockResizeSplit(cur, this.project.scene, this.project.scene.nodes[winId], area, groupIndex, size, windowSize);
     this.dockLayouts.set(winId, next);
     this.releaseDockedPointerStates();
     this.hooks.onLog({ title: `停靠区 ${area}`, lines: [`调整并排组 #${groupIndex} 尺寸为 ${Math.round(size)}px`] });

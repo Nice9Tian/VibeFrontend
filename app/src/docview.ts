@@ -729,6 +729,8 @@ export interface DocViewHost {
     logic: { objects?: Record<string, { doc?: string }> };
   };
   getSelectedId(): string | null;
+  /** 没选中控件时显示哪份文档：当前画板的说明文档。不给就用 pageDoc */
+  getPageDoc?(): string;
   onViewFullDoc?: () => void;
   onCommitDoc?: () => void;
 }
@@ -758,13 +760,14 @@ function isPreviewWindowLocation(): boolean {
 function getCurrentDocPath(): string | undefined {
   if (!docHost) return undefined;
   const proj = docHost.getProject();
+  const pageDoc = docHost.getPageDoc?.() ?? proj.pageDoc;
   const selId = docHost.getSelectedId();
-  if (!selId) return proj.pageDoc;
+  if (!selId) return pageDoc;
   const rawRef = proj.logic.objects?.[selId]?.doc;
-  if (!rawRef) return proj.pageDoc;
+  if (!rawRef) return pageDoc;
   const hashIdx = rawRef.indexOf("#");
   const filePath = (hashIdx >= 0 ? rawRef.slice(0, hashIdx) : rawRef).trim();
-  return filePath || proj.pageDoc;
+  return filePath || pageDoc;
 }
 
 function loadSavedMode(): DocEditMode {

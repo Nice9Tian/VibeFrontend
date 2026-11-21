@@ -463,22 +463,114 @@ fn write_qt_export(
 
 fn start_watcher(app: &tauri::AppHandle) -> notify::Result<RecommendedWatcher> {
     let handle = app.clone();
+    let root = project_dir();
+    let root = root.canonicalize().unwrap_or(root);
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(event) = res {
             if event.kind.is_access() {
                 return;
             }
-            let _ = handle.emit("project-changed", ());
+            // 把变了的文件一起告诉网页（相对于项目文件夹，用 / 分隔）：脚本变了要换一个干净的运行环境
+            let paths: Vec<String> = event
+                .paths
+                .iter()
+                .filter_map(|p| {
+                    let p = p.canonicalize().unwrap_or_else(|_| p.clone());
+                    p.strip_prefix(&root).ok().map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                })
+                .collect();
+            let _ = handle.emit("project-changed", paths);
         }
     })?;
     watcher.watch(&project_dir(), RecursiveMode::Recursive)?;
     Ok(watcher)
 }
 
+/// vfproject 协议按扩展名给出的内容类型。脚本和样式表的类型必须对，浏览器才肯当模块和样式加载。
+fn project_mime_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("avif") => "image/avif",
+        Some("bmp") => "image/bmp",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("otf") => "font/otf",
+        Some("wasm") => "application/wasm",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
+        _ => "text/plain; charset=utf-8",
+    }
+}
+
+/// 把网址里的 %XX 还原成字节，再按 UTF-8 读成路径。写得不对的 %XX 原样保留。
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+            if let Some(value) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(value);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// vfproject 协议：把项目文件夹当成一个静态网站。设计窗口以它为基准地址，
+/// 项目里的脚本、样式表、图片、字体用相对路径互相引用。和 vite.config.ts 里的 /__project/ 对应。
+fn serve_project_file(request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
+    let respond = |status: u16, mime: &str, body: Vec<u8>| {
+        tauri::http::Response::builder()
+            .status(status)
+            .header("Content-Type", mime)
+            // 设计窗口的页面和项目文件不同源，模块脚本和字体要有这个头才加载得了
+            .header("Access-Control-Allow-Origin", "*")
+            // 项目文件随时会被改，不让浏览器留旧的
+            .header("Cache-Control", "no-store")
+            .body(body)
+            .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
+    };
+    let rel = percent_decode(request.uri().path());
+    let rel = rel.trim_start_matches('/');
+    if ensure_non_empty_rel(rel).is_err() {
+        return respond(400, "text/plain; charset=utf-8", Vec::new());
+    }
+    let full = match resolve(rel) {
+        Ok(full) => full,
+        Err(_) => return respond(400, "text/plain; charset=utf-8", Vec::new()),
+    };
+    match std::fs::read(&full) {
+        Ok(bytes) => respond(200, project_mime_for_path(&full), bytes),
+        Err(_) => respond(404, "text/plain; charset=utf-8", Vec::new()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .register_uri_scheme_protocol("vfproject", |_ctx, request| serve_project_file(&request))
         .setup(|app| {
             match start_watcher(app.handle()) {
                 // watcher 被丢弃就会停止监听，所以交给应用状态保管
